@@ -1,0 +1,21 @@
+[package]
+name = "wrl"
+version = "0.1.0"
+edition = "2021"
+
+[profile.release]
+incremental = true
+
+[dependencies]
+fxhash = "0.2.1"
+game-loop = "1.0.0"
+lazy_static = "1.4.0"
+rand = "0.8.5"
+rand_distr = "0.4.3"
+termion = "2.0.1"
+
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"
