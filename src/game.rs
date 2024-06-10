@@ -1,5 +1,6 @@
 use std::cmp::{max, min};
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::mem::replace;
 use std::rc::Rc;
 
@@ -16,8 +17,10 @@ use crate::base::RNG;
 // Constants
 
 const FOV_RADIUS: i32 = 21;
-const LIGHT: Light = Light::Sun(Point(4, 1));
 const OBSCURED_VISION: i32 = 3;
+
+const LIGHT: Light = Light::Sun(Point(4, 1));
+const WEATHER: Weather = Weather::Rain(Point(0, 64), 64);
 const WORLD_SIZE: i32 = 100;
 
 const UI_MAP_SIZE_X: i32 = 2 * FOV_RADIUS + 1;
@@ -101,27 +104,55 @@ static_assert_size!(Cell, 24);
 
 enum Light { None, Sun(Point) }
 
+enum Weather { None, Rain(Point, usize) }
+
+struct Drop {
+    frame: usize,
+    point: Point,
+}
+
+struct Rain {
+    ch: char,
+    diff: Point,
+    drops: VecDeque<Drop>,
+    path: Vec<Point>,
+}
+
 struct Board {
     active_entity_index: usize,
     entity_order: Vec<EntityRef>,
     map: Matrix<Cell>,
-    shadow: Vec<Point>,
     light: Light,
+    rain: Option<Rain>,
+    shadow: Vec<Point>,
 }
 
 impl Board {
-    fn new(size: Point, light: Light) -> Self {
+    fn new(size: Point, light: Light, weather: Weather) -> Self {
         let shadow = match light {
-            Light::Sun(x) => LOS(Point::default(), x).into_iter().skip(1).collect(),
+            Light::Sun(x) =>
+                LOS(Point::default(), x).into_iter().skip(1).collect(),
             Light::None => vec![],
         };
+        let rain = match weather {
+            Weather::Rain(x, y) => Some(Rain {
+                ch: if Glyph::ray(x) == '|' { ':' } else { Glyph::ray(x) },
+                diff: x,
+                drops: VecDeque::with_capacity(y),
+                path: LOS(Point::default(), x),
+            }),
+            Weather::None => None,
+        };
         let cell = Cell { entity: None, shadow: 0, tile: Tile::get('#') };
+
         let mut result = Self {
             active_entity_index: 0,
             entity_order: vec![],
             map: Matrix::new(size, cell),
-            shadow,
+            // Environmental effects
             light,
+            rain,
+            shadow,
         };
         result.update_edge_shadows();
         result
@@ -182,6 +213,25 @@ impl Board {
         let new_shadow = if tile.blocked() { 1 } else { 0 };
         cell.tile = tile;
         self.update_shadow(point, new_shadow - old_shadow);
+    }
+
+    fn update_env(&mut self, frame: usize, pos: Point, rng: &mut RNG) {
+        let rain = or_return!(&mut self.rain);
+
+        while let Some(x) = rain.drops.front() && x.frame < frame {
+            rain.drops.pop_front();
+        }
+        let total = rain.drops.capacity();
+        let denom = max(rain.diff.1, 1);
+        let delta = max(rain.diff.1, 1) as usize;
+        let extra = (frame + 1) * total / delta - (frame * total) / delta;
+        for _ in 0..min(extra, total - rain.drops.len()) {
+            let x = rng.gen::<i32>().rem_euclid(denom);
+            let y = rng.gen::<i32>().rem_euclid(denom);
+            let target_frame = frame + rain.path.len() - 1;
+            let target_point = Point(x - denom / 2, y - denom / 2) + pos;
+            rain.drops.push_back(Drop { frame: target_frame, point: target_point });
+        }
     }
 
     fn update_shadow(&mut self, point: Point, delta: i32) {
@@ -438,6 +488,10 @@ fn process_input(state: &mut State, input: Input) {
 }
 
 fn update_state(state: &mut State) {
+    state.frame += 1;
+    let pos = state.player.borrow().pos;
+    state.board.update_env(state.frame, pos, &mut state.rng);
+
     let needs_input = |state: &State| {
         if !matches!(state.input, Action::WaitForInput) { return false; }
         state.board.get_active_entity().borrow().player
@@ -476,6 +530,7 @@ fn update_state(state: &mut State) {
 
 pub struct State {
     board: Board,
+    frame: usize,
     input: Action,
     inputs: Vec<Input>,
     player: EntityRef,
@@ -489,7 +544,7 @@ impl State {
         let pos = Point(size.0 / 2, size.1 / 2);
         let rng = seed.map(|x| RNG::seed_from_u64(x));
         let mut rng = rng.unwrap_or_else(|| RNG::from_entropy());
-        let mut board = Board::new(size, LIGHT);
+        let mut board = Board::new(size, LIGHT, WEATHER);
 
         loop {
             mapgen(&mut board, &mut rng);
@@ -511,6 +566,7 @@ impl State {
             if let Some(_) = pos(&board, &mut rng) {}
         }
 
+        let frame = 0;
         let input = Action::WaitForInput;
         let inputs = vec![];
         let mut vision = Vision::new(FOV_RADIUS);
@@ -518,7 +574,7 @@ impl State {
         let pos = player.borrow().pos;
         vision.compute(pos, |x| board.get_tile(x));
 
-        Self { board, input, inputs, player, vision, rng }
+        Self { board, frame, input, inputs, player, vision, rng }
     }
 
     pub fn add_input(&mut self, input: Input) { self.inputs.push(input) }
@@ -559,6 +615,19 @@ impl State {
         for y in 0..UI_MAP_SIZE_Y {
             for x in 0..UI_MAP_SIZE_X {
                 let glyph = lookup(Point(x, y) + offset);
+                buffer.set(Point(2 * x, y), glyph);
+            }
+        }
+
+        if let Some(rain) = &self.board.rain {
+            for drop in &rain.drops {
+                let index = drop.frame - self.frame;
+                let point = drop.point - *or_continue!(rain.path.get(index));
+                if index == 0 && !self.vision.can_see_now(point) { continue; }
+
+                let Point(x, y) = point - offset;
+                let ch = if index == 0 { 'o' } else { rain.ch };
+                let glyph = Glyph::wdfg(ch, 0x013);
                 buffer.set(Point(2 * x, y), glyph);
             }
         }

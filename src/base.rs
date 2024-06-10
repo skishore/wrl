@@ -139,6 +139,14 @@ impl Glyph {
         Self((self.0 & 0x00ffffff) | ((color.into().0 as u32) << 24))
     }
 
+    pub fn ray(delta: Point) -> char {
+        let Point(x, y) = delta;
+        let (ax, ay) = (x.abs(), y.abs());
+        if ax > 2 * ay { return '-'; }
+        if ay > 2 * ax { return '|'; }
+        if (x > 0) == (y > 0) { '\\' } else { '/' }
+    }
+
     // Field getters
 
     pub fn ch(&self) -> Char { Char(self.0 as u16) }
