@@ -14,6 +14,27 @@ macro_rules! cast {
 }
 
 #[macro_export]
+macro_rules! or_break {
+    ($expr: expr) => {
+        match $expr { Some(x) => x, None => { break; } }
+    }
+}
+
+#[macro_export]
+macro_rules! or_continue {
+    ($expr: expr) => {
+        match $expr { Some(x) => x, None => { continue; } }
+    }
+}
+
+#[macro_export]
+macro_rules! or_return {
+    ($expr: expr) => {
+        match $expr { Some(x) => x, None => { return; } }
+    }
+}
+
+#[macro_export]
 macro_rules! static_assert_size {
     ($x:ty, $y:expr) => {
         const _: fn() = || {
@@ -74,7 +95,8 @@ impl From<i32> for Color {
 
 impl Color {
     pub fn black() -> Self { Self(16) }
-    pub fn gray() -> Self { Self(16 + 216 + 5) }
+    pub fn gray() -> Self { Self::dark(5) }
+    pub fn dark(n: u8) -> Self { Self(16 + 216 + n) }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
@@ -139,6 +161,10 @@ pub struct Point(pub i32, pub i32);
 static_assert_size!(Point, 8);
 
 impl Point {
+    pub fn dot(&self, other: Point) -> i64 {
+        (self.0 as i64 * other.0 as i64) + (self.1 as i64 * other.1 as i64)
+    }
+
     pub fn in_l2_range(&self, range: i32) -> bool {
         self.len_l2() <= range as f64 - 0.5
     }

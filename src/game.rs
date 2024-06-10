@@ -6,20 +6,22 @@ use std::rc::Rc;
 use lazy_static::lazy_static;
 use rand::{Rng, SeedableRng};
 
-use crate::static_assert_size;
-use crate::base::{Buffer, Glyph};
-use crate::base::{HashMap, FOV, Matrix, Point, dirs};
+use crate::{or_continue, or_return, static_assert_size};
+use crate::base::{Buffer, Color, Glyph};
+use crate::base::{HashMap, FOV, LOS, Matrix, Point, dirs};
 use crate::base::RNG;
 
 //////////////////////////////////////////////////////////////////////////////
 
 // Constants
 
-const WORLD_SIZE: i32 = 100;
 const FOV_RADIUS: i32 = 21;
+const LIGHT: Light = Light::Sun(Point(4, 1));
+const OBSCURED_VISION: i32 = 3;
+const WORLD_SIZE: i32 = 100;
+
 const UI_MAP_SIZE_X: i32 = 2 * FOV_RADIUS + 1;
 const UI_MAP_SIZE_Y: i32 = 2 * FOV_RADIUS + 1;
-const OBSCURED_VISION: i32 = 3;
 
 #[derive(Eq, PartialEq)]
 pub enum Input { Escape, BackTab, Char(char) }
@@ -92,20 +94,37 @@ enum Status { Free, Blocked, Occupied }
 #[derive(Clone)]
 struct Cell {
     entity: Option<EntityRef>,
+    shadow: i32,
     tile: &'static Tile,
 }
-static_assert_size!(Cell, 16);
+static_assert_size!(Cell, 24);
+
+enum Light { None, Sun(Point) }
 
 struct Board {
     active_entity_index: usize,
     entity_order: Vec<EntityRef>,
     map: Matrix<Cell>,
+    shadow: Vec<Point>,
+    light: Light,
 }
 
 impl Board {
-    fn new(size: Point) -> Self {
-        let map = Matrix::new(size, Cell { entity: None, tile: Tile::get('#') });
-        Self { active_entity_index: 0, entity_order: vec![], map }
+    fn new(size: Point, light: Light) -> Self {
+        let shadow = match light {
+            Light::Sun(x) => LOS(Point::default(), x).into_iter().skip(1).collect(),
+            Light::None => vec![],
+        };
+        let cell = Cell { entity: None, shadow: 0, tile: Tile::get('#') };
+        let mut result = Self {
+            active_entity_index: 0,
+            entity_order: vec![],
+            map: Matrix::new(size, cell),
+            shadow,
+            light,
+        };
+        result.update_edge_shadows();
+        result
     }
 
     // Getters
@@ -119,7 +138,7 @@ impl Board {
     fn get_size(&self) -> Point { self.map.size }
 
     fn get_status(&self, p: Point) -> Status {
-        let Cell { entity, tile } = self.get_cell(p);
+        let Cell { entity, tile, .. } = self.get_cell(p);
         if entity.is_some() { return Status::Occupied; }
         if tile.blocked() { Status::Blocked } else { Status::Free }
     }
@@ -151,13 +170,41 @@ impl Board {
     }
 
     fn reset(&mut self, tile: &'static Tile) {
-        self.map.fill(Cell { entity: None, tile });
+        self.map.fill(Cell { entity: None, shadow: 0, tile });
+        self.update_edge_shadows();
         self.entity_order.clear();
         self.active_entity_index = 0;
     }
 
     fn set_tile(&mut self, point: Point, tile: &'static Tile) {
-        if let Some(x) = self.map.entry_mut(point) { x.tile = tile; }
+        let cell = or_return!(self.map.entry_mut(point));
+        let old_shadow = if cell.tile.blocked() { 1 } else { 0 };
+        let new_shadow = if tile.blocked() { 1 } else { 0 };
+        cell.tile = tile;
+        self.update_shadow(point, new_shadow - old_shadow);
+    }
+
+    fn update_shadow(&mut self, point: Point, delta: i32) {
+        if delta == 0 { return; }
+        for shift in &self.shadow {
+            let cell = or_continue!(self.map.entry_mut(point + *shift));
+            cell.shadow += delta;
+            assert!(cell.shadow >= 0);
+        }
+    }
+
+    fn update_edge_shadows(&mut self) {
+        let delta = if self.map.default.tile.blocked() { 1 } else { 0 };
+        if delta == 0 || self.shadow.is_empty() { return; }
+
+        for x in -1..(self.map.size.0 + 1) {
+            self.update_shadow(Point(x, -1), delta);
+            self.update_shadow(Point(x, self.map.size.1), delta);
+        }
+        for y in 0..self.map.size.1 {
+            self.update_shadow(Point(-1, y), delta);
+            self.update_shadow(Point(self.map.size.0, y), delta);
+        }
     }
 }
 
@@ -442,7 +489,7 @@ impl State {
         let pos = Point(size.0 / 2, size.1 / 2);
         let rng = seed.map(|x| RNG::seed_from_u64(x));
         let mut rng = rng.unwrap_or_else(|| RNG::from_entropy());
-        let mut board = Board::new(size);
+        let mut board = Board::new(size, LIGHT);
 
         loop {
             mapgen(&mut board, &mut rng);
@@ -487,18 +534,31 @@ impl State {
 
         let pos = self.player.borrow().pos;
         let offset = pos - Point(UI_MAP_SIZE_X / 2, UI_MAP_SIZE_Y / 2);
-        let unseen = Glyph::wide(' ');
+        let (sun, dark) = match self.board.light {
+            Light::None => (Point::default(), true),
+            Light::Sun(x) => (x, false),
+        };
+
+        let lookup = |point: Point| -> Glyph {
+            let unseen = Glyph::wide(' ');
+            let known = self.vision.can_see_now(point);
+            if !known { return unseen; }
+
+            let Cell { entity, shadow, tile } = self.board.get_cell(point);
+            let (delta, shade) = (point - pos, *shadow > 0);
+            if (dark || (shade && !(tile.blocked() && sun.dot(delta) < 0))) &&
+               delta.len_l1() > 1 {
+                return unseen;
+            }
+
+            let result = entity.as_ref().map(|x| x.borrow().glyph);
+            let result = result.unwrap_or(tile.glyph);
+            if dark || shade { result.with_fg(Color::gray()) } else { result }
+        };
 
         for y in 0..UI_MAP_SIZE_Y {
             for x in 0..UI_MAP_SIZE_X {
-                let point = Point(x, y) + offset;
-                let known = self.vision.can_see_now(point);
-                let glyph = if known {
-                    let Cell { entity, tile } = self.board.get_cell(point);
-                    entity.as_ref().map(|x| x.borrow().glyph).unwrap_or(tile.glyph)
-                } else {
-                    unseen
-                };
+                let glyph = lookup(Point(x, y) + offset);
                 buffer.set(Point(2 * x, y), glyph);
             }
         }
