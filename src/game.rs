@@ -58,11 +58,11 @@ impl Eq for &'static Tile {}
 lazy_static! {
     static ref TILES: HashMap<char, Tile> = {
         let items = [
-            ('.', (FLAG_NONE,    Glyph::wide('.'),        "grass")),
-            ('"', (FLAG_OBSCURE, Glyph::wdfg('"', 0x231), "tall grass")),
+            ('.', (FLAG_NONE,    Glyph::wdfg('.', 0x222), "grass")),
+            ('"', (FLAG_OBSCURE, Glyph::wdfg('"', 0x120), "tall grass")),
             ('#', (FLAG_BLOCKED, Glyph::wdfg('#', 0x010), "a tree")),
-            ('%', (FLAG_NONE,    Glyph::wdfg('%', 0x400), "flowers")),
-            ('~', (FLAG_NONE,    Glyph::wdfg('~', 0x015), "water")),
+            ('%', (FLAG_NONE,    Glyph::wdfg('%', 0x200), "flowers")),
+            ('~', (FLAG_NONE,    Glyph::wdfg('~', 0x013), "water")),
         ];
         let mut result = HashMap::default();
         for (ch, (flags, glyph, description)) in items {
@@ -495,7 +495,7 @@ impl State {
             mapgen(&mut board, &mut rng);
             if !board.get_tile(pos).blocked() { break; }
         }
-        let glyph = Glyph::wide('@');
+        let glyph = Glyph::wdfg('@', 0x222);
         let player = Rc::new((Entity { glyph, player: true, pos}).into());
         board.add_entity(&player);
 
