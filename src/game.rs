@@ -116,6 +116,7 @@ struct Rain {
     diff: Point,
     drops: VecDeque<Drop>,
     path: Vec<Point>,
+    lightning: i32,
 }
 
 struct Board {
@@ -136,10 +137,11 @@ impl Board {
         };
         let rain = match weather {
             Weather::Rain(x, y) => Some(Rain {
-                ch: if Glyph::ray(x) == '|' { ':' } else { Glyph::ray(x) },
+                ch: Glyph::ray(x),
                 diff: x,
                 drops: VecDeque::with_capacity(y),
                 path: LOS(Point::default(), x),
+                lightning: 0,
             }),
             Weather::None => None,
         };
@@ -231,6 +233,12 @@ impl Board {
             let target_frame = frame + rain.path.len() - 1;
             let target_point = Point(x - denom / 2, y - denom / 2) + pos;
             rain.drops.push_back(Drop { frame: target_frame, point: target_point });
+        }
+
+        if rain.lightning == 0 {
+            if rng.gen::<f32>() < 0.001 { rain.lightning = 10; }
+        } else {
+            rain.lightning -= 1;
         }
     }
 
@@ -629,6 +637,16 @@ impl State {
                 let ch = if index == 0 { 'o' } else { rain.ch };
                 let glyph = Glyph::wdfg(ch, 0x013);
                 buffer.set(Point(2 * x, y), glyph);
+            }
+
+            if rain.lightning > 0 {
+                let color = Color::from(0x111 * (rain.lightning / 2));
+                for y in 0..UI_MAP_SIZE_Y {
+                    for x in 0..UI_MAP_SIZE_X {
+                        let point = Point(2 * x, y);
+                        buffer.set(point, buffer.get(point).with_bg(color));
+                    }
+                }
             }
         }
     }
