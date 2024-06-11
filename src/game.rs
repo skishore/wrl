@@ -20,7 +20,7 @@ const FOV_RADIUS: i32 = 21;
 const OBSCURED_VISION: i32 = 3;
 
 const LIGHT: Light = Light::Sun(Point(4, 1));
-const WEATHER: Weather = Weather::Rain(Point(0, 64), 64);
+const WEATHER: Weather = Weather::Rain(Point(0, 64), 96);
 const WORLD_SIZE: i32 = 100;
 
 const UI_MAP_SIZE_X: i32 = 2 * FOV_RADIUS + 1;
@@ -117,6 +117,7 @@ struct Rain {
     drops: VecDeque<Drop>,
     path: Vec<Point>,
     lightning: i32,
+    thunder: i32,
 }
 
 struct Board {
@@ -141,7 +142,8 @@ impl Board {
                 diff: x,
                 drops: VecDeque::with_capacity(y),
                 path: LOS(Point::default(), x),
-                lightning: 0,
+                lightning: -1,
+                thunder: 0,
             }),
             Weather::None => None,
         };
@@ -235,10 +237,19 @@ impl Board {
             rain.drops.push_back(Drop { frame: target_frame, point: target_point });
         }
 
-        if rain.lightning == 0 {
-            if rng.gen::<f32>() < 0.001 { rain.lightning = 10; }
-        } else {
+        assert!(rain.lightning >= -1);
+        if rain.lightning == -1 {
+            if rng.gen::<f32>() < 0.002 { rain.lightning = 10; }
+        } else if rain.lightning > 0 {
             rain.lightning -= 1;
+        }
+
+        assert!(rain.thunder >= 0);
+        if rain.thunder == 0 {
+            if rain.lightning == 0 && rng.gen::<f32>() < 0.02 { rain.thunder = 16; }
+        } else {
+            rain.thunder -= 1;
+            if rain.thunder == 0 { rain.lightning = -1; }
         }
     }
 
@@ -620,6 +631,7 @@ impl State {
             if dark || shade { result.with_fg(Color::gray()) } else { result }
         };
 
+        buffer.fill(Glyph::wide(' '));
         for y in 0..UI_MAP_SIZE_Y {
             for x in 0..UI_MAP_SIZE_X {
                 let glyph = lookup(Point(x, y) + offset);
@@ -645,6 +657,23 @@ impl State {
                     for x in 0..UI_MAP_SIZE_X {
                         let point = Point(2 * x, y);
                         buffer.set(point, buffer.get(point).with_bg(color));
+                    }
+                }
+            }
+
+            if rain.thunder > 0 {
+                let shift = (rain.thunder - 1) % 4;
+                if shift % 2 == 0 {
+                    let space = Glyph::char(' ');
+                    let delta = Point(shift - 1, 0);
+                    let limit = if delta.1 > 0 { -1 } else { 0 };
+                    for y in 0..UI_MAP_SIZE_Y {
+                        for x in 0..(UI_MAP_SIZE_X + limit) {
+                            let point = Point(2 * x, y);
+                            buffer.set(point + delta, buffer.get(point));
+                        }
+                        buffer.set(Point(0, y), space);
+                        buffer.set(Point(2 * UI_MAP_SIZE_X - 1, y), space);
                     }
                 }
             }
