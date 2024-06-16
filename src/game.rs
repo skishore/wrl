@@ -1,11 +1,12 @@
 use std::cmp::{max, min};
-use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::mem::replace;
-use std::rc::Rc;
+use std::num::NonZeroU64;
+use std::ops::{Index, IndexMut};
 
 use lazy_static::lazy_static;
 use rand::{Rng, SeedableRng};
+use slotmap::{DefaultKey, Key, KeyData, SlotMap};
 
 use crate::{or_continue, or_return, static_assert_size};
 use crate::base::{Buffer, Color, Glyph};
@@ -79,9 +80,62 @@ lazy_static! {
 
 // Entity
 
-type EntityRef = Rc<RefCell<Entity>>;
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[repr(transparent)]
+struct EID(NonZeroU64);
+static_assert_size!(Option<EID>, 8);
+
+impl Default for EID {
+    fn default() -> Self {
+        to_eid(DefaultKey::null())
+    }
+}
+
+fn to_key(eid: EID) -> DefaultKey {
+    KeyData::from_ffi(eid.0.get()).into()
+}
+
+fn to_eid(key: DefaultKey) -> EID {
+    EID(NonZeroU64::new(key.data().as_ffi()).unwrap())
+}
+
+#[derive(Default)]
+struct EntityMap {
+    map: SlotMap<DefaultKey, Entity>,
+}
+
+impl EntityMap {
+    fn add(&mut self, entity: Entity) -> EID {
+        assert!(entity.eid == EID::default());
+        let result = to_eid(self.map.insert(entity));
+        self.get_mut(result).unwrap().eid = result;
+        result
+    }
+
+    fn get(&self, eid: EID) -> Option<&Entity> {
+        self.map.get(to_key(eid))
+    }
+
+    fn get_mut(&mut self, eid: EID) -> Option<&mut Entity> {
+        self.map.get_mut(to_key(eid))
+    }
+}
+
+impl Index<EID> for EntityMap {
+    type Output = Entity;
+    fn index(&self, eid: EID) -> &Self::Output {
+        self.get(eid).unwrap()
+    }
+}
+
+impl IndexMut<EID> for EntityMap {
+    fn index_mut(&mut self, eid: EID) -> &mut Self::Output {
+        self.get_mut(eid).unwrap()
+    }
+}
 
 struct Entity {
+    eid: EID,
     glyph: Glyph,
     player: bool,
     pos: Point,
@@ -96,7 +150,7 @@ enum Status { Free, Blocked, Occupied }
 
 #[derive(Clone)]
 struct Cell {
-    entity: Option<EntityRef>,
+    eid: Option<EID>,
     shadow: i32,
     tile: &'static Tile,
 }
@@ -122,7 +176,8 @@ struct Rain {
 
 struct Board {
     active_entity_index: usize,
-    entity_order: Vec<EntityRef>,
+    entity_order: Vec<EID>,
+    entities: EntityMap,
     map: Matrix<Cell>,
     light: Light,
     rain: Option<Rain>,
@@ -147,11 +202,12 @@ impl Board {
             }),
             Weather::None => None,
         };
-        let cell = Cell { entity: None, shadow: 0, tile: Tile::get('#') };
+        let cell = Cell { eid: None, shadow: 0, tile: Tile::get('#') };
 
         let mut result = Self {
             active_entity_index: 0,
             entity_order: vec![],
+            entities: EntityMap::default(),
             map: Matrix::new(size, cell),
             // Environmental effects
             light,
@@ -164,8 +220,8 @@ impl Board {
 
     // Getters
 
-    fn get_active_entity(&self) -> &EntityRef {
-        &self.entity_order[self.active_entity_index]
+    fn get_active_entity(&self) -> EID {
+        self.entity_order[self.active_entity_index]
     }
 
     fn get_cell(&self, p: Point) -> &Cell { self.map.entry_ref(p) }
@@ -173,8 +229,8 @@ impl Board {
     fn get_size(&self) -> Point { self.map.size }
 
     fn get_status(&self, p: Point) -> Status {
-        let Cell { entity, tile, .. } = self.get_cell(p);
-        if entity.is_some() { return Status::Occupied; }
+        let Cell { eid, tile, .. } = self.get_cell(p);
+        if eid.is_some() { return Status::Occupied; }
         if tile.blocked() { Status::Blocked } else { Status::Free }
     }
 
@@ -182,11 +238,14 @@ impl Board {
 
     // Setters
 
-    fn add_entity(&mut self, entity: &EntityRef) {
-        let cell = self.map.entry_mut(entity.borrow().pos).unwrap();
-        assert!(cell.entity.is_none());
-        cell.entity = Some(entity.clone());
-        self.entity_order.push(entity.clone());
+    fn add_entity(&mut self, entity: Entity) -> EID {
+        let pos = entity.pos;
+        let eid = self.entities.add(entity);
+        let cell = self.map.entry_mut(pos).unwrap();
+        let prev = replace(&mut cell.eid, Some(eid));
+        assert!(prev.is_none());
+        self.entity_order.push(eid);
+        eid
     }
 
     fn advance_entity(&mut self) {
@@ -196,16 +255,17 @@ impl Board {
         }
     }
 
-    fn move_entity(&mut self, entity: &EntityRef, target: Point) {
-        let source = replace(&mut entity.borrow_mut().pos, target);
-        let old = replace(&mut self.map.entry_mut(source).unwrap().entity, None);
-        assert!(old.as_ref().unwrap().as_ptr() == entity.as_ptr());
-        let new = replace(&mut self.map.entry_mut(target).unwrap().entity, old);
+    fn move_entity(&mut self, eid: EID, target: Point) {
+        let entity = &mut self.entities[eid];
+        let source = replace(&mut entity.pos, target);
+        let old = replace(&mut self.map.entry_mut(source).unwrap().eid, None);
+        assert!(old == Some(eid));
+        let new = replace(&mut self.map.entry_mut(target).unwrap().eid, old);
         assert!(new.is_none());
     }
 
     fn reset(&mut self, tile: &'static Tile) {
-        self.map.fill(Cell { entity: None, shadow: 0, tile });
+        self.map.fill(Cell { eid: None, shadow: 0, tile });
         self.update_edge_shadows();
         self.entity_order.clear();
         self.active_entity_index = 0;
@@ -458,22 +518,23 @@ impl ActionResult {
     fn success() -> Self { Self { success: true } }
 }
 
-fn plan(_: &Board, entity: &EntityRef, input: &mut Action, _: &mut RNG) -> Action {
-    let player = entity.borrow().player;
+fn plan(_: &Board, entity: &Entity, input: &mut Action, _: &mut RNG) -> Action {
+    let player = entity.player;
     if !player { return Action::WaitForInput; }
     replace(input, Action::WaitForInput)
 }
 
-fn act(state: &mut State, entity: EntityRef, action: Action) -> ActionResult {
+fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
     match action {
         Action::Move(dir) => {
             if dir == Point::default() { return ActionResult::success(); }
-            let target = entity.borrow().pos + dir;
+            let entity = &state.board.entities[eid];
+            let target = entity.pos + dir;
             match state.board.get_status(target) {
                 Status::Blocked => ActionResult::failure(),
                 Status::Occupied => ActionResult::failure(),
                 Status::Free => {
-                    state.board.move_entity(&entity, target);
+                    state.board.move_entity(eid, target);
                     ActionResult::success()
                 }
             }
@@ -508,12 +569,12 @@ fn process_input(state: &mut State, input: Input) {
 
 fn update_state(state: &mut State) {
     state.frame += 1;
-    let pos = state.player.borrow().pos;
+    let pos = state.get_player().pos;
     state.board.update_env(state.frame, pos, &mut state.rng);
 
     let needs_input = |state: &State| {
         if !matches!(state.input, Action::WaitForInput) { return false; }
-        state.board.get_active_entity().borrow().player
+        state.board.get_active_entity() == state.player
     };
 
     while !state.inputs.is_empty() && needs_input(state) {
@@ -524,21 +585,22 @@ fn update_state(state: &mut State) {
     let mut update = false;
 
     loop {
-        let entity = state.board.get_active_entity();
-        let player = entity.borrow().player;
+        let eid = state.board.get_active_entity();
+        let entity = &state.board.entities[eid];
+        let player = entity.player;
         if player && needs_input(state) { break; }
 
         update = true;
         let (input, rng) = (&mut state.input, &mut state.rng);
         let action = plan(&state.board, &entity, input, rng);
-        let result = act(state, entity.clone(), action);
+        let result = act(state, entity.eid, action);
         if player && !result.success { break; }
 
         state.board.advance_entity();
     }
 
     if update {
-        let pos = state.player.borrow().pos;
+        let pos = state.get_player().pos;
         state.vision.compute(pos, |x| state.board.get_tile(x));
     }
 }
@@ -552,7 +614,7 @@ pub struct State {
     frame: usize,
     input: Action,
     inputs: Vec<Input>,
-    player: EntityRef,
+    player: EID,
     vision: Vision,
     rng: RNG,
 }
@@ -570,8 +632,8 @@ impl State {
             if !board.get_tile(pos).blocked() { break; }
         }
         let glyph = Glyph::wdfg('@', 0x222);
-        let player = Rc::new((Entity { glyph, player: true, pos}).into());
-        board.add_entity(&player);
+        let player = Entity { eid: EID::default(), glyph, player: true, pos};
+        let player = board.add_entity(player);
 
         let die = |n: i32, rng: &mut RNG| rng.gen::<i32>().rem_euclid(n);
         let pos = |board: &Board, rng: &mut RNG| {
@@ -590,11 +652,13 @@ impl State {
         let inputs = vec![];
         let mut vision = Vision::new(FOV_RADIUS);
 
-        let pos = player.borrow().pos;
+        let pos = board.entities[player].pos;
         vision.compute(pos, |x| board.get_tile(x));
 
         Self { board, frame, input, inputs, player, vision, rng }
     }
+
+    fn get_player(&self) -> &Entity { &self.board.entities[self.player] }
 
     pub fn add_input(&mut self, input: Input) { self.inputs.push(input) }
 
@@ -607,7 +671,7 @@ impl State {
             std::mem::swap(buffer, &mut overwrite);
         }
 
-        let pos = self.player.borrow().pos;
+        let pos = self.get_player().pos;
         let offset = pos - Point(UI_MAP_SIZE_X / 2, UI_MAP_SIZE_Y / 2);
         let (sun, dark) = match self.board.light {
             Light::None => (Point::default(), true),
@@ -619,15 +683,14 @@ impl State {
             let known = self.vision.can_see_now(point);
             if !known { return unseen; }
 
-            let Cell { entity, shadow, tile } = self.board.get_cell(point);
+            let Cell { eid, shadow, tile } = self.board.get_cell(point);
             let (delta, shade) = (point - pos, *shadow > 0);
             if (dark || (shade && !(tile.blocked() && sun.dot(delta) < 0))) &&
                delta.len_l1() > 1 {
                 return unseen;
             }
 
-            let result = entity.as_ref().map(|x| x.borrow().glyph);
-            let result = result.unwrap_or(tile.glyph);
+            let result = eid.map(|x| self.board.entities[x].glyph).unwrap_or(tile.glyph);
             if dark || shade { result.with_fg(Color::gray()) } else { result }
         };
 
