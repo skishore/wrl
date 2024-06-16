@@ -1,6 +1,6 @@
 use std::cmp::{max, min};
 use std::collections::VecDeque;
-use std::mem::replace;
+use std::mem::{replace, swap};
 use std::num::NonZeroU64;
 use std::ops::{Index, IndexMut};
 
@@ -10,22 +10,23 @@ use slotmap::{DefaultKey, Key, KeyData, SlotMap};
 
 use crate::{or_continue, or_return, static_assert_size};
 use crate::base::{Buffer, Color, Glyph};
-use crate::base::{HashMap, FOV, LOS, Matrix, Point, dirs};
+use crate::base::{HashMap, LOS, Matrix, Point, dirs};
 use crate::base::RNG;
+use crate::knowledge::{Knowledge, Vision};
 
 //////////////////////////////////////////////////////////////////////////////
 
 // Constants
 
-const FOV_RADIUS: i32 = 21;
-const OBSCURED_VISION: i32 = 3;
+const FOV_RADIUS_NPC: i32 = 12;
+const FOV_RADIUS_PC_: i32 = 21;
 
 const LIGHT: Light = Light::Sun(Point(4, 1));
 const WEATHER: Weather = Weather::Rain(Point(0, 64), 96);
 const WORLD_SIZE: i32 = 100;
 
-const UI_MAP_SIZE_X: i32 = 2 * FOV_RADIUS + 1;
-const UI_MAP_SIZE_Y: i32 = 2 * FOV_RADIUS + 1;
+const UI_MAP_SIZE_X: i32 = 2 * FOV_RADIUS_PC_ + 1;
+const UI_MAP_SIZE_Y: i32 = 2 * FOV_RADIUS_PC_ + 1;
 
 #[derive(Eq, PartialEq)]
 pub enum Input { Escape, BackTab, Char(char) }
@@ -38,17 +39,17 @@ const FLAG_NONE: u32 = 0;
 const FLAG_BLOCKED: u32 = 1 << 0;
 const FLAG_OBSCURE: u32 = 1 << 1;
 
-struct Tile {
-    flags: u32,
-    glyph: Glyph,
-    description: &'static str,
+pub struct Tile {
+    pub flags: u32,
+    pub glyph: Glyph,
+    pub description: &'static str,
 }
 static_assert_size!(Tile, 24);
 
 impl Tile {
     fn get(ch: char) -> &'static Tile { TILES.get(&ch).unwrap() }
-    fn blocked(&self) -> bool { self.flags & FLAG_BLOCKED != 0 }
-    fn obscure(&self) -> bool { self.flags & FLAG_OBSCURE != 0 }
+    pub fn blocked(&self) -> bool { self.flags & FLAG_BLOCKED != 0 }
+    pub fn obscure(&self) -> bool { self.flags & FLAG_OBSCURE != 0 }
 }
 
 impl PartialEq for &'static Tile {
@@ -82,7 +83,7 @@ lazy_static! {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 #[repr(transparent)]
-struct EID(NonZeroU64);
+pub struct EID(NonZeroU64);
 static_assert_size!(Option<EID>, 8);
 
 impl Default for EID {
@@ -105,11 +106,15 @@ struct EntityMap {
 }
 
 impl EntityMap {
-    fn add(&mut self, entity: Entity) -> EID {
-        assert!(entity.eid == EID::default());
-        let result = to_eid(self.map.insert(entity));
-        self.get_mut(result).unwrap().eid = result;
-        result
+    fn add(&mut self, args: &EntityArgs) -> EID {
+        let key = self.map.insert_with_key(|x| Entity {
+            eid: to_eid(x),
+            glyph: args.glyph,
+            known: Box::default(),
+            player: args.player,
+            pos: args.pos,
+        });
+        to_eid(key)
     }
 
     fn get(&self, eid: EID) -> Option<&Entity> {
@@ -134,8 +139,15 @@ impl IndexMut<EID> for EntityMap {
     }
 }
 
-struct Entity {
-    eid: EID,
+pub struct Entity {
+    pub eid: EID,
+    pub glyph: Glyph,
+    pub known: Box<Knowledge>,
+    pub player: bool,
+    pub pos: Point,
+}
+
+struct EntityArgs {
     glyph: Glyph,
     player: bool,
     pos: Point,
@@ -146,13 +158,13 @@ struct Entity {
 // Board
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-enum Status { Free, Blocked, Occupied }
+pub enum Status { Free, Blocked, Occupied }
 
-#[derive(Clone)]
-struct Cell {
-    eid: Option<EID>,
-    shadow: i32,
-    tile: &'static Tile,
+#[derive(Clone, Copy)]
+pub struct Cell {
+    pub eid: Option<EID>,
+    pub shadow: i32,
+    pub tile: &'static Tile,
 }
 static_assert_size!(Cell, 24);
 
@@ -174,11 +186,16 @@ struct Rain {
     thunder: i32,
 }
 
-struct Board {
+pub struct Board {
     active_entity_index: usize,
     entity_order: Vec<EID>,
     entities: EntityMap,
     map: Matrix<Cell>,
+    // Knowledge state
+    known: Option<Box<Knowledge>>,
+    npc_vision: Vision,
+    _pc_vision: Vision,
+    // Environmental effects
     light: Light,
     rain: Option<Rain>,
     shadow: Vec<Point>,
@@ -209,6 +226,10 @@ impl Board {
             entity_order: vec![],
             entities: EntityMap::default(),
             map: Matrix::new(size, cell),
+            // Knowledge state
+            known: Some(Box::default()),
+            npc_vision: Vision::new(FOV_RADIUS_NPC),
+            _pc_vision: Vision::new(FOV_RADIUS_PC_),
             // Environmental effects
             light,
             rain,
@@ -224,7 +245,9 @@ impl Board {
         self.entity_order[self.active_entity_index]
     }
 
-    fn get_cell(&self, p: Point) -> &Cell { self.map.entry_ref(p) }
+    pub fn get_cell(&self, p: Point) -> &Cell { self.map.entry_ref(p) }
+
+    pub fn get_entity(&self, eid: EID) -> Option<&Entity> { self.entities.get(eid) }
 
     fn get_size(&self) -> Point { self.map.size }
 
@@ -238,13 +261,14 @@ impl Board {
 
     // Setters
 
-    fn add_entity(&mut self, entity: Entity) -> EID {
-        let pos = entity.pos;
-        let eid = self.entities.add(entity);
+    fn add_entity(&mut self, args: &EntityArgs) -> EID {
+        let pos = args.pos;
+        let eid = self.entities.add(args);
         let cell = self.map.entry_mut(pos).unwrap();
         let prev = replace(&mut cell.eid, Some(eid));
         assert!(prev.is_none());
         self.entity_order.push(eid);
+        self.update_known(eid);
         eid
     }
 
@@ -277,6 +301,21 @@ impl Board {
         let new_shadow = if tile.blocked() { 1 } else { 0 };
         cell.tile = tile;
         self.update_shadow(point, new_shadow - old_shadow);
+    }
+
+    fn update_known(&mut self, eid: EID) {
+        let mut known = self.known.take().unwrap_or_default();
+        swap(&mut known, &mut self.entities[eid].known);
+
+        let me = &self.entities[eid];
+        let (player, pos) = (me.player, me.pos);
+        let vision = if player { &mut self._pc_vision } else { &mut self.npc_vision };
+        vision.compute(pos, |x| self.map.get(x).tile);
+        let vision = if player { &self._pc_vision } else { &self.npc_vision };
+        known.update(me, &self, vision);
+
+        swap(&mut known, &mut self.entities[eid].known);
+        self.known = Some(known);
     }
 
     fn update_env(&mut self, frame: usize, pos: Point, rng: &mut RNG) {
@@ -334,75 +373,6 @@ impl Board {
             self.update_shadow(Point(-1, y), delta);
             self.update_shadow(Point(self.map.size.0, y), delta);
         }
-    }
-}
-
-//////////////////////////////////////////////////////////////////////////////
-
-struct Vision {
-    fov: FOV,
-    center: Point,
-    offset: Point,
-    visibility: Matrix<i32>,
-    points_seen: Vec<Point>,
-}
-
-impl Vision {
-    fn new(radius: i32) -> Self {
-        let vision_side = 2 * radius + 1;
-        let vision_size = Point(vision_side, vision_side);
-        Self {
-            fov: FOV::new(radius),
-            center: Point(radius, radius),
-            offset: Point::default(),
-            visibility: Matrix::new(vision_size, -1),
-            points_seen: vec![],
-        }
-    }
-
-    fn can_see_now(&self, p: Point) -> bool {
-        self.get_visibility_at(p) >= 0
-    }
-
-    fn get_visibility_at(&self, p: Point) -> i32 {
-        self.visibility.get(p + self.offset)
-    }
-
-    fn compute<F: Fn(Point) -> &'static Tile>(&mut self, pos: Point, f: F) {
-        self.offset = self.center - pos;
-        self.visibility.fill(-1);
-        self.points_seen.clear();
-
-        let blocked = |p: Point, prev: Option<&Point>| {
-            let lookup = p + self.center;
-            let cached = self.visibility.get(lookup);
-
-            let visibility = (|| {
-                // These constant values come from Point.distanceNethack.
-                // They are chosen such that, in a field of tall grass, we'll
-                // only see cells at a distanceNethack <= kVisionRadius.
-                if prev.is_none() { return 100 * (OBSCURED_VISION + 1) - 95 - 46 - 25; }
-
-                let tile = f(p + pos);
-                if tile.blocked() { return 0; }
-
-                let parent = prev.unwrap();
-                let obscure = tile.obscure();
-                let diagonal = p.0 != parent.0 && p.1 != parent.1;
-                let loss = if obscure { 95 + if diagonal { 46 } else { 0 } } else { 0 };
-                let prev = self.visibility.get(*parent + self.center);
-                max(prev - loss, 0)
-            })();
-
-            if visibility > cached {
-                self.visibility.set(lookup, visibility);
-                if cached < 0 && 0 <= visibility {
-                    self.points_seen.push(p + pos);
-                }
-            }
-            visibility <= 0
-        };
-        self.fov.apply(blocked);
     }
 }
 
@@ -518,10 +488,10 @@ impl ActionResult {
     fn success() -> Self { Self { success: true } }
 }
 
-fn plan(_: &Board, entity: &Entity, input: &mut Action, _: &mut RNG) -> Action {
-    let player = entity.player;
-    if !player { return Action::WaitForInput; }
-    replace(input, Action::WaitForInput)
+fn plan(board: &Board, eid: EID, input: &mut Action, _: &mut RNG) -> Action {
+    let entity = &board.entities[eid];
+    if entity.player { return replace(input, Action::WaitForInput); }
+    Action::WaitForInput
 }
 
 fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
@@ -586,22 +556,21 @@ fn update_state(state: &mut State) {
 
     loop {
         let eid = state.board.get_active_entity();
-        let entity = &state.board.entities[eid];
-        let player = entity.player;
+        let player = eid == state.player;
         if player && needs_input(state) { break; }
 
+        state.board.update_known(eid);
+
         update = true;
-        let (input, rng) = (&mut state.input, &mut state.rng);
-        let action = plan(&state.board, &entity, input, rng);
-        let result = act(state, entity.eid, action);
+        let action = plan(&state.board, eid, &mut state.input, &mut state.rng);
+        let result = act(state, eid, action);
         if player && !result.success { break; }
 
         state.board.advance_entity();
     }
 
     if update {
-        let pos = state.get_player().pos;
-        state.vision.compute(pos, |x| state.board.get_tile(x));
+        state.board.update_known(state.player);
     }
 }
 
@@ -615,7 +584,6 @@ pub struct State {
     input: Action,
     inputs: Vec<Input>,
     player: EID,
-    vision: Vision,
     rng: RNG,
 }
 
@@ -631,9 +599,9 @@ impl State {
             mapgen(&mut board, &mut rng);
             if !board.get_tile(pos).blocked() { break; }
         }
+        let input = Action::WaitForInput;
         let glyph = Glyph::wdfg('@', 0x222);
-        let player = Entity { eid: EID::default(), glyph, player: true, pos};
-        let player = board.add_entity(player);
+        let player = board.add_entity(&EntityArgs { glyph, player: true, pos });
 
         let die = |n: i32, rng: &mut RNG| rng.gen::<i32>().rem_euclid(n);
         let pos = |board: &Board, rng: &mut RNG| {
@@ -647,15 +615,7 @@ impl State {
             if let Some(_) = pos(&board, &mut rng) {}
         }
 
-        let frame = 0;
-        let input = Action::WaitForInput;
-        let inputs = vec![];
-        let mut vision = Vision::new(FOV_RADIUS);
-
-        let pos = board.entities[player].pos;
-        vision.compute(pos, |x| board.get_tile(x));
-
-        Self { board, frame, input, inputs, player, vision, rng }
+        Self { board, frame: 0, input, inputs: vec![], player, rng }
     }
 
     fn get_player(&self) -> &Entity { &self.board.entities[self.player] }
@@ -671,8 +631,10 @@ impl State {
             std::mem::swap(buffer, &mut overwrite);
         }
 
-        let pos = self.get_player().pos;
-        let offset = pos - Point(UI_MAP_SIZE_X / 2, UI_MAP_SIZE_Y / 2);
+        let entity = self.get_player();
+        let offset = entity.pos - Point(UI_MAP_SIZE_X / 2, UI_MAP_SIZE_Y / 2);
+        let (known, pos) = (&*entity.known, entity.pos);
+
         let (sun, dark) = match self.board.light {
             Light::None => (Point::default(), true),
             Light::Sun(x) => (x, false),
@@ -680,17 +642,21 @@ impl State {
 
         let lookup = |point: Point| -> Glyph {
             let unseen = Glyph::wide(' ');
-            let known = self.vision.can_see_now(point);
-            if !known { return unseen; }
+            let cell = known.get(point);
+            if !cell.visible() { return unseen; }
 
-            let Cell { eid, shadow, tile } = self.board.get_cell(point);
-            let (delta, shade) = (point - pos, *shadow > 0);
+            let entity = cell.entity();
+            let tile = cell.tile().unwrap();
+            // TODO: We shouldn't access the board directly here.
+            let shade = self.board.get_cell(point).shadow > 0;
+            let delta = point - pos;
+
             if (dark || (shade && !(tile.blocked() && sun.dot(delta) < 0))) &&
                delta.len_l1() > 1 {
                 return unseen;
             }
 
-            let result = eid.map(|x| self.board.entities[x].glyph).unwrap_or(tile.glyph);
+            let result = entity.map(|x| x.glyph).unwrap_or(tile.glyph);
             if dark || shade { result.with_fg(Color::gray()) } else { result }
         };
 
@@ -706,7 +672,7 @@ impl State {
             for drop in &rain.drops {
                 let index = drop.frame - self.frame;
                 let point = drop.point - *or_continue!(rain.path.get(index));
-                if index == 0 && !self.vision.can_see_now(point) { continue; }
+                if index == 0 && !known.get(point).visible() { continue; }
 
                 let Point(x, y) = point - offset;
                 let ch = if index == 0 { 'o' } else { rain.ch };

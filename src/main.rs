@@ -3,6 +3,8 @@
 
 mod base;
 mod game;
+mod list;
+mod knowledge;
 
 use std::io::{self, Write};
 
