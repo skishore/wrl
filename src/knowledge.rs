@@ -3,7 +3,7 @@ use std::f64::consts::TAU;
 
 use crate::static_assert_size;
 use crate::base::{FOV, Glyph, HashMap, Matrix, Point};
-use crate::game::{Board, EID, Entity, Status, Tile};
+use crate::game::{Board, EID, Entity, Light, Status, Tile};
 use crate::list::{Handle, List};
 
 //////////////////////////////////////////////////////////////////////////////
@@ -116,9 +116,11 @@ impl Vision {
 type CellHandle = Handle<CellKnowledge>;
 type EntityHandle = Handle<EntityKnowledge>;
 
+#[derive(Clone, Copy)]
 pub struct CellKnowledge {
     handle: Option<EntityHandle>,
     pub point: Point,
+    pub shade: bool,
     pub tile: &'static Tile,
     pub time: Timestamp,
     pub visibility: i32,
@@ -153,6 +155,10 @@ impl<'a> CellResult<'a> {
 
     pub fn age(&self) -> i32 {
         self.cell.map(|x| self.root.time - x.time).unwrap_or(std::i32::MAX)
+    }
+
+    pub fn shade(&self) -> bool {
+        self.cell.map(|x| x.shade).unwrap_or(false)
     }
 
     pub fn tile(&self) -> Option<&'static Tile> {
@@ -215,7 +221,12 @@ impl Knowledge {
 
     pub fn update(&mut self, me: &Entity, board: &Board, vision: &Vision) {
         self.age_out();
-        let time = self.time;
+
+        let (pos, time) = (me.pos, self.time);
+        let (sun, dark) = match board.get_light() {
+            Light::None => (Point::default(), true),
+            Light::Sun(x) => (*x, false),
+        };
 
         // Entities have exact knowledge about anything they can see.
         for point in &vision.points_seen {
@@ -225,18 +236,25 @@ impl Knowledge {
 
             let cell = board.get_cell(point);
             let (eid, tile) = (cell.eid, cell.tile);
+
+            let shadowed = cell.shadow > 0;
+            let (delta, shade) = (point - pos, dark || shadowed);
+            if (dark || (shadowed && !(tile.blocked() && sun.dot(delta) < 0))) &&
+               delta.len_l1() > 1 {
+                continue;
+            }
+
             let handle = (|| {
                 let other = board.get_entity(eid?)?;
                 Some(self.update_entity(me, other, board, true))
             })();
 
             let mut prev_handle = None;
+            let cell = CellKnowledge { handle, point, shade, tile, time, visibility };
             self.cell_by_point.entry(point).and_modify(|x| {
                 self.cells.move_to_front(*x);
-                let cell = CellKnowledge { handle, point, tile, time, visibility };
                 prev_handle = std::mem::replace(&mut self.cells[*x], cell).handle;
             }).or_insert_with(|| {
-                let cell = CellKnowledge { handle, point, tile, time, visibility };
                 self.cells.push_front(cell)
             });
 
@@ -248,8 +266,8 @@ impl Knowledge {
         self.forget(me.player);
     }
 
-    pub fn update_entity(&mut self, me: &Entity, other: &Entity,
-                         board: &Board, seen: bool) -> EntityHandle {
+    pub fn update_entity(&mut self, _: &Entity, other: &Entity,
+                         _: &Board, seen: bool) -> EntityHandle {
         let handle = *self.entity_by_eid.entry(other.eid).and_modify(|x| {
             self.entities.move_to_front(*x);
             let existing = &mut self.entities[*x];
@@ -287,14 +305,17 @@ impl Knowledge {
     }
 
     fn forget(&mut self, player: bool) {
-        if player { return; }
+        if player {
+            while let Some(x) = self.cells.back() && x.time != self.time {
+                self.forget_last_cell();
+            }
+            return;
+        }
 
         while self.cell_by_point.len() > MAX_TILE_MEMORY {
             // We don't need to check age, here; we can only see a bounded
             // number of cells per turn, much less than MAX_TILE_MEMORY.
-            let CellKnowledge { point, handle, .. } = self.cells.pop_back().unwrap();
-            if let Some(x) = handle { self.mark_entity_moved(x, point); }
-            self.cell_by_point.remove(&point);
+            self.forget_last_cell();
         }
 
         while self.entity_by_eid.len() > MAX_ENTITY_MEMORY {
@@ -310,6 +331,12 @@ impl Knowledge {
             }
             self.entities.pop_back();
         }
+    }
+
+    fn forget_last_cell(&mut self) {
+        let CellKnowledge { point, handle, .. } = self.cells.pop_back().unwrap();
+        if let Some(x) = handle { self.mark_entity_moved(x, point); }
+        self.cell_by_point.remove(&point);
     }
 
     fn mark_entity_moved(&mut self, handle: EntityHandle, pos: Point) {

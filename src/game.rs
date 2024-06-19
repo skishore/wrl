@@ -168,7 +168,7 @@ pub struct Cell {
 }
 static_assert_size!(Cell, 24);
 
-enum Light { None, Sun(Point) }
+pub enum Light { None, Sun(Point) }
 
 enum Weather { None, Rain(Point, usize) }
 
@@ -248,6 +248,8 @@ impl Board {
     pub fn get_cell(&self, p: Point) -> &Cell { self.map.entry_ref(p) }
 
     pub fn get_entity(&self, eid: EID) -> Option<&Entity> { self.entities.get(eid) }
+
+    pub fn get_light(&self) -> &Light { &self.light }
 
     fn get_size(&self) -> Point { self.map.size }
 
@@ -633,31 +635,15 @@ impl State {
 
         let entity = self.get_player();
         let offset = entity.pos - Point(UI_MAP_SIZE_X / 2, UI_MAP_SIZE_Y / 2);
-        let (known, pos) = (&*entity.known, entity.pos);
-
-        let (sun, dark) = match self.board.light {
-            Light::None => (Point::default(), true),
-            Light::Sun(x) => (x, false),
-        };
+        let unseen = Glyph::wide(' ');
+        let known = &*entity.known;
 
         let lookup = |point: Point| -> Glyph {
-            let unseen = Glyph::wide(' ');
             let cell = known.get(point);
             if !cell.visible() { return unseen; }
-
-            let entity = cell.entity();
-            let tile = cell.tile().unwrap();
-            // TODO: We shouldn't access the board directly here.
-            let shade = self.board.get_cell(point).shadow > 0;
-            let delta = point - pos;
-
-            if (dark || (shade && !(tile.blocked() && sun.dot(delta) < 0))) &&
-               delta.len_l1() > 1 {
-                return unseen;
-            }
-
-            let result = entity.map(|x| x.glyph).unwrap_or(tile.glyph);
-            if dark || shade { result.with_fg(Color::gray()) } else { result }
+            let tile = or_return!(cell.tile(), unseen);
+            let glyph = cell.entity().map(|x| x.glyph).unwrap_or(tile.glyph);
+            if cell.shade() { glyph.with_fg(Color::gray()) } else { glyph }
         };
 
         buffer.fill(Glyph::wide(' '));
@@ -669,14 +655,17 @@ impl State {
         }
 
         if let Some(rain) = &self.board.rain {
+            let base = Tile::get('~').glyph.fg();
             for drop in &rain.drops {
                 let index = drop.frame - self.frame;
                 let point = drop.point - *or_continue!(rain.path.get(index));
-                if index == 0 && !known.get(point).visible() { continue; }
+                let cell = if index == 0 { known.get(point) } else { known.default() };
+                if index == 0 && !cell.visible() { continue; }
 
                 let Point(x, y) = point - offset;
                 let ch = if index == 0 { 'o' } else { rain.ch };
-                let glyph = Glyph::wdfg(ch, 0x013);
+                let color = if cell.shade() { Color::gray() } else { base };
+                let glyph = Glyph::wdfg(ch, color);
                 buffer.set(Point(2 * x, y), glyph);
             }
 

@@ -29,8 +29,8 @@ macro_rules! or_continue {
 
 #[macro_export]
 macro_rules! or_return {
-    ($expr: expr) => {
-        match $expr { Some(x) => x, None => { return; } }
+    ($expr: expr $(, $result: expr)?) => {
+        match $expr { Some(x) => x, None => { return $($result)?; } }
     }
 }
 
