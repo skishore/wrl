@@ -5,6 +5,7 @@ mod base;
 mod game;
 mod list;
 mod knowledge;
+mod pathing;
 
 use std::io::{self, Write};
 

@@ -11,18 +11,30 @@ use slotmap::{DefaultKey, Key, KeyData, SlotMap};
 use crate::{or_continue, or_return, static_assert_size};
 use crate::base::{Buffer, Color, Glyph};
 use crate::base::{HashMap, LOS, Matrix, Point, dirs};
-use crate::base::RNG;
+use crate::base::{sample, RNG};
 use crate::knowledge::{Knowledge, Vision};
+use crate::pathing::{AStar, AStarLength, BFS, BFSResult, Status};
 
 //////////////////////////////////////////////////////////////////////////////
 
 // Constants
 
+const ASTAR_LIMIT_ATTACK: i32 = 32;
+const ASTAR_LIMIT_SEARCH: i32 = 256;
+const ASTAR_LIMIT_WANDER: i32 = 1024;
+const BFS_LIMIT_ATTACK: i32 = 8;
+const BFS_LIMIT_WANDER: i32 = 64;
+const EXPLORE_FUZZ: i32 = 64;
+
+const MAX_ASSESS: i32 = 32;
+const MAX_HUNGER: i32 = 1024;
+const MAX_THIRST: i32 = 256;
+
 const FOV_RADIUS_NPC: i32 = 12;
 const FOV_RADIUS_PC_: i32 = 21;
 
 const LIGHT: Light = Light::Sun(Point(4, 1));
-const WEATHER: Weather = Weather::Rain(Point(0, 64), 96);
+const WEATHER: Weather = Weather::None;
 const WORLD_SIZE: i32 = 100;
 
 const UI_MAP_SIZE_X: i32 = 2 * FOV_RADIUS_PC_ + 1;
@@ -106,11 +118,12 @@ struct EntityMap {
 }
 
 impl EntityMap {
-    fn add(&mut self, args: &EntityArgs) -> EID {
+    fn add(&mut self, args: &EntityArgs, rng: &mut RNG) -> EID {
         let key = self.map.insert_with_key(|x| Entity {
             eid: to_eid(x),
             glyph: args.glyph,
             known: Box::default(),
+            ai: Box::new(AIState::new(rng)),
             player: args.player,
             pos: args.pos,
         });
@@ -143,6 +156,7 @@ pub struct Entity {
     pub eid: EID,
     pub glyph: Glyph,
     pub known: Box<Knowledge>,
+    pub ai: Box<AIState>,
     pub player: bool,
     pub pos: Point,
 }
@@ -156,9 +170,6 @@ struct EntityArgs {
 //////////////////////////////////////////////////////////////////////////////
 
 // Board
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-pub enum Status { Free, Blocked, Occupied }
 
 #[derive(Clone, Copy)]
 pub struct Cell {
@@ -263,9 +274,9 @@ impl Board {
 
     // Setters
 
-    fn add_entity(&mut self, args: &EntityArgs) -> EID {
+    fn add_entity(&mut self, args: &EntityArgs, rng: &mut RNG) -> EID {
         let pos = args.pos;
-        let eid = self.entities.add(args);
+        let eid = self.entities.add(args, rng);
         let cell = self.map.entry_mut(pos).unwrap();
         let prev = replace(&mut cell.eid, Some(eid));
         assert!(prev.is_none());
@@ -474,9 +485,203 @@ fn mapgen(board: &mut Board, rng: &mut RNG) {
 
 //////////////////////////////////////////////////////////////////////////////
 
+// AI
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum Goal { Assess, Chase, Drink, Eat, Explore, Flee }
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum StepKind { Drink, Eat, Move, Look }
+
+#[derive(Clone, Copy, Debug)]
+struct Step { kind: StepKind, target: Point }
+
+type Hint = (Goal, &'static Tile);
+
+struct FightState {}
+
+struct FlightState {
+    turns_since_seen: i32,
+}
+
+struct AIState {
+    goal: Goal,
+    plan: Vec<Step>,
+    hints: HashMap<Goal, Point>,
+    fight: Option<FightState>,
+    flight: Option<FlightState>,
+    till_assess: i32,
+    till_hunger: i32,
+    till_thirst: i32,
+    debug_targets: Vec<Point>,
+}
+
+impl AIState {
+    fn new(rng: &mut RNG) -> Self {
+        Self {
+            goal: Goal::Explore,
+            plan: vec![],
+            hints: HashMap::default(),
+            fight: None,
+            flight: None,
+            till_assess: rng.gen::<i32>().rem_euclid(MAX_ASSESS),
+            till_hunger: rng.gen::<i32>().rem_euclid(MAX_HUNGER),
+            till_thirst: rng.gen::<i32>().rem_euclid(MAX_THIRST),
+            debug_targets: vec![],
+        }
+    }
+}
+
+fn explore(entity: &Entity) -> Option<BFSResult> {
+    let (known, pos) = (&*entity.known, entity.pos);
+    let check = |p: Point| {
+        if p == pos { return Status::Free; }
+        known.get(p).status().unwrap_or(Status::Free)
+    };
+    let done1 = |p: Point| {
+        if !known.get(p).unknown() { return false; }
+        dirs::ALL.iter().any(|x| known.get(p + *x).unblocked())
+    };
+    let done0 = |p: Point| {
+        done1(p) && dirs::ALL.iter().all(|x| !known.get(p + *x).blocked())
+    };
+
+    BFS(pos, done0, BFS_LIMIT_WANDER, check).or_else(||
+    BFS(pos, done1, BFS_LIMIT_WANDER, check))
+}
+
+fn plan_cached(entity: &Entity, hints: &[Hint],
+               ai: &mut AIState, rng: &mut RNG) -> Option<Action> {
+    if ai.plan.is_empty() { return None; }
+
+    // Check whether we can execute the next step in the plan.
+    let (known, pos) = (&*entity.known, entity.pos);
+    let next = *ai.plan.iter().last().unwrap();
+    let look = next.kind == StepKind::Look;
+    let dir = next.target - pos;
+    if !look && dir.len_l1() > 1 { return None; }
+    if look && let Some(x) = &ai.flight && x.turns_since_seen == 0 { return None; }
+
+    // Check whether the plan's goal is still a top priority for us.
+    let mut goals: Vec<Goal> = vec![];
+    if ai.flight.is_some() {
+        goals.push(Goal::Flee);
+    } else if ai.fight.is_some() {
+        goals.push(Goal::Chase);
+    } else if ai.goal == Goal::Assess {
+        goals.push(Goal::Assess);
+    } else {
+        if ai.till_hunger == 0 && ai.hints.contains_key(&Goal::Eat) {
+            goals.push(Goal::Eat);
+        }
+        if ai.till_thirst == 0 && ai.hints.contains_key(&Goal::Drink) {
+            goals.push(Goal::Drink);
+        }
+    }
+    if goals.is_empty() { goals.push(Goal::Explore); }
+    if !goals.contains(&ai.goal) { return None; }
+
+    // Check if we saw a shortcut that would also satisfy the goal.
+    if let Some(x) = ai.hints.get(&ai.goal) && known.get(*x).visible() {
+        let target = ai.plan.iter().find_map(
+            |x| if x.kind == StepKind::Move { Some(x.target) } else { None });
+        if let Some(y) = target && AStarLength(pos - *x) < AStarLength(pos - y) {
+            let los = LOS(pos, *x);
+            let check = |p: Point| { known.get(p).status().unwrap_or(Status::Free) };
+            let free = (1..los.len() - 1).all(|i| check(los[i]) == Status::Free);
+            if free { return None; }
+        }
+    }
+
+    // Check if we got specific information that invalidates the plan.
+    let point_matches_goal = |goal: Goal, point: Point| {
+        let tile = hints.iter().find_map(
+            |x| if x.0 == goal { Some(x.1) } else { None });
+        if tile.is_none() { return false; }
+        known.get(point).tile() == tile
+    };
+    let step_valid = |Step { kind, target }| match kind {
+        StepKind::Drink => point_matches_goal(Goal::Drink, target),
+        StepKind::Eat => point_matches_goal(Goal::Eat, target),
+        StepKind::Look => true,
+        StepKind::Move => match known.get(target).status().unwrap_or(Status::Free) {
+            Status::Occupied => target != next.target,
+            Status::Blocked  => false,
+            Status::Free     => true,
+        }
+    };
+    if !ai.plan.iter().all(|x| step_valid(*x)) { return None; }
+
+    // The plan is good! Execute the next step.
+    ai.plan.pop();
+    let wait = Some(Action::Idle);
+    match next.kind {
+        StepKind::Drink => { ai.till_thirst = MAX_THIRST; wait }
+        StepKind::Eat => { ai.till_hunger = MAX_HUNGER; wait }
+        StepKind::Look => {
+            if ai.plan.is_empty() && ai.goal == Goal::Assess {
+                ai.till_assess = rng.gen::<i32>().rem_euclid(MAX_ASSESS);
+            }
+            wait
+        }
+        StepKind::Move => Some(wander(dir))
+    }
+}
+
+fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
+    let hints = [
+        (Goal::Drink, Tile::get('~')),
+        (Goal::Eat, Tile::get('%')),
+    ];
+    if let Some(x) = plan_cached(entity, &hints, ai, rng) { return x; }
+
+    ai.plan.clear();
+    ai.goal = Goal::Explore;
+    ai.debug_targets.clear();
+    let mut result = BFSResult::default();
+    let (known, pos) = (&*entity.known, entity.pos);
+    if result.dirs.is_empty() && let Some(x) = explore(entity) {
+        (ai.goal, result) = (Goal::Explore, x);
+    }
+
+    let fallback = |result: BFSResult, rng: &mut RNG| {
+        let dirs = &result.dirs;
+        let dirs = if dirs.is_empty() { dirs::ALL.as_slice() } else { dirs };
+        Action::Move(*sample(dirs, rng))
+    };
+
+    if result.targets.is_empty() { return fallback(result, rng); }
+
+    ai.debug_targets = result.targets.clone();
+    let mut target = *result.targets.select_nth_unstable_by_key(
+        0, |x| (*x - pos).len_l2_squared()).1;
+    if ai.goal == Goal::Explore {
+        for _ in 0..EXPLORE_FUZZ {
+            let candidate = target + *sample(&dirs::ALL, rng);
+            if known.get(candidate).unknown() { target = candidate; }
+        }
+    }
+
+    let check = |p: Point| {
+        if p == pos { return Status::Free; }
+        known.get(p).status().unwrap_or(Status::Free)
+    };
+    if let Some(path) = AStar(pos, target, ASTAR_LIMIT_WANDER, check) {
+        let kind = StepKind::Move;
+        ai.plan = path.into_iter().map(|x| Step { kind, target: x }).collect();
+        ai.plan.reverse();
+        if let Some(x) = plan_cached(entity, &hints, ai, rng) { return x; }
+        ai.plan.clear();
+    }
+    fallback(result, rng)
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 // Action
 
 enum Action {
+    Idle,
     Move(Point),
     WaitForInput,
 }
@@ -490,10 +695,22 @@ impl ActionResult {
     fn success() -> Self { Self { success: true } }
 }
 
-fn plan(board: &Board, eid: EID, input: &mut Action, _: &mut RNG) -> Action {
-    let entity = &board.entities[eid];
-    if entity.player { return replace(input, Action::WaitForInput); }
-    Action::WaitForInput
+fn wander(dir: Point) -> Action { Action::Move(dir) }
+
+fn plan(state: &mut State, eid: EID) -> Action {
+    let player = eid == state.player;
+    if player { return replace(&mut state.input, Action::WaitForInput); }
+
+    let mut ai = state.ai.take().unwrap_or_else(
+        || Box::new(AIState::new(&mut state.rng)));
+    swap(&mut ai, &mut state.board.entities[eid].ai);
+
+    let entity = &state.board.entities[eid];
+    let action = plan_npc(entity, &mut ai, &mut state.rng);
+
+    swap(&mut ai, &mut state.board.entities[eid].ai);
+    state.ai = Some(ai);
+    action
 }
 
 fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
@@ -511,6 +728,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 }
             }
         }
+        Action::Idle => ActionResult::success(),
         Action::WaitForInput => ActionResult::failure(),
     }
 }
@@ -564,7 +782,7 @@ fn update_state(state: &mut State) {
         state.board.update_known(eid);
 
         update = true;
-        let action = plan(&state.board, eid, &mut state.input, &mut state.rng);
+        let action = plan(state, eid);
         let result = act(state, eid, action);
         if player && !result.success { break; }
 
@@ -573,6 +791,7 @@ fn update_state(state: &mut State) {
 
     if update {
         state.board.update_known(state.player);
+        state.board.update_known(state.board.entity_order[1]);
     }
 }
 
@@ -587,6 +806,8 @@ pub struct State {
     inputs: Vec<Input>,
     player: EID,
     rng: RNG,
+    // Update fields
+    ai: Option<Box<AIState>>,
 }
 
 impl State {
@@ -603,7 +824,8 @@ impl State {
         }
         let input = Action::WaitForInput;
         let glyph = Glyph::wdfg('@', 0x222);
-        let player = board.add_entity(&EntityArgs { glyph, player: true, pos });
+        let args = EntityArgs { glyph, player: true, pos };
+        let player = board.add_entity(&args, &mut rng);
 
         let die = |n: i32, rng: &mut RNG| rng.gen::<i32>().rem_euclid(n);
         let pos = |board: &Board, rng: &mut RNG| {
@@ -614,10 +836,15 @@ impl State {
             None
         };
         for _ in 0..20 {
-            if let Some(_) = pos(&board, &mut rng) {}
+            if let Some(x) = pos(&board, &mut rng) {
+                let glyph = Glyph::wide('P');
+                let args = EntityArgs { glyph, player: false, pos: x };
+                board.add_entity(&args, &mut rng);
+            }
         }
 
-        Self { board, frame: 0, input, inputs: vec![], player, rng }
+        let ai = Some(Box::new(AIState::new(&mut rng)));
+        Self { board, frame: 0, input, inputs: vec![], player, rng, ai }
     }
 
     fn get_player(&self) -> &Entity { &self.board.entities[self.player] }
@@ -633,17 +860,18 @@ impl State {
             std::mem::swap(buffer, &mut overwrite);
         }
 
-        let entity = self.get_player();
+        //let entity = self.get_player();
+        let entity = &self.board.entities[self.board.entity_order[1]];
         let offset = entity.pos - Point(UI_MAP_SIZE_X / 2, UI_MAP_SIZE_Y / 2);
         let unseen = Glyph::wide(' ');
         let known = &*entity.known;
 
         let lookup = |point: Point| -> Glyph {
             let cell = known.get(point);
-            if !cell.visible() { return unseen; }
             let tile = or_return!(cell.tile(), unseen);
             let glyph = cell.entity().map(|x| x.glyph).unwrap_or(tile.glyph);
-            if cell.shade() { glyph.with_fg(Color::gray()) } else { glyph }
+            let shade = cell.shade() || !cell.visible();
+            if shade { glyph.with_fg(Color::gray()) } else { glyph }
         };
 
         buffer.fill(Glyph::wide(' '));
@@ -652,6 +880,22 @@ impl State {
                 let glyph = lookup(Point(x, y) + offset);
                 buffer.set(Point(2 * x, y), glyph);
             }
+        }
+
+        for step in &entity.ai.plan {
+            if step.kind == StepKind::Look { continue; }
+            let Point(x, y) = step.target - offset;
+            let point = Point(2 * x, y);
+            let mut glyph = buffer.get(point);
+            if glyph.ch() == Glyph::wide(' ').ch() { glyph = Glyph::wide('.'); }
+            buffer.set(point, glyph.with_fg(0x400));
+        }
+
+        for target in &entity.ai.debug_targets {
+            let Point(x, y) = *target - offset;
+            let point = Point(2 * x, y);
+            let glyph = buffer.get(point);
+            buffer.set(point, glyph.with_fg(Color::black()).with_bg(0x400));
         }
 
         if let Some(rain) = &self.board.rain {

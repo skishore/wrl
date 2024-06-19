@@ -3,8 +3,9 @@ use std::f64::consts::TAU;
 
 use crate::static_assert_size;
 use crate::base::{FOV, Glyph, HashMap, Matrix, Point};
-use crate::game::{Board, EID, Entity, Light, Status, Tile};
+use crate::game::{Board, EID, Entity, Light, Tile};
 use crate::list::{Handle, List};
+use crate::pathing::Status;
 
 //////////////////////////////////////////////////////////////////////////////
 
