@@ -1,5 +1,6 @@
 use std::cmp::{max, min};
 use std::collections::VecDeque;
+use std::f64::consts::TAU;
 use std::mem::{replace, swap};
 use std::num::NonZeroU64;
 use std::ops::{Index, IndexMut};
@@ -10,10 +11,11 @@ use slotmap::{DefaultKey, Key, KeyData, SlotMap};
 
 use crate::{or_continue, or_return, static_assert_size};
 use crate::base::{Buffer, Color, Glyph};
-use crate::base::{HashMap, LOS, Matrix, Point, dirs};
+use crate::base::{HashMap, HashSet, LOS, Matrix, Point, dirs};
 use crate::base::{sample, RNG};
-use crate::knowledge::{Knowledge, Vision};
+use crate::knowledge::{Knowledge, Timestamp, Vision};
 use crate::pathing::{AStar, AStarLength, BFS, BFSResult, Status};
+use crate::pathing::DijkstraSearch;
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -26,9 +28,17 @@ const BFS_LIMIT_ATTACK: i32 = 8;
 const BFS_LIMIT_WANDER: i32 = 64;
 const EXPLORE_FUZZ: i32 = 64;
 
+const ASSESS_ANGLE: f64 = TAU / 18.;
+const ASSESS_STEPS: i32 = 4;
+const ASSESS_TURNS: i32 = 16;
+
 const MAX_ASSESS: i32 = 32;
 const MAX_HUNGER: i32 = 1024;
 const MAX_THIRST: i32 = 256;
+
+const MAX_FLIGHT_TURNS: i32 = 64;
+const MAX_FOLLOW_TURNS: i32 = 64;
+const TURN_TIMES_LIMIT: usize = 64;
 
 const FOV_RADIUS_NPC: i32 = 12;
 const FOV_RADIUS_PC_: i32 = 21;
@@ -122,7 +132,7 @@ impl EntityMap {
         let key = self.map.insert_with_key(|x| Entity {
             eid: to_eid(x),
             glyph: args.glyph,
-            known: Box::default(),
+            known: Default::default(),
             ai: Box::new(AIState::new(rng)),
             player: args.player,
             pos: args.pos,
@@ -507,9 +517,11 @@ struct FlightState {
 struct AIState {
     goal: Goal,
     plan: Vec<Step>,
+    time: Timestamp,
     hints: HashMap<Goal, Point>,
     fight: Option<FightState>,
     flight: Option<FlightState>,
+    turn_times: VecDeque<Timestamp>,
     till_assess: i32,
     till_hunger: i32,
     till_thirst: i32,
@@ -521,14 +533,54 @@ impl AIState {
         Self {
             goal: Goal::Explore,
             plan: vec![],
-            hints: HashMap::default(),
+            time: Default::default(),
+            hints: Default::default(),
             fight: None,
             flight: None,
+            turn_times: Default::default(),
             till_assess: rng.gen::<i32>().rem_euclid(MAX_ASSESS),
             till_hunger: rng.gen::<i32>().rem_euclid(MAX_HUNGER),
             till_thirst: rng.gen::<i32>().rem_euclid(MAX_THIRST),
             debug_targets: vec![],
         }
+    }
+
+    fn age_at_turn(&self, turn: i32) -> i32 {
+        if self.turn_times.is_empty() { return 0; }
+        self.time - self.turn_times[min(self.turn_times.len() - 1, turn as usize)]
+    }
+
+    fn record_turn(&mut self, time: Timestamp) {
+        if self.turn_times.len() == TURN_TIMES_LIMIT { self.turn_times.pop_back(); }
+        self.turn_times.push_front(self.time);
+        self.time = time;
+    }
+
+    fn update(&mut self, entity: &Entity, hints: &[Hint]) {
+        self.till_assess = max(0, self.till_assess - 1);
+        self.till_hunger = max(0, self.till_hunger - 1);
+        self.till_thirst = max(0, self.till_thirst - 1);
+
+        let (known, pos) = (&*entity.known, entity.pos);
+        let last_turn_age = known.time - self.time;
+        let mut seen = HashSet::default();
+        for cell in &known.cells {
+            if (self.time - cell.time) >= 0 { break; }
+            for (goal, tile) in hints {
+                if cell.tile == tile && seen.insert(goal) {
+                    self.hints.insert(*goal, cell.point);
+                }
+            }
+        }
+        self.record_turn(known.time);
+    }
+}
+
+fn coerce(source: Point, path: &[Point]) -> BFSResult {
+    if path.is_empty() {
+        BFSResult { dirs: vec![Point::default()], targets: vec![source] }
+    } else {
+        BFSResult { dirs: vec![path[0] - source], targets: vec![path[path.len() - 1]] }
     }
 }
 
@@ -633,16 +685,50 @@ fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
         (Goal::Drink, Tile::get('~')),
         (Goal::Eat, Tile::get('%')),
     ];
+    ai.update(entity, &hints);
     if let Some(x) = plan_cached(entity, &hints, ai, rng) { return x; }
 
     ai.plan.clear();
     ai.goal = Goal::Explore;
     ai.debug_targets.clear();
-    let mut result = BFSResult::default();
+
     let (known, pos) = (&*entity.known, entity.pos);
-    if result.dirs.is_empty() && let Some(x) = explore(entity) {
-        (ai.goal, result) = (Goal::Explore, x);
-    }
+
+    let check = |p: Point| {
+        if p == pos { return Status::Free; }
+        known.get(p).status().unwrap_or(Status::Free)
+    };
+
+    let mut result = {
+        let mut result = BFSResult::default();
+        let mut add_candidates = |ai: &mut AIState, goal: Goal| {
+            if ai.goal != Goal::Explore { return; }
+
+            let option = ai.hints.get(&goal);
+            let tile = hints.iter().find_map(
+                |x| if x.0 == goal { Some(x.1) } else { None });
+            if option.is_none() || tile.is_none() { return; }
+
+            let (option, tile) = (*option.unwrap(), tile.unwrap());
+            let target = |p: Point| known.get(p).tile() == Some(tile);
+            if target(pos) {
+                (ai.goal, result) = (goal, coerce(pos, &[]));
+            } else if let Some(x) = DijkstraSearch(pos, target, ASTAR_LIMIT_WANDER, check) {
+                (ai.goal, result) = (goal, coerce(pos, &x));
+            } else if let Some(x) = AStar(pos, option, ASTAR_LIMIT_WANDER, check) {
+                (ai.goal, result) = (goal, coerce(pos, &x));
+            }
+        };
+        if ai.till_thirst == 0 { add_candidates(ai, Goal::Drink); }
+        if ai.till_hunger == 0 { add_candidates(ai, Goal::Eat); }
+
+        if result.dirs.is_empty() && ai.till_assess == 0 {
+            (ai.goal, result) = (Goal::Assess, coerce(pos, &[]));
+        } else if result.dirs.is_empty() && let Some(x) = explore(entity) {
+            (ai.goal, result) = (Goal::Explore, x);
+        }
+        result
+    };
 
     let fallback = |result: BFSResult, rng: &mut RNG| {
         let dirs = &result.dirs;
@@ -662,13 +748,21 @@ fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
         }
     }
 
-    let check = |p: Point| {
-        if p == pos { return Status::Free; }
-        known.get(p).status().unwrap_or(Status::Free)
-    };
     if let Some(path) = AStar(pos, target, ASTAR_LIMIT_WANDER, check) {
         let kind = StepKind::Move;
         ai.plan = path.into_iter().map(|x| Step { kind, target: x }).collect();
+        match ai.goal {
+            Goal::Assess => {
+                for _ in 0..ASSESS_STEPS {
+                    ai.plan.push(Step { kind: StepKind::Look, target });
+                }
+            }
+            Goal::Chase => {}
+            Goal::Drink => ai.plan.push(Step { kind: StepKind::Drink, target }),
+            Goal::Eat => ai.plan.push(Step { kind: StepKind::Eat, target }),
+            Goal::Explore => {}
+            Goal::Flee => {}
+        }
         ai.plan.reverse();
         if let Some(x) = plan_cached(entity, &hints, ai, rng) { return x; }
         ai.plan.clear();
