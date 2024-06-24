@@ -463,9 +463,9 @@ fn mapgen(board: &mut Board, rng: &mut RNG) {
         for x in 0..size.0 {
             let point = Point(x, y);
             if walls.get(point) {
-                board.set_tile(point, wt);
+                //board.set_tile(point, wt);
             } else if grass.get(point) {
-                board.set_tile(point, gt);
+                //board.set_tile(point, gt);
             }
         }
     }
