@@ -13,7 +13,7 @@ use crate::{or_continue, or_return, static_assert_size};
 use crate::base::{Buffer, Color, Glyph};
 use crate::base::{HashMap, HashSet, LOS, Matrix, Point, dirs};
 use crate::base::{sample, RNG};
-use crate::knowledge::{Knowledge, Timestamp, Vision};
+use crate::knowledge::{Knowledge, Timestamp, Vision, VisionArgs};
 use crate::pathing::{AStar, AStarLength, BFS, BFSResult, Status};
 use crate::pathing::DijkstraSearch;
 
@@ -129,6 +129,7 @@ struct EntityMap {
 
 impl EntityMap {
     fn add(&mut self, args: &EntityArgs, rng: &mut RNG) -> EID {
+        let dir = *sample(&dirs::ALL, rng);
         let key = self.map.insert_with_key(|x| Entity {
             eid: to_eid(x),
             glyph: args.glyph,
@@ -136,6 +137,7 @@ impl EntityMap {
             ai: Box::new(AIState::new(rng)),
             player: args.player,
             pos: args.pos,
+            dir,
         });
         to_eid(key)
     }
@@ -169,6 +171,7 @@ pub struct Entity {
     pub ai: Box<AIState>,
     pub player: bool,
     pub pos: Point,
+    pub dir: Point,
 }
 
 struct EntityArgs {
@@ -331,9 +334,10 @@ impl Board {
         swap(&mut known, &mut self.entities[eid].known);
 
         let me = &self.entities[eid];
-        let (player, pos) = (me.player, me.pos);
+        let player = me.player;
+        let args = VisionArgs { player: false, pos: me.pos, dir: me.dir };
         let vision = if player { &mut self._pc_vision } else { &mut self.npc_vision };
-        vision.compute(pos, |x| self.map.get(x).tile);
+        vision.compute(&args, |x| self.map.get(x).tile);
         let vision = if player { &self._pc_vision } else { &self.npc_vision };
         known.update(me, &self, vision);
 
@@ -514,7 +518,7 @@ struct FlightState {
     turns_since_seen: i32,
 }
 
-struct AIState {
+pub struct AIState {
     goal: Goal,
     plan: Vec<Step>,
     time: Timestamp,
@@ -676,7 +680,7 @@ fn plan_cached(entity: &Entity, hints: &[Hint],
             }
             wait
         }
-        StepKind::Move => Some(wander(dir))
+        StepKind::Move => Some(step(dir))
     }
 }
 
@@ -733,7 +737,7 @@ fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
     let fallback = |result: BFSResult, rng: &mut RNG| {
         let dirs = &result.dirs;
         let dirs = if dirs.is_empty() { dirs::ALL.as_slice() } else { dirs };
-        Action::Move(*sample(dirs, rng))
+        step(*sample(dirs, rng))
     };
 
     if result.targets.is_empty() { return fallback(result, rng); }
@@ -774,9 +778,11 @@ fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
 
 // Action
 
+struct Move { look: Point, step: Point }
+
 enum Action {
     Idle,
-    Move(Point),
+    Move(Move),
     WaitForInput,
 }
 
@@ -789,7 +795,9 @@ impl ActionResult {
     fn success() -> Self { Self { success: true } }
 }
 
-fn wander(dir: Point) -> Action { Action::Move(dir) }
+fn step(dir: Point) -> Action {
+    Action::Move(Move { look: dir, step: dir })
+}
 
 fn plan(state: &mut State, eid: EID) -> Action {
     let player = eid == state.player;
@@ -809,13 +817,21 @@ fn plan(state: &mut State, eid: EID) -> Action {
 
 fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
     match action {
-        Action::Move(dir) => {
-            if dir == Point::default() { return ActionResult::success(); }
-            let entity = &state.board.entities[eid];
-            let target = entity.pos + dir;
+        Action::Move(Move { look, step }) => {
+            let entity = &mut state.board.entities[eid];
+            if look != Point::default() { entity.dir = look; }
+            if step == Point::default() { return ActionResult::success(); }
+
+            let target = entity.pos + step;
             match state.board.get_status(target) {
-                Status::Blocked => ActionResult::failure(),
-                Status::Occupied => ActionResult::failure(),
+                Status::Blocked => {
+                    state.board.entities[eid].dir = step;
+                    ActionResult::failure()
+                }
+                Status::Occupied => {
+                    state.board.entities[eid].dir = step;
+                    ActionResult::failure()
+                }
                 Status::Free => {
                     state.board.move_entity(eid, target);
                     ActionResult::success()
@@ -848,7 +864,12 @@ fn get_direction(ch: char) -> Option<Point> {
 
 fn process_input(state: &mut State, input: Input) {
     let dir = if let Input::Char(x) = input { get_direction(x) } else { None };
-    if let Some(x) = dir { state.input = Action::Move(x); }
+    if let Some(x) = dir {
+        let old = state.board.entities[state.player].dir;
+        state.board.entities[state.player].dir = x + old;
+        state.board.update_known(state.player);
+    };
+    //if let Some(x) = dir { state.input = step(x); }
 }
 
 fn update_state(state: &mut State) {
@@ -931,11 +952,13 @@ impl State {
         };
         for _ in 0..20 {
             if let Some(x) = pos(&board, &mut rng) {
-                let glyph = Glyph::wide('P');
+                let glyph = Glyph::wdfg('P', 0x222);
                 let args = EntityArgs { glyph, player: false, pos: x };
                 board.add_entity(&args, &mut rng);
             }
         }
+        board.entities[player].dir = Point::default();
+        board.update_known(player);
 
         let ai = Some(Box::new(AIState::new(&mut rng)));
         Self { board, frame: 0, input, inputs: vec![], player, rng, ai }
@@ -954,8 +977,8 @@ impl State {
             std::mem::swap(buffer, &mut overwrite);
         }
 
-        //let entity = self.get_player();
-        let entity = &self.board.entities[self.board.entity_order[1]];
+        let entity = self.get_player();
+        //let entity = &self.board.entities[self.board.entity_order[1]];
         let offset = entity.pos - Point(UI_MAP_SIZE_X / 2, UI_MAP_SIZE_Y / 2);
         let unseen = Glyph::wide(' ');
         let known = &*entity.known;
@@ -975,6 +998,11 @@ impl State {
                 buffer.set(Point(2 * x, y), glyph);
             }
         }
+
+        let Point(x, y) = entity.pos + entity.dir - offset;
+        let point = Point(2 * x, y);
+        let glyph = buffer.get(point);
+        buffer.set(point, glyph.with_fg(Color::black()).with_bg(0x400));
 
         for step in &entity.ai.plan {
             if step.kind == StepKind::Look { continue; }

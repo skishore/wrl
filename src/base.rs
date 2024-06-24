@@ -428,10 +428,17 @@ pub fn LOS(a: Point, b: Point) -> Vec<Point> {
     result
 }
 
+#[derive(Clone, Copy)]
+pub struct FOVEndpoint {
+    pub pos: Point,
+    pub l2_squared: f64,
+}
+
 #[derive(Default)]
-struct FOVNode {
-    next: Point,
-    prev: Point,
+pub struct FOVNode {
+    pub next: Point,
+    pub prev: Point,
+    pub endpoints: Vec<Point>,
     children: Vec<i32>,
 }
 
@@ -450,28 +457,31 @@ impl FOV {
                 let (xa, ya) = if j & 1 == 0 { (radius, i) } else { (i, radius) };
                 let xb = xa * if j & 2 == 0 { 1 } else { -1 };
                 let yb = ya * if j & 4 == 0 { 1 } else { -1 };
-                result.update(0, &LOS(Point::default(), Point(xb, yb)), 0);
+                let pos = Point(xb, yb);
+                let l2_squared = pos.len_l2_squared() as f64;
+                let endpoint = FOVEndpoint { pos, l2_squared };
+                result.update(0, &LOS(Point::default(), pos), &endpoint, 0);
             }
         }
         result
     }
 
-    pub fn apply<F: FnMut(Point, Option<&Point>) -> bool>(&mut self, mut blocked: F) {
+    pub fn apply<F: FnMut(&FOVNode) -> bool>(&mut self, mut blocked: F) {
         let mut index = 0;
         self.cache.push(0);
         while index < self.cache.len() {
             let node = &self.nodes[self.cache[index] as usize];
-            let prev = if index > 0 { Some(&node.prev) } else { None };
-            if blocked(node.next, prev) { index += 1; continue; }
+            if blocked(&node) { index += 1; continue; }
             for x in &node.children { self.cache.push(*x); }
             index += 1;
         }
         self.cache.clear();
     }
 
-    fn update(&mut self, node: usize, los: &Vec<Point>, i: usize) {
+    fn update(&mut self, node: usize, los: &[Point], endpoint: &FOVEndpoint, i: usize) {
         let prev = los[i];
         assert!(self.nodes[node].next == prev);
+        self.nodes[node].endpoints.push(endpoint.pos);
         if !prev.in_l2_range(self.radius) { return; }
         if i + 1 >= los.len() { return; }
 
@@ -481,10 +491,11 @@ impl FOV {
                 if self.nodes[*x as usize].next == next { return *x as usize; }
             }
             let result = self.nodes.len();
-            self.nodes.push(FOVNode { next, prev, children: vec![] });
+            let (children, endpoints) = (vec![], vec![]);
+            self.nodes.push(FOVNode { next, prev, children, endpoints });
             self.nodes[node].children.push(result as i32);
             result
         })();
-        self.update(child, los, i + 1);
+        self.update(child, los, endpoint, i + 1);
     }
 }

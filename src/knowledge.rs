@@ -2,7 +2,7 @@ use std::cmp::max;
 use std::f64::consts::TAU;
 
 use crate::static_assert_size;
-use crate::base::{FOV, Glyph, HashMap, Matrix, Point};
+use crate::base::{FOV, FOVEndpoint, FOVNode, Glyph, HashMap, Matrix, Point};
 use crate::game::{Board, EID, Entity, Light, Tile};
 use crate::list::{Handle, List};
 use crate::pathing::Status;
@@ -16,7 +16,9 @@ const MAX_TILE_MEMORY: usize = 4096;
 
 const OBSCURED_VISION: i32 = 3;
 
+// VISION_COSINE should be (0.5 * VISION_ANGLE).cos(), checked at runtime.
 const VISION_ANGLE: f64 = TAU / 3.;
+const VISION_COSINE: f64 = 0.5;
 const VISION_RADIUS: i32 = 3;
 
 //////////////////////////////////////////////////////////////////////////////
@@ -53,6 +55,7 @@ pub struct Vision {
 
 impl Vision {
     pub fn new(radius: i32) -> Self {
+        assert!((VISION_COSINE - (0.5 * VISION_ANGLE).cos()).abs() < 0.01);
         let vision_side = 2 * radius + 1;
         let vision_size = Point(vision_side, vision_side);
         Self {
@@ -72,12 +75,16 @@ impl Vision {
         self.visibility.get(p + self.offset)
     }
 
-    pub fn compute<F: Fn(Point) -> &'static Tile>(&mut self, pos: Point, f: F) {
+    pub fn compute<F: Fn(Point) -> &'static Tile>(&mut self, args: &VisionArgs, f: F) {
+        let VisionArgs { player, pos, dir } = *args;
         self.offset = self.center - pos;
         self.visibility.fill(-1);
         self.points_seen.clear();
 
-        let blocked = |p: Point, prev: Option<&Point>| {
+        let blocked = |node: &FOVNode| {
+            if !player && !Self::include_ray(dir, &node.endpoints) { return true; }
+
+            let p = node.next;
             let lookup = p + self.center;
             let cached = self.visibility.get(lookup);
 
@@ -85,16 +92,17 @@ impl Vision {
                 // These constant values come from Point.distanceNethack.
                 // They are chosen such that, in a field of tall grass, we'll
                 // only see cells at a distanceNethack <= kVisionRadius.
-                if prev.is_none() { return 100 * (OBSCURED_VISION + 1) - 95 - 46 - 25; }
+                let first = p == Point::default();
+                if first { return 100 * (OBSCURED_VISION + 1) - 95 - 46 - 25; }
 
                 let tile = f(p + pos);
                 if tile.blocked() { return 0; }
 
-                let parent = prev.unwrap();
+                let parent = node.prev;
                 let obscure = tile.obscure();
                 let diagonal = p.0 != parent.0 && p.1 != parent.1;
                 let loss = if obscure { 95 + if diagonal { 46 } else { 0 } } else { 0 };
-                let prev = self.visibility.get(*parent + self.center);
+                let prev = self.visibility.get(parent + self.center);
                 max(prev - loss, 0)
             })();
 
@@ -107,6 +115,16 @@ impl Vision {
             visibility <= 0
         };
         self.fov.apply(blocked);
+    }
+
+    fn include_ray(dir: Point, endpoints: &[Point]) -> bool {
+        if dir == Point::default() { return true; }
+        let l2d = dir.len_l2_squared() as f64;
+        for pos in endpoints {
+            let cos = (dir.dot(*pos) as f64) / (l2d * pos.len_l2_squared() as f64).sqrt();
+            if cos >= VISION_COSINE { return true; }
+        }
+        false
     }
 }
 
