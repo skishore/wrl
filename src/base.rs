@@ -431,14 +431,14 @@ pub fn LOS(a: Point, b: Point) -> Vec<Point> {
 #[derive(Clone, Copy)]
 pub struct FOVEndpoint {
     pub pos: Point,
-    pub l2_squared: f64,
+    pub inv_l2: f64,
 }
 
 #[derive(Default)]
 pub struct FOVNode {
     pub next: Point,
     pub prev: Point,
-    pub endpoints: Vec<Point>,
+    pub ends: Vec<FOVEndpoint>,
     children: Vec<i32>,
 }
 
@@ -458,8 +458,8 @@ impl FOV {
                 let xb = xa * if j & 2 == 0 { 1 } else { -1 };
                 let yb = ya * if j & 4 == 0 { 1 } else { -1 };
                 let pos = Point(xb, yb);
-                let l2_squared = pos.len_l2_squared() as f64;
-                let endpoint = FOVEndpoint { pos, l2_squared };
+                let inv_l2 = 1. / (pos.len_l2_squared() as f64).sqrt();
+                let endpoint = FOVEndpoint { pos, inv_l2  };
                 result.update(0, &LOS(Point::default(), pos), &endpoint, 0);
             }
         }
@@ -481,7 +481,7 @@ impl FOV {
     fn update(&mut self, node: usize, los: &[Point], endpoint: &FOVEndpoint, i: usize) {
         let prev = los[i];
         assert!(self.nodes[node].next == prev);
-        self.nodes[node].endpoints.push(endpoint.pos);
+        if prev != Point::default() { self.nodes[node].ends.push(*endpoint); }
         if !prev.in_l2_range(self.radius) { return; }
         if i + 1 >= los.len() { return; }
 
@@ -491,8 +491,8 @@ impl FOV {
                 if self.nodes[*x as usize].next == next { return *x as usize; }
             }
             let result = self.nodes.len();
-            let (children, endpoints) = (vec![], vec![]);
-            self.nodes.push(FOVNode { next, prev, children, endpoints });
+            let (children, ends) = (vec![], vec![]);
+            self.nodes.push(FOVNode { next, prev, children, ends });
             self.nodes[node].children.push(result as i32);
             result
         })();

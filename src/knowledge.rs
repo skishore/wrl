@@ -77,14 +77,22 @@ impl Vision {
 
     pub fn compute<F: Fn(Point) -> &'static Tile>(&mut self, args: &VisionArgs, f: F) {
         let VisionArgs { player, pos, dir } = *args;
+        let inv_l2 = if !player && dir != Point::default() {
+            1. / (dir.len_l2_squared() as f64).sqrt()
+        } else {
+            1.
+        };
+        let cone = FOVEndpoint { pos: dir, inv_l2 };
+
         self.offset = self.center - pos;
         self.visibility.fill(-1);
         self.points_seen.clear();
 
         let blocked = |node: &FOVNode| {
-            if !player && !Self::include_ray(dir, &node.endpoints) { return true; }
-
             let p = node.next;
+            let first = p == Point::default();
+            if !player && !first && !Self::include_ray(&cone, &node.ends) { return true; }
+
             let lookup = p + self.center;
             let cached = self.visibility.get(lookup);
 
@@ -92,7 +100,6 @@ impl Vision {
                 // These constant values come from Point.distanceNethack.
                 // They are chosen such that, in a field of tall grass, we'll
                 // only see cells at a distanceNethack <= kVisionRadius.
-                let first = p == Point::default();
                 if first { return 100 * (OBSCURED_VISION + 1) - 95 - 46 - 25; }
 
                 let tile = f(p + pos);
@@ -117,11 +124,10 @@ impl Vision {
         self.fov.apply(blocked);
     }
 
-    fn include_ray(dir: Point, endpoints: &[Point]) -> bool {
-        if dir == Point::default() { return true; }
-        let l2d = dir.len_l2_squared() as f64;
-        for pos in endpoints {
-            let cos = (dir.dot(*pos) as f64) / (l2d * pos.len_l2_squared() as f64).sqrt();
+    fn include_ray(cone: &FOVEndpoint, ends: &[FOVEndpoint]) -> bool {
+        if cone.pos == Point::default() { return true; }
+        for FOVEndpoint { pos, inv_l2 } in ends {
+            let cos = (cone.pos.dot(*pos) as f64) * cone.inv_l2 * *inv_l2;
             if cos >= VISION_COSINE { return true; }
         }
         false
