@@ -156,8 +156,10 @@ pub struct EntityKnowledge {
     pub eid: EID,
     pub age: i32,
     pub pos: Point,
+    pub dir: Point,
     pub glyph: Glyph,
     pub moved: bool,
+    pub friend: bool,
 }
 
 #[derive(Default)]
@@ -291,7 +293,7 @@ impl Knowledge {
         self.forget(me.player);
     }
 
-    pub fn update_entity(&mut self, _: &Entity, other: &Entity,
+    pub fn update_entity(&mut self, entity: &Entity, other: &Entity,
                          _: &Board, seen: bool) -> EntityHandle {
         let handle = *self.entity_by_eid.entry(other.eid).and_modify(|x| {
             self.entities.move_to_front(*x);
@@ -307,17 +309,22 @@ impl Knowledge {
                 eid: other.eid,
                 age: Default::default(),
                 pos: Default::default(),
+                dir: Default::default(),
                 moved: Default::default(),
                 glyph: Default::default(),
+                friend: Default::default(),
             })
         });
 
         let entry = &mut self.entities[handle];
+        let friend = other.eid == entity.eid;
 
         entry.age = if seen { 0 } else { 1 };
         entry.pos = other.pos;
+        entry.dir = other.dir;
         entry.moved = !seen;
         entry.glyph = other.glyph;
+        entry.friend = friend;
 
         handle
     }

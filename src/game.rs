@@ -987,8 +987,8 @@ impl State {
             std::mem::swap(buffer, &mut overwrite);
         }
 
-        //let entity = self.get_player();
-        let entity = &self.board.entities[self.board.entity_order[1]];
+        let entity = self.get_player();
+        //let entity = &self.board.entities[self.board.entity_order[1]];
         let offset = entity.pos - Point(UI_MAP_SIZE_X / 2, UI_MAP_SIZE_Y / 2);
         let unseen = Glyph::wide(' ');
         let known = &*entity.known;
@@ -1006,6 +1006,26 @@ impl State {
             for x in 0..UI_MAP_SIZE_X {
                 let glyph = lookup(Point(x, y) + offset);
                 buffer.set(Point(2 * x, y), glyph);
+            }
+        }
+
+        let length = 3 as usize;
+        let mut arrows = vec![];
+        for other in &entity.known.entities {
+            if other.friend || other.age > 0 { continue; }
+
+            let (pos, dir) = (other.pos, other.dir);
+            let ch = Glyph::ray(dir);
+            let norm = length as f64 / dir.len_l2();
+            let diff = Point((dir.0 as f64 * norm) as i32,
+                             (dir.1 as f64 * norm) as i32);
+            arrows.push((ch, LOS(pos, pos + diff)));
+        }
+        for (ch, arrow) in &arrows {
+            let index = (self.frame / 2) % (8 * length);
+            if let Some(x) = arrow.get(index + 1) {
+                let point = Point(2 * (x.0 - offset.0), x.1 - offset.1);
+                buffer.set(point, Glyph::wide(*ch));
             }
         }
 
