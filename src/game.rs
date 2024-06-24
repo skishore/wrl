@@ -335,7 +335,7 @@ impl Board {
 
         let me = &self.entities[eid];
         let player = me.player;
-        let args = VisionArgs { player: false, pos: me.pos, dir: me.dir };
+        let args = VisionArgs { player, pos: me.pos, dir: me.dir };
         let vision = if player { &mut self._pc_vision } else { &mut self.npc_vision };
         vision.compute(&args, |x| self.map.get(x).tile);
         let vision = if player { &self._pc_vision } else { &self.npc_vision };
@@ -680,7 +680,17 @@ fn plan_cached(entity: &Entity, hints: &[Hint],
             }
             wait
         }
-        StepKind::Move => Some(step(dir))
+        StepKind::Move => {
+            let mut target = next.target;
+            for next in ai.plan.iter().rev().take(8) {
+                if next.kind == StepKind::Look { break; }
+                if LOS(pos, next.target).iter().all(|x| !known.get(*x).blocked()) {
+                    target = next.target;
+                }
+            }
+            let look = if target == pos { entity.dir } else { target - pos };
+            Some(Action::Move(Move { look, step: dir }))
+        }
     }
 }
 
@@ -864,12 +874,12 @@ fn get_direction(ch: char) -> Option<Point> {
 
 fn process_input(state: &mut State, input: Input) {
     let dir = if let Input::Char(x) = input { get_direction(x) } else { None };
-    if let Some(x) = dir {
-        let old = state.board.entities[state.player].dir;
-        state.board.entities[state.player].dir = x + old;
-        state.board.update_known(state.player);
-    };
-    //if let Some(x) = dir { state.input = step(x); }
+    //if let Some(x) = dir {
+    //    let old = state.board.entities[state.player].dir;
+    //    state.board.entities[state.player].dir = x + old;
+    //    state.board.update_known(state.player);
+    //};
+    if let Some(x) = dir { state.input = step(x); }
 }
 
 fn update_state(state: &mut State) {
@@ -977,8 +987,8 @@ impl State {
             std::mem::swap(buffer, &mut overwrite);
         }
 
-        let entity = self.get_player();
-        //let entity = &self.board.entities[self.board.entity_order[1]];
+        //let entity = self.get_player();
+        let entity = &self.board.entities[self.board.entity_order[1]];
         let offset = entity.pos - Point(UI_MAP_SIZE_X / 2, UI_MAP_SIZE_Y / 2);
         let unseen = Glyph::wide(' ');
         let known = &*entity.known;
@@ -998,11 +1008,6 @@ impl State {
                 buffer.set(Point(2 * x, y), glyph);
             }
         }
-
-        let Point(x, y) = entity.pos + entity.dir - offset;
-        let point = Point(2 * x, y);
-        let glyph = buffer.get(point);
-        buffer.set(point, glyph.with_fg(Color::black()).with_bg(0x400));
 
         for step in &entity.ai.plan {
             if step.kind == StepKind::Look { continue; }
