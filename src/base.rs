@@ -7,34 +7,6 @@ use rand::Rng;
 // Basics
 
 #[macro_export]
-macro_rules! cast {
-    ($expr: expr, $enum:ident::$variant:ident) => {
-        if let $enum::$variant(x) = $expr { x } else { panic!() }
-    }
-}
-
-#[macro_export]
-macro_rules! or_break {
-    ($expr: expr) => {
-        match $expr { Some(x) => x, None => { break; } }
-    }
-}
-
-#[macro_export]
-macro_rules! or_continue {
-    ($expr: expr) => {
-        match $expr { Some(x) => x, None => { continue; } }
-    }
-}
-
-#[macro_export]
-macro_rules! or_return {
-    ($expr: expr $(, $result: expr)?) => {
-        match $expr { Some(x) => x, None => { return $($result)?; } }
-    }
-}
-
-#[macro_export]
 macro_rules! static_assert_size {
     ($x:ty, $y:expr) => {
         const _: fn() = || {

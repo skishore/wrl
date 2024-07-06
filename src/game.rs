@@ -9,7 +9,7 @@ use lazy_static::lazy_static;
 use rand::{Rng, SeedableRng};
 use slotmap::{DefaultKey, Key, KeyData, SlotMap};
 
-use crate::{or_continue, or_return, static_assert_size};
+use crate::static_assert_size;
 use crate::base::{Buffer, Color, Glyph};
 use crate::base::{HashMap, HashSet, LOS, Matrix, Point, dirs};
 use crate::base::{sample, RNG};
@@ -322,7 +322,7 @@ impl Board {
     }
 
     fn set_tile(&mut self, point: Point, tile: &'static Tile) {
-        let cell = or_return!(self.map.entry_mut(point));
+        let Some(cell) = self.map.entry_mut(point) else { return; };
         let old_shadow = if cell.tile.blocked() { 1 } else { 0 };
         let new_shadow = if tile.blocked() { 1 } else { 0 };
         cell.tile = tile;
@@ -346,7 +346,7 @@ impl Board {
     }
 
     fn update_env(&mut self, frame: usize, pos: Point, rng: &mut RNG) {
-        let rain = or_return!(&mut self.rain);
+        let Some(rain) = &mut self.rain else { return; };
 
         while let Some(x) = rain.drops.front() && x.frame < frame {
             rain.drops.pop_front();
@@ -381,8 +381,8 @@ impl Board {
 
     fn update_shadow(&mut self, point: Point, delta: i32) {
         if delta == 0 { return; }
-        for shift in &self.shadow {
-            let cell = or_continue!(self.map.entry_mut(point + *shift));
+        for x in &self.shadow {
+            let Some(cell) = self.map.entry_mut(point + *x) else { continue; };
             cell.shadow += delta;
             assert!(cell.shadow >= 0);
         }
@@ -995,7 +995,7 @@ impl State {
 
         let lookup = |point: Point| -> Glyph {
             let cell = known.get(point);
-            let tile = or_return!(cell.tile(), unseen);
+            let Some(tile) = cell.tile() else { return unseen; };
             let glyph = cell.entity().map(|x| x.glyph).unwrap_or(tile.glyph);
             let shade = cell.shade() || !cell.visible();
             if shade { glyph.with_fg(Color::gray()) } else { glyph }
@@ -1049,7 +1049,8 @@ impl State {
             let base = Tile::get('~').glyph.fg();
             for drop in &rain.drops {
                 let index = drop.frame - self.frame;
-                let point = drop.point - *or_continue!(rain.path.get(index));
+                let Some(delta) = rain.path.get(index) else { continue; };
+                let point = drop.point - *delta;
                 let cell = if index == 0 { known.get(point) } else { known.default() };
                 if index == 0 && !cell.visible() { continue; }
 
