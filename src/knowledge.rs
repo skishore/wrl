@@ -14,8 +14,6 @@ use crate::pathing::Status;
 const MAX_ENTITY_MEMORY: usize = 64;
 const MAX_TILE_MEMORY: usize = 4096;
 
-const OBSCURED_VISION: i32 = 3;
-
 // VISION_COSINE should be (0.5 * VISION_ANGLE).cos(), checked at runtime.
 const VISION_ANGLE: f64 = TAU / 3.;
 const VISION_COSINE: f64 = 0.5;
@@ -100,7 +98,7 @@ impl Vision {
                 // These constant values come from Point.distanceNethack.
                 // They are chosen such that, in a field of tall grass, we'll
                 // only see cells at a distanceNethack <= kVisionRadius.
-                if first { return 100 * (OBSCURED_VISION + 1) - 95 - 46 - 25; }
+                if first { return 100 * (VISION_RADIUS + 1) - 95 - 46 - 25; }
 
                 let tile = f(p + pos);
                 if tile.blocked() { return 0; }

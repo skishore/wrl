@@ -132,10 +132,6 @@ impl Glyph {
 
 // Point and Direction
 
-pub fn clamp<T: PartialOrd>(x: T, min: T, max: T) -> T {
-    if x < min { min } else if x > max { max } else { x }
-}
-
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct Point(pub i32, pub i32);
 static_assert_size!(Point, 8);
@@ -305,6 +301,14 @@ impl<'a> Slice<'a> {
         let glyph = self.fg.map(|x| glyph.with_fg(x)).unwrap_or(glyph);
         let glyph = self.bg.map(|x| glyph.with_bg(x)).unwrap_or(glyph);
         self.buffer.set(self.bounds.root + point, glyph);
+    }
+
+    pub fn fill(&mut self, glyph: Glyph) {
+        for x in 0..self.bounds.size.0 {
+            for y in 0..self.bounds.size.1 {
+                self.buffer.set(self.bounds.root + Point(x, y), glyph);
+            }
+        }
     }
 
     pub fn contains(&self, point: Point) -> bool {

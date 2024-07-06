@@ -10,7 +10,7 @@ use rand::{Rng, SeedableRng};
 use slotmap::{DefaultKey, Key, KeyData, SlotMap};
 
 use crate::static_assert_size;
-use crate::base::{Buffer, Color, Glyph};
+use crate::base::{Buffer, Color, Glyph, Rect, Slice};
 use crate::base::{HashMap, HashSet, LOS, Matrix, Point, dirs};
 use crate::base::{sample, RNG};
 use crate::knowledge::{Knowledge, Timestamp, Vision, VisionArgs};
@@ -874,11 +874,6 @@ fn get_direction(ch: char) -> Option<Point> {
 
 fn process_input(state: &mut State, input: Input) {
     let dir = if let Input::Char(x) = input { get_direction(x) } else { None };
-    //if let Some(x) = dir {
-    //    let old = state.board.entities[state.player].dir;
-    //    state.board.entities[state.player].dir = x + old;
-    //    state.board.update_known(state.player);
-    //};
     if let Some(x) = dir { state.input = step(x); }
 }
 
@@ -987,6 +982,10 @@ impl State {
             std::mem::swap(buffer, &mut overwrite);
         }
 
+        let size = Point(2 * UI_MAP_SIZE_X, UI_MAP_SIZE_Y);
+        let bounds = Rect { root: Point::default(), size };
+        let mut slice = Slice::new(buffer, bounds);
+
         let entity = self.get_player();
         //let entity = &self.board.entities[self.board.entity_order[1]];
         let offset = entity.pos - Point(UI_MAP_SIZE_X / 2, UI_MAP_SIZE_Y / 2);
@@ -1001,11 +1000,11 @@ impl State {
             if shade { glyph.with_fg(Color::gray()) } else { glyph }
         };
 
-        buffer.fill(Glyph::wide(' '));
+        slice.fill(Glyph::wide(' '));
         for y in 0..UI_MAP_SIZE_Y {
             for x in 0..UI_MAP_SIZE_X {
                 let glyph = lookup(Point(x, y) + offset);
-                buffer.set(Point(2 * x, y), glyph);
+                slice.set(Point(2 * x, y), glyph);
             }
         }
 
@@ -1025,7 +1024,7 @@ impl State {
             let index = (self.frame / 2) % (8 * length);
             if let Some(x) = arrow.get(index + 1) {
                 let point = Point(2 * (x.0 - offset.0), x.1 - offset.1);
-                buffer.set(point, Glyph::wide(*ch));
+                slice.set(point, Glyph::wide(*ch));
             }
         }
 
@@ -1033,16 +1032,16 @@ impl State {
             if step.kind == StepKind::Look { continue; }
             let Point(x, y) = step.target - offset;
             let point = Point(2 * x, y);
-            let mut glyph = buffer.get(point);
+            let mut glyph = slice.get(point);
             if glyph.ch() == Glyph::wide(' ').ch() { glyph = Glyph::wide('.'); }
-            buffer.set(point, glyph.with_fg(0x400));
+            slice.set(point, glyph.with_fg(0x400));
         }
 
         for target in &entity.ai.debug_targets {
             let Point(x, y) = *target - offset;
             let point = Point(2 * x, y);
-            let glyph = buffer.get(point);
-            buffer.set(point, glyph.with_fg(Color::black()).with_bg(0x400));
+            let glyph = slice.get(point);
+            slice.set(point, glyph.with_fg(Color::black()).with_bg(0x400));
         }
 
         if let Some(rain) = &self.board.rain {
@@ -1058,7 +1057,7 @@ impl State {
                 let ch = if index == 0 { 'o' } else { rain.ch };
                 let color = if cell.shade() { Color::gray() } else { base };
                 let glyph = Glyph::wdfg(ch, color);
-                buffer.set(Point(2 * x, y), glyph);
+                slice.set(Point(2 * x, y), glyph);
             }
 
             if rain.lightning > 0 {
@@ -1066,7 +1065,7 @@ impl State {
                 for y in 0..UI_MAP_SIZE_Y {
                     for x in 0..UI_MAP_SIZE_X {
                         let point = Point(2 * x, y);
-                        buffer.set(point, buffer.get(point).with_bg(color));
+                        slice.set(point, slice.get(point).with_bg(color));
                     }
                 }
             }
@@ -1080,10 +1079,10 @@ impl State {
                     for y in 0..UI_MAP_SIZE_Y {
                         for x in 0..(UI_MAP_SIZE_X + limit) {
                             let point = Point(2 * x, y);
-                            buffer.set(point + delta, buffer.get(point));
+                            slice.set(point + delta, slice.get(point));
                         }
-                        buffer.set(Point(0, y), space);
-                        buffer.set(Point(2 * UI_MAP_SIZE_X - 1, y), space);
+                        slice.set(Point(0, y), space);
+                        slice.set(Point(2 * UI_MAP_SIZE_X - 1, y), space);
                     }
                 }
             }
