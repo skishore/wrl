@@ -7,6 +7,7 @@ use std::ops::{Index, IndexMut};
 
 use lazy_static::lazy_static;
 use rand::{Rng, SeedableRng};
+use rand_distr::{Distribution, Normal};
 use slotmap::{DefaultKey, Key, KeyData, SlotMap};
 
 use crate::static_assert_size;
@@ -606,6 +607,25 @@ fn explore(entity: &Entity) -> Option<BFSResult> {
     BFS(pos, done1, BFS_LIMIT_WANDER, check))
 }
 
+fn assess_dirs(dirs: &[Point], ai: &mut AIState, rng: &mut RNG) {
+    if dirs.is_empty() { return; }
+
+    for i in 0..ASSESS_STEPS {
+        let scale = 1000;
+        let steps = rng.gen::<i32>().rem_euclid(ASSESS_TURNS);
+        let angle = Normal::new(0., ASSESS_ANGLE).unwrap().sample(rng);
+        let (sin, cos) = (angle.sin(), angle.cos());
+
+        let Point(dx, dy) = dirs[i as usize % dirs.len()];
+        let rx = (cos * (scale * dx) as f64) + (sin * (scale * dy) as f64);
+        let ry = (cos * (scale * dy) as f64) - (sin * (scale * dx) as f64);
+        let target = Point(rx as i32, ry as i32);
+        for _ in 0..steps {
+            ai.plan.push(Step { kind: StepKind::Look, target })
+        }
+    }
+}
+
 fn plan_cached(entity: &Entity, hints: &[Hint],
                ai: &mut AIState, rng: &mut RNG) -> Option<Action> {
     if ai.plan.is_empty() { return None; }
@@ -678,7 +698,7 @@ fn plan_cached(entity: &Entity, hints: &[Hint],
             if ai.plan.is_empty() && ai.goal == Goal::Assess {
                 ai.till_assess = rng.gen::<i32>().rem_euclid(MAX_ASSESS);
             }
-            wait
+            Some(Action::Look(next.target))
         }
         StepKind::Move => {
             let mut target = next.target;
@@ -766,11 +786,7 @@ fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
         let kind = StepKind::Move;
         ai.plan = path.into_iter().map(|x| Step { kind, target: x }).collect();
         match ai.goal {
-            Goal::Assess => {
-                for _ in 0..ASSESS_STEPS {
-                    ai.plan.push(Step { kind: StepKind::Look, target });
-                }
-            }
+            Goal::Assess => assess_dirs(&[entity.dir], ai, rng),
             Goal::Chase => {}
             Goal::Drink => ai.plan.push(Step { kind: StepKind::Drink, target }),
             Goal::Eat => ai.plan.push(Step { kind: StepKind::Eat, target }),
@@ -792,6 +808,7 @@ struct Move { look: Point, step: Point }
 
 enum Action {
     Idle,
+    Look(Point),
     Move(Move),
     WaitForInput,
 }
@@ -827,6 +844,12 @@ fn plan(state: &mut State, eid: EID) -> Action {
 
 fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
     match action {
+        Action::Idle => ActionResult::success(),
+        Action::WaitForInput => ActionResult::failure(),
+        Action::Look(dir) => {
+            state.board.entities[eid].dir = dir;
+            ActionResult::success()
+        }
         Action::Move(Move { look, step }) => {
             let entity = &mut state.board.entities[eid];
             if look != Point::default() { entity.dir = look; }
@@ -848,8 +871,6 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 }
             }
         }
-        Action::Idle => ActionResult::success(),
-        Action::WaitForInput => ActionResult::failure(),
     }
 }
 
