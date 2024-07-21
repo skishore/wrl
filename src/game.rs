@@ -48,8 +48,10 @@ const LIGHT: Light = Light::Sun(Point(4, 1));
 const WEATHER: Weather = Weather::None;
 const WORLD_SIZE: i32 = 100;
 
-const UI_MAP_SIZE_X: i32 = 2 * FOV_RADIUS_PC_ + 1;
-const UI_MAP_SIZE_Y: i32 = 2 * FOV_RADIUS_PC_ + 1;
+//const UI_MAP_SIZE_X: i32 = 2 * FOV_RADIUS_PC_ + 1;
+//const UI_MAP_SIZE_Y: i32 = 2 * FOV_RADIUS_PC_ + 1;
+const UI_MAP_SIZE_X: i32 = WORLD_SIZE;
+const UI_MAP_SIZE_Y: i32 = WORLD_SIZE;
 
 #[derive(Eq, PartialEq)]
 pub enum Input { Escape, BackTab, Char(char) }
@@ -468,9 +470,9 @@ fn mapgen(board: &mut Board, rng: &mut RNG) {
         for x in 0..size.0 {
             let point = Point(x, y);
             if walls.get(point) {
-                //board.set_tile(point, wt);
+                board.set_tile(point, wt);
             } else if grass.get(point) {
-                //board.set_tile(point, gt);
+                board.set_tile(point, gt);
             }
         }
     }
@@ -1007,9 +1009,10 @@ impl State {
         let bounds = Rect { root: Point::default(), size };
         let mut slice = Slice::new(buffer, bounds);
 
-        let entity = self.get_player();
-        //let entity = &self.board.entities[self.board.entity_order[1]];
-        let offset = entity.pos - Point(UI_MAP_SIZE_X / 2, UI_MAP_SIZE_Y / 2);
+        //let entity = self.get_player();
+        //let offset = entity.pos - Point(UI_MAP_SIZE_X / 2, UI_MAP_SIZE_Y / 2);
+        let entity = &self.board.entities[self.board.entity_order[1]];
+        let offset = Point(0, 0);
         let unseen = Glyph::wide(' ');
         let known = &*entity.known;
 
@@ -1017,8 +1020,8 @@ impl State {
             let cell = known.get(point);
             let Some(tile) = cell.tile() else { return unseen; };
             let glyph = cell.entity().map(|x| x.glyph).unwrap_or(tile.glyph);
-            let shade = cell.shade() || !cell.visible();
-            if shade { glyph.with_fg(Color::gray()) } else { glyph }
+            if !cell.visible() { return glyph.with_fg(0x011) }
+            if cell.shade() { glyph.with_fg(Color::gray()) } else { glyph }
         };
 
         slice.fill(Glyph::wide(' '));
@@ -1049,20 +1052,34 @@ impl State {
             }
         }
 
-        for step in &entity.ai.plan {
-            if step.kind == StepKind::Look { continue; }
-            let Point(x, y) = step.target - offset;
-            let point = Point(2 * x, y);
-            let mut glyph = slice.get(point);
-            if glyph.ch() == Glyph::wide(' ').ch() { glyph = Glyph::wide('.'); }
-            slice.set(point, glyph.with_fg(0x400));
-        }
-
-        for target in &entity.ai.debug_targets {
-            let Point(x, y) = *target - offset;
-            let point = Point(2 * x, y);
-            let glyph = slice.get(point);
-            slice.set(point, glyph.with_fg(Color::black()).with_bg(0x400));
+        if entity.eid != self.player {
+            for step in &entity.ai.plan {
+                if step.kind == StepKind::Look { continue; }
+                let Point(x, y) = step.target - offset;
+                let point = Point(2 * x, y);
+                let mut glyph = slice.get(point);
+                if glyph.ch() == Glyph::wide(' ').ch() { glyph = Glyph::wide('.'); }
+                slice.set(point, glyph.with_fg(0x400));
+            }
+            for target in &entity.ai.debug_targets {
+                let Point(x, y) = *target - offset;
+                let point = Point(2 * x, y);
+                let glyph = slice.get(point);
+                slice.set(point, glyph.with_fg(Color::black()).with_bg(0x400));
+            }
+            for eid in &self.board.entity_order {
+                let other = &self.board.entities[*eid];
+                let point = Point(2 * other.pos.0, other.pos.1);
+                slice.set(point, other.glyph);
+            }
+            for other in &entity.known.entities {
+                let color = if other.age == 0 { 0x040 } else {
+                    if other.moved { 0x400 } else { 0x440 }
+                };
+                let glyph = other.glyph.with_fg(Color::black()).with_bg(color);
+                let point = Point(2 * other.pos.0, other.pos.1);
+                slice.set(point, glyph);
+            };
         }
 
         if let Some(rain) = &self.board.rain {
@@ -1108,5 +1125,23 @@ impl State {
                 }
             }
         }
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+#[allow(soft_unstable)]
+#[cfg(test)]
+mod tests {
+    use super::*;
+    extern crate test;
+
+    #[bench]
+    fn bench_state_update(b: &mut test::Bencher) {
+        let mut state = State::new(Some(17));
+        b.iter(|| {
+            state.inputs.push(Input::Char('.'));
+            state.update();
+        });
     }
 }
