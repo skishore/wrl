@@ -3,7 +3,8 @@ use std::f64::consts::TAU;
 
 use crate::static_assert_size;
 use crate::base::{FOV, FOVEndpoint, FOVNode, Glyph, HashMap, Matrix, Point};
-use crate::game::{Board, EID, Entity, Light, Tile};
+use crate::entity::{EID, Entity};
+use crate::game::{Board, Light, Tile};
 use crate::list::{Handle, List};
 use crate::pathing::Status;
 
@@ -63,10 +64,6 @@ impl Vision {
             visibility: Matrix::new(vision_size, -1),
             points_seen: vec![],
         }
-    }
-
-    fn can_see_now(&self, p: Point) -> bool {
-        self.get_visibility_at(p) >= 0
     }
 
     fn get_visibility_at(&self, p: Point) -> i32 {
@@ -157,6 +154,7 @@ pub struct EntityKnowledge {
     pub dir: Point,
     pub glyph: Glyph,
     pub moved: bool,
+    pub rival: bool,
     pub friend: bool,
 }
 
@@ -308,8 +306,9 @@ impl Knowledge {
                 age: Default::default(),
                 pos: Default::default(),
                 dir: Default::default(),
-                moved: Default::default(),
                 glyph: Default::default(),
+                moved: Default::default(),
+                rival: Default::default(),
                 friend: Default::default(),
             })
         });
@@ -320,8 +319,9 @@ impl Knowledge {
         entry.age = if seen { 0 } else { 1 };
         entry.pos = other.pos;
         entry.dir = other.dir;
-        entry.moved = !seen;
         entry.glyph = other.glyph;
+        entry.moved = !seen;
+        entry.rival = !other.player && entity.predator != other.predator;
         entry.friend = friend;
 
         handle

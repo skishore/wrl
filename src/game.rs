@@ -2,21 +2,19 @@ use std::cmp::{max, min};
 use std::collections::VecDeque;
 use std::f64::consts::TAU;
 use std::mem::{replace, swap};
-use std::num::NonZeroU64;
-use std::ops::{Index, IndexMut};
 
 use lazy_static::lazy_static;
 use rand::{Rng, SeedableRng};
 use rand_distr::{Distribution, Normal};
-use slotmap::{DefaultKey, Key, KeyData, SlotMap};
 
 use crate::static_assert_size;
 use crate::base::{Buffer, Color, Glyph, Rect, Slice};
 use crate::base::{HashMap, HashSet, LOS, Matrix, Point, dirs};
 use crate::base::{sample, RNG};
-use crate::knowledge::{Knowledge, Timestamp, Vision, VisionArgs};
+use crate::entity::{EID, Entity, EntityArgs, EntityMap};
+use crate::knowledge::{EntityKnowledge, Knowledge, Timestamp, Vision, VisionArgs};
 use crate::pathing::{AStar, AStarLength, BFS, BFSResult, Status};
-use crate::pathing::DijkstraSearch;
+use crate::pathing::{Dijkstra, DijkstraMap, DijkstraSearch};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -28,10 +26,14 @@ const ASTAR_LIMIT_WANDER: i32 = 1024;
 const BFS_LIMIT_ATTACK: i32 = 8;
 const BFS_LIMIT_WANDER: i32 = 64;
 const EXPLORE_FUZZ: i32 = 64;
+const FLIGHT_MAP_LIMIT: i32 = 1024;
 
 const ASSESS_ANGLE: f64 = TAU / 18.;
 const ASSESS_STEPS: i32 = 4;
 const ASSESS_TURNS: i32 = 16;
+
+//const ATTACK_DAMAGE: i32 = 40;
+const ATTACK_RANGE: i32 = 8;
 
 const MAX_ASSESS: i32 = 32;
 const MAX_HUNGER: i32 = 1024;
@@ -44,7 +46,7 @@ const TURN_TIMES_LIMIT: usize = 64;
 const FOV_RADIUS_NPC: i32 = 12;
 const FOV_RADIUS_PC_: i32 = 21;
 
-const LIGHT: Light = Light::Sun(Point(4, 1));
+const LIGHT: Light = Light::Sun(Point(0, 0));
 const WEATHER: Weather = Weather::None;
 const WORLD_SIZE: i32 = 100;
 
@@ -100,87 +102,6 @@ lazy_static! {
         }
         result
     };
-}
-
-//////////////////////////////////////////////////////////////////////////////
-
-// Entity
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-#[repr(transparent)]
-pub struct EID(NonZeroU64);
-static_assert_size!(Option<EID>, 8);
-
-impl Default for EID {
-    fn default() -> Self {
-        to_eid(DefaultKey::null())
-    }
-}
-
-fn to_key(eid: EID) -> DefaultKey {
-    KeyData::from_ffi(eid.0.get()).into()
-}
-
-fn to_eid(key: DefaultKey) -> EID {
-    EID(NonZeroU64::new(key.data().as_ffi()).unwrap())
-}
-
-#[derive(Default)]
-struct EntityMap {
-    map: SlotMap<DefaultKey, Entity>,
-}
-
-impl EntityMap {
-    fn add(&mut self, args: &EntityArgs, rng: &mut RNG) -> EID {
-        let dir = *sample(&dirs::ALL, rng);
-        let key = self.map.insert_with_key(|x| Entity {
-            eid: to_eid(x),
-            glyph: args.glyph,
-            known: Default::default(),
-            ai: Box::new(AIState::new(rng)),
-            player: args.player,
-            pos: args.pos,
-            dir,
-        });
-        to_eid(key)
-    }
-
-    fn get(&self, eid: EID) -> Option<&Entity> {
-        self.map.get(to_key(eid))
-    }
-
-    fn get_mut(&mut self, eid: EID) -> Option<&mut Entity> {
-        self.map.get_mut(to_key(eid))
-    }
-}
-
-impl Index<EID> for EntityMap {
-    type Output = Entity;
-    fn index(&self, eid: EID) -> &Self::Output {
-        self.get(eid).unwrap()
-    }
-}
-
-impl IndexMut<EID> for EntityMap {
-    fn index_mut(&mut self, eid: EID) -> &mut Self::Output {
-        self.get_mut(eid).unwrap()
-    }
-}
-
-pub struct Entity {
-    pub eid: EID,
-    pub glyph: Glyph,
-    pub known: Box<Knowledge>,
-    pub ai: Box<AIState>,
-    pub player: bool,
-    pub pos: Point,
-    pub dir: Point,
-}
-
-struct EntityArgs {
-    glyph: Glyph,
-    player: bool,
-    pos: Point,
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -515,12 +436,21 @@ struct Step { kind: StepKind, target: Point }
 
 type Hint = (Goal, &'static Tile);
 
-struct FightState {}
+#[derive(Debug)]
+pub struct FightState {
+    age: i32,
+    bias: Point,
+    target: Point,
+    search_turns: i32,
+}
 
-struct FlightState {
+#[derive(Debug)]
+pub struct FlightState {
+    threats: Vec<Point>,
     turns_since_seen: i32,
 }
 
+#[derive(Debug)]
 pub struct AIState {
     goal: Goal,
     plan: Vec<Step>,
@@ -536,7 +466,7 @@ pub struct AIState {
 }
 
 impl AIState {
-    fn new(rng: &mut RNG) -> Self {
+    pub fn new(rng: &mut RNG) -> Self {
         Self {
             goal: Goal::Explore,
             plan: vec![],
@@ -561,25 +491,6 @@ impl AIState {
         if self.turn_times.len() == TURN_TIMES_LIMIT { self.turn_times.pop_back(); }
         self.turn_times.push_front(self.time);
         self.time = time;
-    }
-
-    fn update(&mut self, entity: &Entity, hints: &[Hint]) {
-        self.till_assess = max(0, self.till_assess - 1);
-        self.till_hunger = max(0, self.till_hunger - 1);
-        self.till_thirst = max(0, self.till_thirst - 1);
-
-        let (known, pos) = (&*entity.known, entity.pos);
-        let last_turn_age = known.time - self.time;
-        let mut seen = HashSet::default();
-        for cell in &known.cells {
-            if (self.time - cell.time) >= 0 { break; }
-            for (goal, tile) in hints {
-                if cell.tile == tile && seen.insert(goal) {
-                    self.hints.insert(*goal, cell.point);
-                }
-            }
-        }
-        self.record_turn(known.time);
     }
 }
 
@@ -609,6 +520,40 @@ fn explore(entity: &Entity) -> Option<BFSResult> {
     BFS(pos, done1, BFS_LIMIT_WANDER, check))
 }
 
+fn search_around(entity: &Entity, source: Point, age: i32, bias: Point) -> Option<BFSResult> {
+    let (known, pos) = (&*entity.known, entity.pos);
+    let check = |p: Point| {
+        if p == pos { return Status::Free; }
+        known.get(p).status().unwrap_or(Status::Free)
+    };
+    let done1 = |p: Point| {
+        let cell = known.get(p);
+        if cell.age() < age || cell.blocked() { return false; }
+        dirs::ALL.iter().any(|x| known.get(p + *x).unblocked())
+    };
+    let done0 = |p: Point| {
+        done1(p) && dirs::ALL.iter().all(|x| !known.get(p + *x).blocked())
+    };
+    let unit = AStarLength(dirs::N) / 2;
+    let heuristic = |p: Point| { unit * (pos + bias - p).len_nethack() };
+
+    let path = Dijkstra(source, done0, ASTAR_LIMIT_SEARCH, check, heuristic).or_else(||
+               Dijkstra(source, done1, ASTAR_LIMIT_SEARCH, check, heuristic))?;
+    Some(coerce(source, &path))
+}
+
+fn attack_target(entity: &Entity, target: Point, rng: &mut RNG) -> Action {
+    let (known, source) = (&*entity.known, entity.pos);
+    if source == target { return Action::Idle; }
+
+    let range = ATTACK_RANGE;
+    let valid = |x| has_line_of_sight(x, target, known, range);
+    if !valid(source) {
+        return path_to_target(entity, target, known, range, valid, rng);
+    }
+    Action::Look(target - source)
+}
+
 fn assess_dirs(dirs: &[Point], ai: &mut AIState, rng: &mut RNG) {
     if dirs.is_empty() { return; }
 
@@ -625,6 +570,159 @@ fn assess_dirs(dirs: &[Point], ai: &mut AIState, rng: &mut RNG) {
         for _ in 0..steps {
             ai.plan.push(Step { kind: StepKind::Look, target })
         }
+    }
+}
+
+fn assess_threats(source: Point, ai: &mut AIState, rng: &mut RNG) {
+    let Some(flight) = &ai.flight else { return };
+    if flight.threats.is_empty() { return; }
+
+    let dirs: Vec<_> = flight.threats.iter().map(|x| *x - source).collect();
+    assess_dirs(&dirs, ai, rng);
+}
+
+fn flee_from_threats(entity: &Entity, ai: &mut AIState) -> Option<BFSResult> {
+    let Some(flight) = &ai.flight else { return None };
+    if flight.threats.is_empty() { return None; }
+
+    let (known, pos) = (&*entity.known, entity.pos);
+    let scale = AStarLength(Point(1, 0)) as f64;
+    let check = |p: Point| {
+        if p == pos { return Status::Free; }
+        known.get(p).status().unwrap_or(Status::Blocked)
+    };
+
+    let score = |p: Point, source_distance: i32| {
+        let mut threat = Point::default();
+        let mut threat_distance = std::i32::MAX;
+        for x in &flight.threats {
+            let y = AStarLength(*x - p);
+            if y < threat_distance { (threat, threat_distance) = (*x, y); }
+        }
+        let blocked = {
+            let los = LOS(p, threat);
+            (1..los.len() - 1).any(|i| known.get(los[i]).blocked())
+        };
+        let frontier = dirs::ALL.iter().any(|x| known.get(p + *x).unknown());
+
+        1.2 * (threat_distance as f64) +
+        -1. * (source_distance as f64) +
+        16. * scale * (blocked as i32 as f64) +
+        64. * scale * (frontier as i32 as f64)
+    };
+
+    // Fast path: if we haven't seen any of the neighboring squares, then that
+    // could be a good direction in which to flee. Choose the best one.
+    let steps: Vec<_> = dirs::ALL.iter().filter_map(
+        |x| if known.get(pos + *x).unknown() { Some(*x) } else { None }).collect();
+    if !steps.is_empty() {
+        let mut best_steps = vec![];
+        let mut best_score = std::f64::MIN;
+        for step in &steps {
+            let s = score(pos + *step, AStarLength(*step));
+            if s < best_score { continue; }
+            if s > best_score { best_steps.clear(); }
+            best_steps.push(*step);
+            best_score = s;
+        }
+        assert!(!best_steps.is_empty());
+        let targets: Vec<_> = best_steps.iter().map(|x| pos + *x).collect();
+        return Some(BFSResult { dirs: best_steps, targets });
+    }
+
+    // Slow path: do a large Dijkstra search, then score each point found.
+    let mut map = HashMap::default();
+    map.insert(pos, 0);
+    DijkstraMap(check, FLIGHT_MAP_LIMIT, &mut map);
+
+    let mut best_point = pos;
+    let mut best_score = std::f64::MIN;
+    let mut best_nearby_point = pos;
+    let mut best_nearby_score = std::f64::MIN;
+    for (k, v) in &map {
+        let s = score(*k, *v);
+        if s > best_score {
+            (best_point, best_score) = (*k, s);
+        }
+        if s > best_nearby_score && (*k - pos).len_l1() == 1 {
+            (best_nearby_point, best_nearby_score) = (*k, s);
+        }
+    }
+
+    Some(BFSResult { dirs: vec![best_nearby_point - pos], targets: vec![best_point] })
+}
+
+fn update_ai_state(entity: &Entity, hints: &[Hint], ai: &mut AIState) {
+    ai.till_assess = max(0, ai.till_assess - 1);
+    ai.till_hunger = max(0, ai.till_hunger - 1);
+    ai.till_thirst = max(0, ai.till_thirst - 1);
+
+    let (known, pos) = (&*entity.known, entity.pos);
+    let last_turn_age = known.time - ai.time;
+    let mut seen = HashSet::default();
+    for cell in &known.cells {
+        if (ai.time - cell.time) >= 0 { break; }
+        for (goal, tile) in hints {
+            if cell.tile == tile && seen.insert(goal) {
+                ai.hints.insert(*goal, cell.point);
+            }
+        }
+    }
+    ai.record_turn(known.time);
+
+    // "rival" means that we have a hostile relationship with that entity.
+    // We'll end up with three states - Friendly, Neutral, or Rival - or more.
+    // An entity is a "threat" if its a rival and our combat analysis against
+    // it shows that we'd probably lose. These predicates can be generalized
+    // to all entities.
+    //
+    // The threshold for a rival being a threat may also depend on some other
+    // parameter like "aggressiveness". A maximally-aggressive entity will
+    // stand and fight even in hopeless situations.
+
+    // We're a predator, and we should chase and attack rivals.
+    if entity.predator {
+        let fight = std::mem::take(&mut ai.fight);
+        let limit = ai.age_at_turn(MAX_FOLLOW_TURNS);
+        let mut targets = known.entities.iter().filter(
+            |x| x.rival).collect::<Vec<_>>();
+        if !targets.is_empty() {
+            targets.sort_unstable_by_key(|x| x.age);
+            let EntityKnowledge { age, pos: target, .. } = *targets[0];
+            let reset = age < last_turn_age;
+            if age < limit {
+                let delta = target - pos;
+                let (bias, search_turns) = if !reset && let Some(x) = fight {
+                    (x.bias, x.search_turns + 1)
+                } else {
+                    (delta, 0)
+                };
+                ai.fight = Some(FightState { age, bias, search_turns, target });
+            }
+            if reset { ai.plan.clear(); }
+        }
+        return;
+    }
+
+    // We're prey, and we should treat rivals as threats.
+    let limit = ai.age_at_turn(MAX_FLIGHT_TURNS);
+    let reset = known.entities.iter().any(
+        |x| x.age < last_turn_age && x.rival);
+    let mut threats: Vec<_> = known.entities.iter().filter_map(
+        |x| if x.age < limit && x.rival { Some(x.pos) } else { None }).collect();
+    threats.sort_unstable_by_key(|x| (x.0, x.1));
+
+    if let Some(x) = &mut ai.flight {
+        if threats.is_empty() || x.turns_since_seen >= MAX_FLIGHT_TURNS {
+            ai.flight = None;
+        } else {
+            if x.threats != threats { ai.plan.clear(); }
+            x.turns_since_seen = if reset { 0 } else { x.turns_since_seen + 1 };
+            x.threats = threats;
+        }
+    } else if !threats.is_empty() {
+        ai.flight = Some(FlightState { threats, turns_since_seen: 0 });
+        ai.plan.clear();
     }
 }
 
@@ -721,7 +819,7 @@ fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
         (Goal::Drink, Tile::get('~')),
         (Goal::Eat, Tile::get('%')),
     ];
-    ai.update(entity, &hints);
+    update_ai_state(entity, &hints, ai);
     if let Some(x) = plan_cached(entity, &hints, ai, rng) { return x; }
 
     ai.plan.clear();
@@ -737,6 +835,21 @@ fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
 
     let mut result = {
         let mut result = BFSResult::default();
+
+        if let Some(x) = flee_from_threats(entity, ai) {
+            (ai.goal, result) = (Goal::Flee, x);
+        } else if let Some(x) = &mut ai.fight {
+            if x.age == 0 {
+                ai.goal = Goal::Chase;
+                return attack_target(entity, x.target, rng);
+            }
+            let search_nearby = x.search_turns > x.bias.len_l1();
+            let source = if search_nearby { entity.pos } else { x.target };
+            if let Some(y) = search_around(entity, source, x.age, x.bias) {
+                (ai.goal, result) = (Goal::Chase, y);
+            }
+        }
+
         let mut add_candidates = |ai: &mut AIState, goal: Goal| {
             if ai.goal != Goal::Explore { return; }
 
@@ -793,13 +906,54 @@ fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
             Goal::Drink => ai.plan.push(Step { kind: StepKind::Drink, target }),
             Goal::Eat => ai.plan.push(Step { kind: StepKind::Eat, target }),
             Goal::Explore => {}
-            Goal::Flee => {}
+            Goal::Flee => assess_threats(target, ai, rng),
         }
         ai.plan.reverse();
         if let Some(x) = plan_cached(entity, &hints, ai, rng) { return x; }
         ai.plan.clear();
     }
     fallback(result, rng)
+}
+
+fn has_line_of_sight(source: Point, target: Point, known: &Knowledge, range: i32) -> bool {
+    if (source - target).len_nethack() > range { return false; }
+    if !known.get(target).visible() { return false; }
+    let los = LOS(source, target);
+    let last = los.len() - 1;
+    los.iter().enumerate().all(|(i, p)| {
+        if i == 0 || i == last { return true; }
+        known.get(*p).status() == Some(Status::Free)
+    })
+}
+
+fn path_to_target<F: Fn(Point) -> bool>(
+        entity: &Entity, target: Point, known: &Knowledge,
+        range: i32, valid: F, rng: &mut RNG) -> Action {
+    let check = |p: Point| {
+        if p == entity.pos { return Status::Free; }
+        known.get(p).status().unwrap_or(Status::Free)
+    };
+    let source = entity.pos;
+    let result = BFS(source, &valid, BFS_LIMIT_ATTACK, check);
+    let mut dirs = result.map(|x| x.dirs).unwrap_or_default();
+    if valid(source) { dirs.push(Point::default()); }
+
+    let step = |dir: Point| {
+        let look = target - source - dir;
+        Action::Move(Move { step: dir, look })
+    };
+
+    if !dirs.is_empty() {
+        let scores: Vec<_> = dirs.iter().map(
+            |x| ((*x + source - target).len_nethack() - range).abs()).collect();
+        let best = *scores.iter().reduce(|acc, x| min(acc, x)).unwrap();
+        let opts: Vec<_> = dirs.iter().enumerate().filter(|(i, _)| scores[*i] == best).collect();
+        return step(*sample(&opts, rng).1);
+    }
+
+    let path = AStar(source, target, ASTAR_LIMIT_ATTACK, check);
+    let dir = path.and_then(|x| if x.is_empty() { None } else { Some(x[0] - source) });
+    step(dir.unwrap_or_else(|| *sample(&dirs::ALL, rng)))
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -967,7 +1121,7 @@ impl State {
         }
         let input = Action::WaitForInput;
         let glyph = Glyph::wdfg('@', 0x222);
-        let args = EntityArgs { glyph, player: true, pos };
+        let args = EntityArgs { glyph, player: true, predator: false, pos };
         let player = board.add_entity(&args, &mut rng);
 
         let die = |n: i32, rng: &mut RNG| rng.gen::<i32>().rem_euclid(n);
@@ -978,10 +1132,11 @@ impl State {
             }
             None
         };
-        for _ in 0..20 {
+        for i in 0..20 {
             if let Some(x) = pos(&board, &mut rng) {
-                let glyph = Glyph::wdfg('P', 0x222);
-                let args = EntityArgs { glyph, player: false, pos: x };
+                let predator = i % 10 == 0;
+                let glyph = Glyph::wdfg(if predator { 'R' } else { 'P' }, 0x222);
+                let args = EntityArgs { glyph, player: false, predator, pos: x };
                 board.add_entity(&args, &mut rng);
             }
         }

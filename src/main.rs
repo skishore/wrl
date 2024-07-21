@@ -4,6 +4,7 @@
 mod base;
 mod game;
 mod list;
+mod entity;
 mod knowledge;
 mod pathing;
 
