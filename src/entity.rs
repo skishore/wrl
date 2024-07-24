@@ -50,6 +50,9 @@ impl EntityMap {
             ai: Box::new(AIState::new(rng)),
             player: args.player,
             predator: args.predator,
+            move_timer: 0,
+            turn_timer: 0,
+            speed: 0.1,
             pos: args.pos,
             dir,
         });
@@ -96,6 +99,9 @@ pub struct Entity {
     pub ai: Box<AIState>,
     pub player: bool,
     pub predator: bool,
+    pub move_timer: i32,
+    pub turn_timer: i32,
+    pub speed: f64,
     pub pos: Point,
     pub dir: Point,
 }

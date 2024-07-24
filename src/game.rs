@@ -43,6 +43,10 @@ const MAX_FLIGHT_TURNS: i32 = 64;
 const MAX_FOLLOW_TURNS: i32 = 64;
 const TURN_TIMES_LIMIT: usize = 64;
 
+const MOVE_TIMER: i32 = 960;
+const TURN_TIMER: i32 = 120;
+const WANDER_TURNS: f64 = 2.;
+
 const FOV_RADIUS_NPC: i32 = 12;
 const FOV_RADIUS_PC_: i32 = 21;
 
@@ -223,6 +227,8 @@ impl Board {
     }
 
     fn advance_entity(&mut self) {
+        let eid = self.get_active_entity();
+        charge(&mut self.entities[eid]);
         self.active_entity_index += 1;
         if self.active_entity_index == self.entity_order.len() {
             self.active_entity_index = 0;
@@ -808,8 +814,11 @@ fn plan_cached(entity: &Entity, hints: &[Hint],
                     target = next.target;
                 }
             }
+            let ready = move_ready(entity);
+            let quick = ready && (ai.goal == Goal::Flee || ai.goal == Goal::Chase);
+            let turns = WANDER_TURNS * if quick { 0.5 } else { 1. };
             let look = if target == pos { entity.dir } else { target - pos };
-            Some(Action::Move(Move { look, step: dir }))
+            Some(Action::Move(Move { look, step: dir, turns }))
         }
     }
 }
@@ -882,7 +891,7 @@ fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
     let fallback = |result: BFSResult, rng: &mut RNG| {
         let dirs = &result.dirs;
         let dirs = if dirs.is_empty() { dirs::ALL.as_slice() } else { dirs };
-        step(*sample(dirs, rng))
+        wander(*sample(dirs, rng))
     };
 
     if result.targets.is_empty() { return fallback(result, rng); }
@@ -940,7 +949,7 @@ fn path_to_target<F: Fn(Point) -> bool>(
 
     let step = |dir: Point| {
         let look = target - source - dir;
-        Action::Move(Move { step: dir, look })
+        Action::Move(Move { step: dir, look, turns: 1. })
     };
 
     if !dirs.is_empty() {
@@ -960,7 +969,7 @@ fn path_to_target<F: Fn(Point) -> bool>(
 
 // Action
 
-struct Move { look: Point, step: Point }
+struct Move { look: Point, step: Point, turns: f64 }
 
 enum Action {
     Idle,
@@ -971,15 +980,38 @@ enum Action {
 
 struct ActionResult {
     success: bool,
+    moves: f64,
+    turns: f64,
 }
 
 impl ActionResult {
-    fn failure() -> Self { Self { success: false } }
-    fn success() -> Self { Self { success: true } }
+    fn failure() -> Self { Self { success: false, moves: 0., turns: 1. } }
+    fn success() -> Self { Self::success_turns(1.) }
+    fn success_moves(moves: f64) -> Self { Self { success: true,  moves, turns: 1. } }
+    fn success_turns(turns: f64) -> Self { Self { success: true,  moves: 0., turns } }
 }
 
-fn step(dir: Point) -> Action {
-    Action::Move(Move { look: dir, step: dir })
+fn move_ready(entity: &Entity) -> bool { entity.move_timer <= 0 }
+
+fn turn_ready(entity: &Entity) -> bool { entity.turn_timer <= 0 }
+
+fn charge(entity: &mut Entity) {
+    let charge = (TURN_TIMER as f64 * entity.speed).round() as i32;
+    if entity.move_timer > 0 { entity.move_timer -= charge; }
+    if entity.turn_timer > 0 { entity.turn_timer -= charge; }
+}
+
+fn drain(entity: &mut Entity, result: &ActionResult) {
+    entity.move_timer += (MOVE_TIMER as f64 * result.moves).round() as i32;
+    entity.turn_timer += (TURN_TIMER as f64 * result.turns).round() as i32;
+}
+
+fn step(dir: Point, turns: f64) -> Action {
+    Action::Move(Move { look: dir, step: dir, turns })
+}
+
+fn wander(dir: Point) -> Action {
+    step(dir, WANDER_TURNS)
 }
 
 fn plan(state: &mut State, eid: EID) -> Action {
@@ -1006,11 +1038,16 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             state.board.entities[eid].dir = dir;
             ActionResult::success()
         }
-        Action::Move(Move { look, step }) => {
+        Action::Move(Move { look, step, turns }) => {
             let entity = &mut state.board.entities[eid];
-            if look != Point::default() { entity.dir = look; }
-            if step == Point::default() { return ActionResult::success(); }
+            if look != Point::default() {
+                entity.dir = look;
+            }
+            if step == Point::default() {
+                return ActionResult::success_turns(turns);
+            }
 
+            let factor = step.len_l2();
             let target = entity.pos + step;
             match state.board.get_status(target) {
                 Status::Blocked => {
@@ -1023,7 +1060,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 }
                 Status::Free => {
                     state.board.move_entity(eid, target);
-                    ActionResult::success()
+                    ActionResult::success_turns(factor * turns)
                 }
             }
         }
@@ -1051,7 +1088,7 @@ fn get_direction(ch: char) -> Option<Point> {
 
 fn process_input(state: &mut State, input: Input) {
     let dir = if let Input::Char(x) = input { get_direction(x) } else { None };
-    if let Some(x) = dir { state.input = step(x); }
+    if let Some(x) = dir { state.input = step(x, 1.); }
 }
 
 fn update_state(state: &mut State) {
@@ -1073,8 +1110,15 @@ fn update_state(state: &mut State) {
 
     loop {
         let eid = state.board.get_active_entity();
-        let player = eid == state.player;
-        if player && needs_input(state) { break; }
+        let entity = &state.board.entities[eid];
+        let player = entity.player;
+
+        if !turn_ready(entity) {
+            state.board.advance_entity();
+            continue;
+        } else if player && needs_input(state) {
+            break;
+        }
 
         state.board.update_known(eid);
 
@@ -1083,7 +1127,7 @@ fn update_state(state: &mut State) {
         let result = act(state, eid, action);
         if player && !result.success { break; }
 
-        state.board.advance_entity();
+        if let Some(x) = state.board.entities.get_mut(eid) { drain(x, &result); }
     }
 
     if update {
