@@ -1206,6 +1206,18 @@ fn get_direction(ch: char) -> Option<Point> {
 }
 
 fn process_input(state: &mut State, input: Input) {
+    if input == Input::Char('q') || input == Input::Char('w') {
+        let board = &state.board;
+        let i = board.entity_order.iter().enumerate().find_map(|x| {
+            let okay = Some(board.entities[*x.1].eid) == state.pov;
+            if okay { Some(x.0) } else { None }
+        }).unwrap_or(0);
+        let l = board.entity_order.len();
+        let j = (i + if input == Input::Char('q') { l - 1 } else { 1 }) % l;
+        state.pov = if j == 0 { None } else { Some(board.entity_order[j]) };
+        return;
+    }
+
     let dir = if let Input::Char(x) = input { get_direction(x) } else { None };
     if let Some(x) = dir { state.input = step(x, 1.); }
 }
@@ -1257,7 +1269,9 @@ fn update_state(state: &mut State) {
 
     if update {
         state.board.update_known(state.player);
-        state.board.update_known(state.board.entity_order[1]);
+        if let Some(x) = state.pov && state.board.entity_order.contains(&x) {
+            state.board.update_known(x);
+        }
     }
 }
 
@@ -1271,6 +1285,7 @@ pub struct State {
     input: Action,
     inputs: Vec<Input>,
     player: EID,
+    pov: Option<EID>,
     rng: RNG,
     // Update fields
     ai: Option<Box<AIState>>,
@@ -1313,7 +1328,7 @@ impl State {
         board.update_known(player);
 
         let ai = Some(Box::new(AIState::new(&mut rng)));
-        Self { board, frame: 0, input, inputs: vec![], player, rng, ai }
+        Self { board, frame: 0, input, inputs: vec![], player, pov: None, rng, ai }
     }
 
     fn get_player(&self) -> &Entity { &self.board.entities[self.player] }
@@ -1337,9 +1352,9 @@ impl State {
         let frame = self.board.get_frame();
         let slice = &mut Slice::new(buffer, bounds);
 
-        //let entity = self.get_player();
+        let entity = self.pov.and_then(
+            |x| self.board.get_entity(x)).unwrap_or(self.get_player());
         //let offset = entity.pos - Point(UI_MAP_SIZE_X / 2, UI_MAP_SIZE_Y / 2);
-        let entity = &self.board.entities[self.board.entity_order[1]];
         let offset = Point(0, 0);
 
         self._render_map(entity, frame, offset, slice);
