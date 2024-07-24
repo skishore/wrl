@@ -11,6 +11,7 @@ use crate::static_assert_size;
 use crate::base::{Buffer, Color, Glyph, Rect, Slice};
 use crate::base::{HashMap, HashSet, LOS, Matrix, Point, dirs};
 use crate::base::{sample, RNG};
+use crate::effect::{Effect, Event, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
 use crate::knowledge::{EntityKnowledge, Knowledge, Timestamp, Vision, VisionArgs};
 use crate::pathing::{AStar, AStarLength, BFS, BFSResult, Status};
@@ -45,6 +46,7 @@ const TURN_TIMES_LIMIT: usize = 64;
 
 const MOVE_TIMER: i32 = 960;
 const TURN_TIMER: i32 = 120;
+const SLOWED_TURNS: f64 = 2.;
 const WANDER_TURNS: f64 = 2.;
 
 const FOV_RADIUS_NPC: i32 = 12;
@@ -53,6 +55,9 @@ const FOV_RADIUS_PC_: i32 = 21;
 const LIGHT: Light = Light::Sun(Point(0, 0));
 const WEATHER: Weather = Weather::None;
 const WORLD_SIZE: i32 = 100;
+
+const UI_DAMAGE_FLASH: i32 = 6;
+const UI_DAMAGE_TICKS: i32 = 6;
 
 //const UI_MAP_SIZE_X: i32 = 2 * FOV_RADIUS_PC_ + 1;
 //const UI_MAP_SIZE_Y: i32 = 2 * FOV_RADIUS_PC_ + 1;
@@ -143,6 +148,8 @@ pub struct Board {
     entity_order: Vec<EID>,
     entities: EntityMap,
     map: Matrix<Cell>,
+    // Animation
+    _effect: Effect,
     // Knowledge state
     known: Option<Box<Knowledge>>,
     npc_vision: Vision,
@@ -178,6 +185,8 @@ impl Board {
             entity_order: vec![],
             entities: EntityMap::default(),
             map: Matrix::new(size, cell),
+            // Animation
+            _effect: Effect::default(),
             // Knowledge state
             known: Some(Box::default()),
             npc_vision: Vision::new(FOV_RADIUS_NPC),
@@ -191,9 +200,44 @@ impl Board {
         result
     }
 
+    // Animation
+
+    fn add_effect(&mut self, effect: Effect, rng: &mut RNG) {
+        let mut existing = Effect::default();
+        std::mem::swap(&mut self._effect, &mut existing);
+        self._effect = existing.and(effect);
+        self._execute_effect_callbacks(rng);
+    }
+
+    fn advance_effect(&mut self, rng: &mut RNG) -> bool {
+        if self._effect.frames.is_empty() {
+            assert!(self._effect.events.is_empty());
+            return false;
+        }
+        self._effect.frames.remove(0);
+        self._effect.events.iter_mut().for_each(|x| x.update_frame(|y| y - 1));
+        self._execute_effect_callbacks(rng);
+        true
+    }
+
+    fn _execute_effect_callbacks(&mut self, rng: &mut RNG) {
+        while self._execute_one_effect_callback(rng) {}
+    }
+
+    fn _execute_one_effect_callback(&mut self, rng: &mut RNG) -> bool {
+        if self._effect.events.is_empty() { return false; }
+        let event = &self._effect.events[0];
+        if !self._effect.frames.is_empty() && event.frame() > 0 { return false; }
+        match self._effect.events.remove(0) {
+            Event::Callback { callback, .. } => callback(self, rng),
+            Event::Other { .. } => (),
+        }
+        true
+    }
+
     // Getters
 
-    fn get_active_entity(&self) -> EID {
+    pub fn get_active_entity(&self) -> EID {
         self.entity_order[self.active_entity_index]
     }
 
@@ -201,17 +245,19 @@ impl Board {
 
     pub fn get_entity(&self, eid: EID) -> Option<&Entity> { self.entities.get(eid) }
 
+    pub fn get_frame(&self) -> Option<&Frame> { self._effect.frames.iter().next() }
+
     pub fn get_light(&self) -> &Light { &self.light }
 
-    fn get_size(&self) -> Point { self.map.size }
+    pub fn get_size(&self) -> Point { self.map.size }
 
-    fn get_status(&self, p: Point) -> Status {
+    pub fn get_status(&self, p: Point) -> Status {
         let Cell { eid, tile, .. } = self.get_cell(p);
         if eid.is_some() { return Status::Occupied; }
         if tile.blocked() { Status::Blocked } else { Status::Free }
     }
 
-    fn get_tile(&self, p: Point) -> &'static Tile { self.get_cell(p).tile }
+    pub fn get_tile(&self, p: Point) -> &'static Tile { self.get_cell(p).tile }
 
     // Setters
 
@@ -259,6 +305,8 @@ impl Board {
         self.update_shadow(point, new_shadow - old_shadow);
     }
 
+    // Knowledge
+
     fn update_known(&mut self, eid: EID) {
         let mut known = self.known.take().unwrap_or_default();
         swap(&mut known, &mut self.entities[eid].known);
@@ -274,6 +322,20 @@ impl Board {
         swap(&mut known, &mut self.entities[eid].known);
         self.known = Some(known);
     }
+
+    fn update_known_entity(&mut self, eid: EID, oid: EID) {
+        let mut known = self.known.take().unwrap_or_default();
+        swap(&mut known, &mut self.entities[eid].known);
+
+        let me = &self.entities[eid];
+        let other = &self.entities[oid];
+        known.update_entity(me, other, self, false);
+
+        swap(&mut known, &mut self.entities[eid].known);
+        self.known = Some(known);
+    }
+
+    // Environmental effects
 
     fn update_env(&mut self, frame: usize, pos: Point, rng: &mut RNG) {
         let Some(rain) = &mut self.rain else { return; };
@@ -556,8 +618,10 @@ fn attack_target(entity: &Entity, target: Point, rng: &mut RNG) -> Action {
     let valid = |x| has_line_of_sight(x, target, known, range);
     if !valid(source) {
         return path_to_target(entity, target, known, range, valid, rng);
+    } else if !move_ready(entity) {
+        return Action::Look(target - source);
     }
-    Action::Look(target - source)
+    Action::Attack(target)
 }
 
 fn assess_dirs(dirs: &[Point], ai: &mut AIState, rng: &mut RNG) {
@@ -814,9 +878,11 @@ fn plan_cached(entity: &Entity, hints: &[Hint],
                     target = next.target;
                 }
             }
-            let ready = move_ready(entity);
-            let quick = ready && (ai.goal == Goal::Flee || ai.goal == Goal::Chase);
-            let turns = WANDER_TURNS * if quick { 0.5 } else { 1. };
+            let turns = (||{
+                let running = ai.goal == Goal::Flee || ai.goal == Goal::Chase;
+                if !running { return WANDER_TURNS; }
+                if !move_ready(entity) { SLOWED_TURNS } else { 1. }
+            })();
             let look = if target == pos { entity.dir } else { target - pos };
             Some(Action::Move(Move { look, step: dir, turns }))
         }
@@ -973,9 +1039,10 @@ struct Move { look: Point, step: Point, turns: f64 }
 
 enum Action {
     Idle,
+    WaitForInput,
     Look(Point),
     Move(Move),
-    WaitForInput,
+    Attack(Point),
 }
 
 struct ActionResult {
@@ -1064,7 +1131,59 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 }
             }
         }
+        Action::Attack(target) => {
+            let entity = &state.board.entities[eid];
+            let (known, source) = (&entity.known, entity.pos);
+            if !has_line_of_sight(source, target, known, ATTACK_RANGE) {
+                return ActionResult::failure();
+            }
+
+            let oid = state.board.get_cell(target).eid;
+            let cb = move |board: &mut Board, rng: &mut RNG| {
+                let Some(oid) = oid else { return; };
+                let cb = move |board: &mut Board, _: &mut RNG| {
+                    board.update_known_entity(oid, eid);
+                };
+                board.add_effect(apply_damage(board, target, Box::new(cb)), rng);
+            };
+
+            let rng = &mut state.rng;
+            let effect = effect::HeadbuttEffect(&state.board, rng, source, target);
+            state.add_effect(apply_effect(effect, FT::Hit, Box::new(cb)));
+            ActionResult::success_moves(1.)
+        }
     }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// Animation
+
+type CB = Box<dyn Fn(&mut Board, &mut RNG)>;
+
+fn apply_damage(board: &Board, target: Point, callback: CB) -> Effect {
+    let eid = board.get_cell(target).eid;
+    let Some(eid) = eid else { return Effect::default(); };
+
+    let glyph = board.entities[eid].glyph;
+    let flash = glyph.with_fg(Color::black()).with_bg(0x400);
+    let particle = effect::Particle { glyph: flash, point: target };
+    let mut effect = Effect::serial(vec![
+        Effect::constant(particle, UI_DAMAGE_FLASH),
+        Effect::pause(UI_DAMAGE_TICKS),
+    ]);
+    let frame = effect.frames.len() as i32;
+    effect.add_event(Event::Callback { frame, callback });
+    effect
+}
+
+fn apply_effect(mut effect: Effect, what: FT, callback: CB) -> Effect {
+    let frame = effect.events.iter().find_map(
+        |x| if x.what() == Some(what) { Some(x.frame()) } else { None });
+    if let Some(frame) = frame {
+        effect.add_event(Event::Callback { frame, callback });
+    }
+    effect
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -1096,9 +1215,15 @@ fn update_state(state: &mut State) {
     let pos = state.get_player().pos;
     state.board.update_env(state.frame, pos, &mut state.rng);
 
+    if state.board.advance_effect(&mut state.rng) {
+        state.board.update_known(state.player);
+        return;
+    }
+
     let needs_input = |state: &State| {
         if !matches!(state.input, Action::WaitForInput) { return false; }
-        state.board.get_active_entity() == state.player
+        if state.board.get_active_entity() != state.player { return false; }
+        state.board.get_frame().is_none()
     };
 
     while !state.inputs.is_empty() && needs_input(state) {
@@ -1108,7 +1233,7 @@ fn update_state(state: &mut State) {
 
     let mut update = false;
 
-    loop {
+    while state.board.get_frame().is_none() {
         let eid = state.board.get_active_entity();
         let entity = &state.board.entities[eid];
         let player = entity.player;
@@ -1193,6 +1318,8 @@ impl State {
 
     fn get_player(&self) -> &Entity { &self.board.entities[self.player] }
 
+    pub fn add_effect(&mut self, x: Effect) { self.board.add_effect(x, &mut self.rng) }
+
     pub fn add_input(&mut self, input: Input) { self.inputs.push(input) }
 
     pub fn update(&mut self) { update_state(self); }
@@ -1206,52 +1333,19 @@ impl State {
 
         let size = Point(2 * UI_MAP_SIZE_X, UI_MAP_SIZE_Y);
         let bounds = Rect { root: Point::default(), size };
-        let mut slice = Slice::new(buffer, bounds);
+
+        let frame = self.board.get_frame();
+        let slice = &mut Slice::new(buffer, bounds);
 
         //let entity = self.get_player();
         //let offset = entity.pos - Point(UI_MAP_SIZE_X / 2, UI_MAP_SIZE_Y / 2);
         let entity = &self.board.entities[self.board.entity_order[1]];
         let offset = Point(0, 0);
-        let unseen = Glyph::wide(' ');
+
+        self._render_map(entity, frame, offset, slice);
         let known = &*entity.known;
 
-        let lookup = |point: Point| -> Glyph {
-            let cell = known.get(point);
-            let Some(tile) = cell.tile() else { return unseen; };
-            let glyph = cell.entity().map(|x| x.glyph).unwrap_or(tile.glyph);
-            if !cell.visible() { return glyph.with_fg(0x011) }
-            if cell.shade() { glyph.with_fg(Color::gray()) } else { glyph }
-        };
-
-        slice.fill(Glyph::wide(' '));
-        for y in 0..UI_MAP_SIZE_Y {
-            for x in 0..UI_MAP_SIZE_X {
-                let glyph = lookup(Point(x, y) + offset);
-                slice.set(Point(2 * x, y), glyph);
-            }
-        }
-
-        let length = 3 as usize;
-        let mut arrows = vec![];
-        for other in &entity.known.entities {
-            if other.friend || other.age > 0 { continue; }
-
-            let (pos, dir) = (other.pos, other.dir);
-            let ch = Glyph::ray(dir);
-            let norm = length as f64 / dir.len_l2();
-            let diff = Point((dir.0 as f64 * norm) as i32,
-                             (dir.1 as f64 * norm) as i32);
-            arrows.push((ch, LOS(pos, pos + diff)));
-        }
-        for (ch, arrow) in &arrows {
-            let index = (self.frame / 2) % (8 * length);
-            if let Some(x) = arrow.get(index + 1) {
-                let point = Point(2 * (x.0 - offset.0), x.1 - offset.1);
-                slice.set(point, Glyph::wide(*ch));
-            }
-        }
-
-        if entity.eid != self.player {
+        if entity.eid != self.player && frame.is_none() {
             for step in &entity.ai.plan {
                 if step.kind == StepKind::Look { continue; }
                 let Point(x, y) = step.target - offset;
@@ -1271,7 +1365,7 @@ impl State {
                 let point = Point(2 * other.pos.0, other.pos.1);
                 slice.set(point, other.glyph);
             }
-            for other in &entity.known.entities {
+            for other in &known.entities {
                 let color = if other.age == 0 { 0x040 } else {
                     if other.moved { 0x400 } else { 0x440 }
                 };
@@ -1325,6 +1419,59 @@ impl State {
             }
         }
     }
+
+    fn _render_map(&self, entity: &Entity, frame: Option<&Frame>,
+                  offset: Point, slice: &mut Slice) {
+        let (known, player) = (&*entity.known, entity.player);
+        let unseen = Glyph::wide(' ');
+
+        let lookup = |point: Point| -> Glyph {
+            let cell = known.get(point);
+            let Some(tile) = cell.tile() else { return unseen; };
+
+            let glyph = cell.entity().map(|x| x.glyph).unwrap_or(tile.glyph);
+            if !cell.visible() { return glyph.with_fg(0x011); }
+
+            if cell.shade() { glyph.with_fg(Color::gray()) } else { glyph }
+        };
+
+        slice.fill(Glyph::wide(' '));
+        for y in 0..UI_MAP_SIZE_Y {
+            for x in 0..UI_MAP_SIZE_X {
+                let glyph = lookup(Point(x, y) + offset);
+                slice.set(Point(2 * x, y), glyph);
+            }
+        }
+
+        let length = 3 as usize;
+        let mut arrows = vec![];
+        for other in &known.entities {
+            if other.friend || other.age > 0 { continue; }
+
+            let (pos, dir) = (other.pos, other.dir);
+            let ch = Glyph::ray(dir);
+            let norm = length as f64 / dir.len_l2();
+            let diff = Point((dir.0 as f64 * norm) as i32,
+                             (dir.1 as f64 * norm) as i32);
+            arrows.push((ch, LOS(pos, pos + diff)));
+        }
+
+        if let Some(frame) = frame {
+            for effect::Particle { point, glyph } in frame {
+                if player && !known.get(*point).visible() { continue; }
+                let Point(x, y) = *point - offset;
+                slice.set(Point(2 * x, y), *glyph);
+            }
+        }
+
+        for (ch, arrow) in &arrows {
+            let index = (self.frame / 2) % (8 * length);
+            if let Some(x) = arrow.get(index + 1) {
+                let point = Point(2 * (x.0 - offset.0), x.1 - offset.1);
+                slice.set(point, Glyph::wide(*ch));
+            }
+        }
+    }
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -1341,6 +1488,7 @@ mod tests {
         b.iter(|| {
             state.inputs.push(Input::Char('.'));
             state.update();
+            while state.board.get_frame().is_some() { state.update(); }
         });
     }
 }
