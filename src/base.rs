@@ -168,8 +168,11 @@ impl Point {
         x * x + y * y
     }
 
-    pub fn scale(&self, scale: i32) -> Point {
-        Point(self.0 * scale, self.1 * scale)
+    pub fn normalize(&self, length: f64) -> Point {
+        let factor = length / self.len_l2();
+        let x = (self.0 as f64 * factor).round() as i32;
+        let y = (self.1 as f64 * factor).round() as i32;
+        Point(x, y)
     }
 }
 

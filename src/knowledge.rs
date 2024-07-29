@@ -12,6 +12,8 @@ use crate::pathing::Status;
 
 // Constants
 
+const TURN_AGE: i32 = 2;
+
 const MAX_ENTITY_MEMORY: usize = 64;
 const MAX_TILE_MEMORY: usize = 4096;
 
@@ -269,7 +271,7 @@ impl Knowledge {
 
             let handle = (|| {
                 let other = board.get_entity(eid?)?;
-                Some(self.update_entity(me, other, board, true))
+                Some(self.update_entity(me, other, board, /*seen=*/true))
             })();
 
             let mut prev_handle = None;
@@ -316,7 +318,11 @@ impl Knowledge {
         let entry = &mut self.entities[handle];
         let friend = other.eid == entity.eid;
 
-        entry.age = if seen { 0 } else { 1 };
+        // It seems strange that we would assign a future age to an entity
+        // that when we learn about without seeing it. The reason we do so is
+        // because that update happens off-turn, so we must record it with an
+        // age between our previous and next turns'.
+        entry.age = if seen { 0 } else { -1 };
         entry.pos = other.pos;
         entry.dir = other.dir;
         entry.glyph = other.glyph;
@@ -330,8 +336,8 @@ impl Knowledge {
     // Private helpers
 
     fn age_out(&mut self) {
-        for x in &mut self.entities { x.age += 1; }
-        self.time.0 += 1;
+        for x in &mut self.entities { x.age += TURN_AGE; }
+        self.time.0 += TURN_AGE as u32;
     }
 
     fn forget(&mut self, player: bool) {

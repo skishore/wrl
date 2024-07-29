@@ -27,11 +27,12 @@ const ASTAR_LIMIT_WANDER: i32 = 1024;
 const BFS_LIMIT_ATTACK: i32 = 8;
 const BFS_LIMIT_WANDER: i32 = 64;
 const EXPLORE_FUZZ: i32 = 64;
-const FLIGHT_MAP_LIMIT: i32 = 1024;
+const FLIGHT_MAP_LIMIT: i32 = 256;
 
 const ASSESS_ANGLE: f64 = TAU / 18.;
 const ASSESS_STEPS: i32 = 4;
-const ASSESS_TURNS: i32 = 16;
+const ASSESS_TURNS_EXPLORE: i32 = 16;
+const ASSESS_TURNS_FLIGHT: i32 = 4;
 
 //const ATTACK_DAMAGE: i32 = 40;
 const ATTACK_RANGE: i32 = 8;
@@ -40,7 +41,9 @@ const MAX_ASSESS: i32 = 32;
 const MAX_HUNGER: i32 = 1024;
 const MAX_THIRST: i32 = 256;
 
+const MIN_FLIGHT_TURNS: i32 = 16;
 const MAX_FLIGHT_TURNS: i32 = 64;
+const MIN_FOLLOW_TURNS: i32 = 32;
 const MAX_FOLLOW_TURNS: i32 = 64;
 const TURN_TIMES_LIMIT: usize = 64;
 
@@ -52,7 +55,7 @@ const WANDER_TURNS: f64 = 2.;
 const FOV_RADIUS_NPC: i32 = 12;
 const FOV_RADIUS_PC_: i32 = 21;
 
-const LIGHT: Light = Light::Sun(Point(0, 0));
+const LIGHT: Light = Light::Sun(Point(4, 1));
 const WEATHER: Weather = Weather::None;
 const WORLD_SIZE: i32 = 100;
 
@@ -329,7 +332,7 @@ impl Board {
 
         let me = &self.entities[eid];
         let other = &self.entities[oid];
-        known.update_entity(me, other, self, false);
+        known.update_entity(me, other, self, /*seen=*/false);
 
         swap(&mut known, &mut self.entities[eid].known);
         self.known = Some(known);
@@ -504,7 +507,7 @@ struct Step { kind: StepKind, target: Point }
 
 type Hint = (Goal, &'static Tile);
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct FightState {
     age: i32,
     bias: Point,
@@ -512,13 +515,15 @@ pub struct FightState {
     search_turns: i32,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct FlightState {
+    done: bool,
     threats: Vec<Point>,
-    turns_since_seen: i32,
+    since_seen: i32,
+    till_assess: i32,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct AIState {
     goal: Goal,
     plan: Vec<Step>,
@@ -624,12 +629,12 @@ fn attack_target(entity: &Entity, target: Point, rng: &mut RNG) -> Action {
     Action::Attack(target)
 }
 
-fn assess_dirs(dirs: &[Point], ai: &mut AIState, rng: &mut RNG) {
+fn assess_dirs(dirs: &[Point], turns: i32, ai: &mut AIState, rng: &mut RNG) {
     if dirs.is_empty() { return; }
 
     for i in 0..ASSESS_STEPS {
         let scale = 1000;
-        let steps = rng.gen::<i32>().rem_euclid(ASSESS_TURNS);
+        let steps = rng.gen::<i32>().rem_euclid(turns) + 1;
         let angle = Normal::new(0., ASSESS_ANGLE).unwrap().sample(rng);
         let (sin, cos) = (angle.sin(), angle.cos());
 
@@ -643,17 +648,22 @@ fn assess_dirs(dirs: &[Point], ai: &mut AIState, rng: &mut RNG) {
     }
 }
 
-fn assess_threats(source: Point, ai: &mut AIState, rng: &mut RNG) {
-    let Some(flight) = &ai.flight else { return };
-    if flight.threats.is_empty() { return; }
+fn assess_nearby(entity: &Entity, ai: &mut AIState, rng: &mut RNG) {
+    let mut base = |ai: &mut AIState| {
+        assess_dirs(&[entity.dir], ASSESS_TURNS_EXPLORE, ai, rng);
+    };
 
-    let dirs: Vec<_> = flight.threats.iter().map(|x| *x - source).collect();
-    assess_dirs(&dirs, ai, rng);
+    let Some(flight) = &ai.flight else { return base(ai) };
+    if flight.done || flight.threats.is_empty() { return base(ai); }
+
+    let dirs: Vec<_> = flight.threats.iter().map(|x| *x - entity.pos).collect();
+    assess_dirs(&dirs, ASSESS_TURNS_FLIGHT, ai, rng);
 }
 
 fn flee_from_threats(entity: &Entity, ai: &mut AIState) -> Option<BFSResult> {
     let Some(flight) = &ai.flight else { return None };
-    if flight.threats.is_empty() { return None; }
+    if flight.done || flight.threats.is_empty() { return None; }
+    if flight.since_seen >= flight.till_assess { return None; }
 
     let (known, pos) = (&*entity.known, entity.pos);
     let scale = AStarLength(Point(1, 0)) as f64;
@@ -671,14 +681,14 @@ fn flee_from_threats(entity: &Entity, ai: &mut AIState) -> Option<BFSResult> {
         }
         let blocked = {
             let los = LOS(p, threat);
-            (1..los.len() - 1).any(|i| known.get(los[i]).blocked())
+            (1..los.len() - 1).filter(|i| !known.get(los[*i]).unblocked()).count()
         };
         let frontier = dirs::ALL.iter().any(|x| known.get(p + *x).unknown());
 
-        1.2 * (threat_distance as f64) +
+        1.1 * (threat_distance as f64) +
         -1. * (source_distance as f64) +
         16. * scale * (blocked as i32 as f64) +
-        64. * scale * (frontier as i32 as f64)
+        16. * scale * (frontier as i32 as f64)
     };
 
     // Fast path: if we haven't seen any of the neighboring squares, then that
@@ -705,21 +715,23 @@ fn flee_from_threats(entity: &Entity, ai: &mut AIState) -> Option<BFSResult> {
     map.insert(pos, 0);
     DijkstraMap(check, FLIGHT_MAP_LIMIT, &mut map);
 
-    let mut best_point = pos;
-    let mut best_score = std::f64::MIN;
-    let mut best_nearby_point = pos;
-    let mut best_nearby_score = std::f64::MIN;
+    let mut target = pos;
+    let mut target_score = std::f64::MIN;
+    let mut dir = Point::default();
+    let mut dir_score = std::f64::MIN;
     for (k, v) in &map {
         let s = score(*k, *v);
-        if s > best_score {
-            (best_point, best_score) = (*k, s);
+        if s > target_score {
+            (target, target_score) = (*k, s);
         }
-        if s > best_nearby_score && (*k - pos).len_l1() == 1 {
-            (best_nearby_point, best_nearby_score) = (*k, s);
+        if s > dir_score && (*k - pos).len_l1() <= 1 {
+            (dir, dir_score) = (*k - pos, s);
         }
     }
 
-    Some(BFSResult { dirs: vec![best_nearby_point - pos], targets: vec![best_point] })
+    if target == pos { return None; }
+
+    Some(BFSResult { dirs: vec![dir], targets: vec![target] })
 }
 
 fn update_ai_state(entity: &Entity, hints: &[Hint], ai: &mut AIState) {
@@ -757,15 +769,15 @@ fn update_ai_state(entity: &Entity, hints: &[Hint], ai: &mut AIState) {
         let mut targets = known.entities.iter().filter(
             |x| x.rival).collect::<Vec<_>>();
         if !targets.is_empty() {
-            targets.sort_unstable_by_key(|x| x.age);
-            let EntityKnowledge { age, pos: target, .. } = *targets[0];
+            targets.sort_unstable_by_key(
+                |x| (x.age, (x.pos - pos).len_l2_squared()));
+            let EntityKnowledge { age, dir, pos: target, .. } = *targets[0];
             let reset = age < last_turn_age;
             if age < limit {
-                let delta = target - pos;
                 let (bias, search_turns) = if !reset && let Some(x) = fight {
                     (x.bias, x.search_turns + 1)
                 } else {
-                    (delta, 0)
+                    (target - pos + dir.normalize(4.), 0)
                 };
                 ai.fight = Some(FightState { age, bias, search_turns, target });
             }
@@ -783,15 +795,19 @@ fn update_ai_state(entity: &Entity, hints: &[Hint], ai: &mut AIState) {
     threats.sort_unstable_by_key(|x| (x.0, x.1));
 
     if let Some(x) = &mut ai.flight {
-        if threats.is_empty() || x.turns_since_seen >= MAX_FLIGHT_TURNS {
+        if threats.is_empty() {
             ai.flight = None;
         } else {
-            if x.threats != threats { ai.plan.clear(); }
-            x.turns_since_seen = if reset { 0 } else { x.turns_since_seen + 1 };
+            let assess = min(2 * x.till_assess, MAX_FLIGHT_TURNS);
+            x.since_seen = if reset { 0 } else { x.since_seen + 1 };
+            if reset || (!x.done && x.threats != threats) { ai.plan.clear(); }
+            if reset && ai.goal == Goal::Assess { x.till_assess = assess;  }
+            if reset { x.done = false; }
             x.threats = threats;
         }
     } else if !threats.is_empty() {
-        ai.flight = Some(FlightState { threats, turns_since_seen: 0 });
+        let (done, since_seen, till_assess) = (false, 0, MIN_FLIGHT_TURNS);
+        ai.flight = Some(FlightState { done, threats, since_seen, till_assess });
         ai.plan.clear();
     }
 }
@@ -806,12 +822,12 @@ fn plan_cached(entity: &Entity, hints: &[Hint],
     let look = next.kind == StepKind::Look;
     let dir = next.target - pos;
     if !look && dir.len_l1() > 1 { return None; }
-    if look && let Some(x) = &ai.flight && x.turns_since_seen == 0 { return None; }
 
     // Check whether the plan's goal is still a top priority for us.
     let mut goals: Vec<Goal> = vec![];
-    if ai.flight.is_some() {
-        goals.push(Goal::Flee);
+    if let Some(x) = &ai.flight && !x.done {
+        if x.since_seen > 0 { goals.push(Goal::Assess); }
+        if x.since_seen < x.till_assess { goals.push(Goal::Flee); }
     } else if ai.fight.is_some() {
         goals.push(Goal::Chase);
     } else if ai.goal == Goal::Assess {
@@ -867,6 +883,10 @@ fn plan_cached(entity: &Entity, hints: &[Hint],
         StepKind::Look => {
             if ai.plan.is_empty() && ai.goal == Goal::Assess {
                 ai.till_assess = rng.gen::<i32>().rem_euclid(MAX_ASSESS);
+                if let Some(x) = &mut ai.flight {
+                    x.till_assess = MIN_FLIGHT_TURNS;
+                    x.done = true;
+                }
             }
             Some(Action::Look(next.target))
         }
@@ -881,7 +901,10 @@ fn plan_cached(entity: &Entity, hints: &[Hint],
             let turns = (||{
                 let running = ai.goal == Goal::Flee || ai.goal == Goal::Chase;
                 if !running { return WANDER_TURNS; }
-                if !move_ready(entity) { SLOWED_TURNS } else { 1. }
+                if !move_ready(entity) { return SLOWED_TURNS; }
+                if ai.goal == Goal::Flee { return 1.; }
+                let Some(fight) = &ai.fight else { return SLOWED_TURNS; };
+                if fight.search_turns < MIN_FOLLOW_TURNS { 1. } else { SLOWED_TURNS }
             })();
             let look = if target == pos { entity.dir } else { target - pos };
             Some(Action::Move(Move { look, step: dir, turns }))
@@ -913,7 +936,9 @@ fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
 
         if let Some(x) = flee_from_threats(entity, ai) {
             (ai.goal, result) = (Goal::Flee, x);
-        } else if let Some(x) = &mut ai.fight {
+        } else if let Some(x) = &ai.flight && !x.done {
+            (ai.goal, result) = (Goal::Assess, coerce(pos, &[]));
+        } else if let Some(x) = &ai.fight {
             if x.age == 0 {
                 ai.goal = Goal::Chase;
                 return attack_target(entity, x.target, rng);
@@ -976,12 +1001,12 @@ fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
         let kind = StepKind::Move;
         ai.plan = path.into_iter().map(|x| Step { kind, target: x }).collect();
         match ai.goal {
-            Goal::Assess => assess_dirs(&[entity.dir], ai, rng),
+            Goal::Assess => assess_nearby(entity, ai, rng),
             Goal::Chase => {}
             Goal::Drink => ai.plan.push(Step { kind: StepKind::Drink, target }),
             Goal::Eat => ai.plan.push(Step { kind: StepKind::Eat, target }),
             Goal::Explore => {}
-            Goal::Flee => assess_threats(target, ai, rng),
+            Goal::Flee => {}
         }
         ai.plan.reverse();
         if let Some(x) = plan_cached(entity, &hints, ai, rng) { return x; }
@@ -1339,7 +1364,7 @@ impl State {
 
     pub fn update(&mut self) { update_state(self); }
 
-    pub fn render(&self, buffer: &mut Buffer) {
+    pub fn render(&self, buffer: &mut Buffer, debug: &mut String) {
         if buffer.data.is_empty() {
             let size = Point(2 * UI_MAP_SIZE_X, UI_MAP_SIZE_Y);
             let mut overwrite = Matrix::new(size, ' '.into());
@@ -1361,6 +1386,11 @@ impl State {
         let known = &*entity.known;
 
         if entity.eid != self.player && frame.is_none() {
+            let mut ai = entity.ai.clone();
+            while ai.turn_times.len() > 2 { ai.turn_times.pop_back(); }
+            ai.plan.clear();
+            *debug = format!("{:?}", ai);
+
             for step in &entity.ai.plan {
                 if step.kind == StepKind::Look { continue; }
                 let Point(x, y) = step.target - offset;
@@ -1465,9 +1495,7 @@ impl State {
 
             let (pos, dir) = (other.pos, other.dir);
             let ch = Glyph::ray(dir);
-            let norm = length as f64 / dir.len_l2();
-            let diff = Point((dir.0 as f64 * norm) as i32,
-                             (dir.1 as f64 * norm) as i32);
+            let diff = dir.normalize(length as f64);
             arrows.push((ch, LOS(pos, pos + diff)));
         }
 
