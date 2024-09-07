@@ -10,6 +10,39 @@ use crate::knowledge::Knowledge;
 
 //////////////////////////////////////////////////////////////////////////////
 
+const MAX_HP: i32 = 8;
+
+//////////////////////////////////////////////////////////////////////////////
+
+// Entity
+
+pub struct EntityArgs {
+    pub glyph: Glyph,
+    pub player: bool,
+    pub predator: bool,
+    pub pos: Point,
+    pub speed: f64,
+}
+
+pub struct Entity {
+    pub eid: EID,
+    pub glyph: Glyph,
+    pub known: Box<Knowledge>,
+    pub ai: Box<AIState>,
+    pub player: bool,
+    pub predator: bool,
+    pub sneaking: bool,
+    pub cur_hp: i32,
+    pub max_hp: i32,
+    pub move_timer: i32,
+    pub turn_timer: i32,
+    pub speed: f64,
+    pub pos: Point,
+    pub dir: Point,
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 // EID
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -50,9 +83,12 @@ impl EntityMap {
             ai: Box::new(AIState::new(rng)),
             player: args.player,
             predator: args.predator,
+            sneaking: false,
+            cur_hp: MAX_HP,
+            max_hp: MAX_HP,
             move_timer: 0,
             turn_timer: 0,
-            speed: 0.1,
+            speed: args.speed,
             pos: args.pos,
             dir,
         });
@@ -79,29 +115,4 @@ impl IndexMut<EID> for EntityMap {
     fn index_mut(&mut self, eid: EID) -> &mut Self::Output {
         self.get_mut(eid).unwrap()
     }
-}
-
-//////////////////////////////////////////////////////////////////////////////
-
-// Entity
-
-pub struct EntityArgs {
-    pub glyph: Glyph,
-    pub player: bool,
-    pub predator: bool,
-    pub pos: Point,
-}
-
-pub struct Entity {
-    pub eid: EID,
-    pub glyph: Glyph,
-    pub known: Box<Knowledge>,
-    pub ai: Box<AIState>,
-    pub player: bool,
-    pub predator: bool,
-    pub move_timer: i32,
-    pub turn_timer: i32,
-    pub speed: f64,
-    pub pos: Point,
-    pub dir: Point,
 }

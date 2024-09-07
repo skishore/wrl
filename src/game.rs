@@ -31,8 +31,8 @@ const FLIGHT_MAP_LIMIT: i32 = 256;
 
 const ASSESS_ANGLE: f64 = TAU / 18.;
 const ASSESS_STEPS: i32 = 4;
-const ASSESS_TURNS_EXPLORE: i32 = 16;
-const ASSESS_TURNS_FLIGHT: i32 = 4;
+const ASSESS_TURNS_EXPLORE: i32 = 4;
+const ASSESS_TURNS_FLIGHT: i32 = 1;
 
 //const ATTACK_DAMAGE: i32 = 40;
 const ATTACK_RANGE: i32 = 8;
@@ -50,10 +50,13 @@ const TURN_TIMES_LIMIT: usize = 64;
 const MOVE_TIMER: i32 = 960;
 const TURN_TIMER: i32 = 120;
 const SLOWED_TURNS: f64 = 2.;
-const WANDER_TURNS: f64 = 2.;
+const WANDER_TURNS: f64 = 1.5;
 
 const FOV_RADIUS_NPC: i32 = 12;
 const FOV_RADIUS_PC_: i32 = 21;
+
+const SPEED_PC_: f64 = 0.1;
+const SPEED_NPC: f64 = 0.1;
 
 const LIGHT: Light = Light::Sun(Point(4, 1));
 const WEATHER: Weather = Weather::None;
@@ -62,10 +65,11 @@ const WORLD_SIZE: i32 = 100;
 const UI_DAMAGE_FLASH: i32 = 6;
 const UI_DAMAGE_TICKS: i32 = 6;
 
-//const UI_MAP_SIZE_X: i32 = 2 * FOV_RADIUS_PC_ + 1;
-//const UI_MAP_SIZE_Y: i32 = 2 * FOV_RADIUS_PC_ + 1;
-const UI_MAP_SIZE_X: i32 = WORLD_SIZE;
-const UI_MAP_SIZE_Y: i32 = WORLD_SIZE;
+const UI_COLOR: i32 = 0x430;
+const UI_MAP_SIZE_X: i32 = 2 * FOV_RADIUS_PC_ + 1;
+const UI_MAP_SIZE_Y: i32 = 2 * FOV_RADIUS_PC_ + 1;
+//const UI_MAP_SIZE_X: i32 = WORLD_SIZE;
+//const UI_MAP_SIZE_Y: i32 = WORLD_SIZE;
 
 #[derive(Eq, PartialEq)]
 pub enum Input { Escape, BackTab, Char(char) }
@@ -291,6 +295,26 @@ impl Board {
         assert!(old == Some(eid));
         let new = replace(&mut self.map.entry_mut(target).unwrap().eid, old);
         assert!(new.is_none());
+    }
+
+    fn remove_entity(&mut self, eid: EID) {
+        // The player entity is not removed, since it's the player's POV.
+        let entity = &mut self.entities[eid];
+        entity.cur_hp = 0;
+        if entity.player { return; }
+
+        // Remove the entity from the map.
+        let existing = self.map.entry_mut(entity.pos).unwrap().eid.take();
+        assert!(existing == Some(eid));
+
+        // Remove the entity from the entity_order list.
+        let index = self.entity_order.iter().position(|x| *x == eid).unwrap();
+        self.entity_order.remove(index);
+        if self.active_entity_index > index {
+            self.active_entity_index -= 1;
+        } else if self.active_entity_index == self.entity_order.len() {
+            self.active_entity_index = 0;
+        }
     }
 
     fn reset(&mut self, tile: &'static Tile) {
@@ -903,8 +927,8 @@ fn plan_cached(entity: &Entity, hints: &[Hint],
                 if !running { return WANDER_TURNS; }
                 if !move_ready(entity) { return SLOWED_TURNS; }
                 if ai.goal == Goal::Flee { return 1.; }
-                let Some(fight) = &ai.fight else { return SLOWED_TURNS; };
-                if fight.search_turns < MIN_FOLLOW_TURNS { 1. } else { SLOWED_TURNS }
+                let Some(fight) = &ai.fight else { return WANDER_TURNS; };
+                if fight.search_turns < MIN_FOLLOW_TURNS { 1. } else { WANDER_TURNS }
             })();
             let look = if target == pos { entity.dir } else { target - pos };
             Some(Action::Move(Move { look, step: dir, turns }))
@@ -1167,7 +1191,23 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let cb = move |board: &mut Board, rng: &mut RNG| {
                 let Some(oid) = oid else { return; };
                 let cb = move |board: &mut Board, _: &mut RNG| {
-                    board.update_known_entity(oid, eid);
+                    let Some(other) = board.entities.get_mut(oid) else { return; };
+
+                    // Player scores a critical hit if they're unseen.
+                    let damage = if other.player {
+                        1
+                    } else if other.known.get(source).visible() {
+                        0
+                    } else {
+                        other.cur_hp
+                    };
+
+                    if other.cur_hp > damage {
+                        other.cur_hp -= damage;
+                        board.update_known_entity(oid, eid);
+                    } else {
+                        board.remove_entity(oid);
+                    }
                 };
                 board.add_effect(apply_damage(board, target, Box::new(cb)), rng);
             };
@@ -1243,8 +1283,21 @@ fn process_input(state: &mut State, input: Input) {
         return;
     }
 
-    let dir = if let Input::Char(x) = input { get_direction(x) } else { None };
-    if let Some(x) = dir { state.input = step(x, 1.); }
+    let Input::Char(ch) = input else { return; };
+    let Some(dir) = get_direction(ch) else { return; };
+
+    if dir == Point::default() {
+        state.input = Action::Idle;
+        return;
+    }
+
+    let player = state.get_player();
+    let cell = player.known.get(player.pos + dir);
+    if let Some(x) = cell.entity() && x.rival {
+        state.input = Action::Attack(player.pos + dir);
+    } else {
+        state.input = step(dir, 1.);
+    }
 }
 
 fn update_state(state: &mut State) {
@@ -1257,10 +1310,14 @@ fn update_state(state: &mut State) {
         return;
     }
 
+    let game_loop_active = |state: &State| {
+        state.get_player().cur_hp > 0 && state.board.get_frame().is_none()
+    };
+
     let needs_input = |state: &State| {
+        if !game_loop_active(state) { return false; }
         if !matches!(state.input, Action::WaitForInput) { return false; }
-        if state.board.get_active_entity() != state.player { return false; }
-        state.board.get_frame().is_none()
+        state.board.get_active_entity() == state.player
     };
 
     while !state.inputs.is_empty() && needs_input(state) {
@@ -1270,7 +1327,7 @@ fn update_state(state: &mut State) {
 
     let mut update = false;
 
-    while state.board.get_frame().is_none() {
+    while game_loop_active(state) {
         let eid = state.board.get_active_entity();
         let entity = &state.board.entities[eid];
         let player = entity.player;
@@ -1288,6 +1345,8 @@ fn update_state(state: &mut State) {
         let action = plan(state, eid);
         let result = act(state, eid, action);
         if player && !result.success { break; }
+
+        state.board.update_known(eid);
 
         if let Some(x) = state.board.entities.get_mut(eid) { drain(x, &result); }
     }
@@ -1330,7 +1389,8 @@ impl State {
         }
         let input = Action::WaitForInput;
         let glyph = Glyph::wdfg('@', 0x222);
-        let args = EntityArgs { glyph, player: true, predator: false, pos };
+        let (player, speed) = (true, SPEED_PC_);
+        let args = EntityArgs { glyph, player, predator: false, pos, speed };
         let player = board.add_entity(&args, &mut rng);
 
         let die = |n: i32, rng: &mut RNG| rng.gen::<i32>().rem_euclid(n);
@@ -1343,9 +1403,10 @@ impl State {
         };
         for i in 0..20 {
             if let Some(x) = pos(&board, &mut rng) {
-                let predator = i % 10 == 0;
+                let predator = i < 20;
+                let (player, speed) = (false, SPEED_NPC);
                 let glyph = Glyph::wdfg(if predator { 'R' } else { 'P' }, 0x222);
-                let args = EntityArgs { glyph, player: false, predator, pos: x };
+                let args = EntityArgs { glyph, player, predator, pos: x, speed };
                 board.add_entity(&args, &mut rng);
             }
         }
@@ -1366,23 +1427,29 @@ impl State {
 
     pub fn render(&self, buffer: &mut Buffer, debug: &mut String) {
         if buffer.data.is_empty() {
-            let size = Point(2 * UI_MAP_SIZE_X, UI_MAP_SIZE_Y);
+            let size = Point(2 * UI_MAP_SIZE_X + 2, UI_MAP_SIZE_Y + 3);
             let mut overwrite = Matrix::new(size, ' '.into());
             std::mem::swap(buffer, &mut overwrite);
         }
 
-        let size = Point(2 * UI_MAP_SIZE_X, UI_MAP_SIZE_Y);
-        let bounds = Rect { root: Point::default(), size };
-
-        let frame = self.board.get_frame();
-        let slice = &mut Slice::new(buffer, bounds);
-
         let entity = self.pov.and_then(
             |x| self.board.get_entity(x)).unwrap_or(self.get_player());
-        //let offset = entity.pos - Point(UI_MAP_SIZE_X / 2, UI_MAP_SIZE_Y / 2);
-        let offset = Point(0, 0);
+        let offset = entity.pos - Point(UI_MAP_SIZE_X / 2, UI_MAP_SIZE_Y / 2);
 
-        self._render_map(entity, frame, offset, slice);
+        let size = Point(2 * UI_MAP_SIZE_X, UI_MAP_SIZE_Y);
+        let bound = Rect { root: Point(0, size.1 + 2), size: Point(size.0, 1) };
+        let slice = &mut Slice::new(buffer, bound);
+        let mode = if entity.sneaking { "SNEAKING" } else { "NORMAL" };
+        slice.write_str(&format!("HP: {}/{}", entity.cur_hp, entity.max_hp));
+        slice.write_str("; ");
+        slice.write_str(&format!("Mode: {}", mode));
+
+        let bound = Rect { root: Point(1, 1), size };
+        self.render_box(buffer, &bound);
+
+        let frame = self.board.get_frame();
+        let slice = &mut Slice::new(buffer, bound);
+        self.render_map(entity, frame, offset, slice);
         let known = &*entity.known;
 
         if entity.eid != self.player && frame.is_none() {
@@ -1465,8 +1532,29 @@ impl State {
         }
     }
 
-    fn _render_map(&self, entity: &Entity, frame: Option<&Frame>,
+    fn render_box(&self, buffer: &mut Buffer, rect: &Rect) {
+        let Point(w, h) = rect.size;
+        let color: Color = UI_COLOR.into();
+        buffer.set(rect.root + Point(-1, -1), Glyph::chfg('┌', color));
+        buffer.set(rect.root + Point( w, -1), Glyph::chfg('┐', color));
+        buffer.set(rect.root + Point(-1,  h), Glyph::chfg('└', color));
+        buffer.set(rect.root + Point( w,  h), Glyph::chfg('┘', color));
+
+        let tall = Glyph::chfg('│', color);
+        let flat = Glyph::chfg('─', color);
+        for x in 0..w {
+            buffer.set(rect.root + Point(x, -1), flat);
+            buffer.set(rect.root + Point(x,  h), flat);
+        }
+        for y in 0..h {
+            buffer.set(rect.root + Point(-1, y), tall);
+            buffer.set(rect.root + Point( w, y), tall);
+        }
+    }
+
+    fn render_map(&self, entity: &Entity, frame: Option<&Frame>,
                   offset: Point, slice: &mut Slice) {
+        // Render each tile's base glyph, if it's known.
         let (known, player) = (&*entity.known, entity.player);
         let unseen = Glyph::wide(' ');
 
@@ -1476,6 +1564,9 @@ impl State {
 
             let glyph = cell.entity().map(|x| x.glyph).unwrap_or(tile.glyph);
             if !cell.visible() { return glyph.with_fg(0x011); }
+
+            let dead = cell.entity().is_some_and(|x| !x.alive);
+            if dead { return glyph.with_fg(0x400); }
 
             if cell.shade() { glyph.with_fg(Color::gray()) } else { glyph }
         };
@@ -1488,6 +1579,18 @@ impl State {
             }
         }
 
+        // Render any animation that's currently running.
+        if let Some(frame) = frame {
+            for effect::Particle { point, glyph } in frame {
+                if player && !known.get(*point).visible() { continue; }
+                let Point(x, y) = *point - offset;
+                slice.set(Point(2 * x, y), *glyph);
+            }
+        }
+
+        // If we're still playing, animate arrows showing NPC facing.
+        if entity.cur_hp == 0 { return; }
+
         let length = 3 as usize;
         let mut arrows = vec![];
         for other in &known.entities {
@@ -1497,14 +1600,6 @@ impl State {
             let ch = Glyph::ray(dir);
             let diff = dir.normalize(length as f64);
             arrows.push((ch, LOS(pos, pos + diff)));
-        }
-
-        if let Some(frame) = frame {
-            for effect::Particle { point, glyph } in frame {
-                if player && !known.get(*point).visible() { continue; }
-                let Point(x, y) = *point - offset;
-                slice.set(Point(2 * x, y), *glyph);
-            }
         }
 
         for (ch, arrow) in &arrows {

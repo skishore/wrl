@@ -155,10 +155,12 @@ pub struct EntityKnowledge {
     pub pos: Point,
     pub dir: Point,
     pub glyph: Glyph,
+    pub alive: bool,
     pub moved: bool,
     pub rival: bool,
     pub friend: bool,
 }
+static_assert_size!(EntityKnowledge, 40);
 
 #[derive(Default)]
 pub struct Knowledge {
@@ -308,6 +310,7 @@ impl Knowledge {
                 age: Default::default(),
                 pos: Default::default(),
                 dir: Default::default(),
+                alive: Default::default(),
                 glyph: Default::default(),
                 moved: Default::default(),
                 rival: Default::default(),
@@ -325,9 +328,10 @@ impl Knowledge {
         entry.age = if seen { 0 } else { -1 };
         entry.pos = other.pos;
         entry.dir = other.dir;
+        entry.alive = other.cur_hp > 0;
         entry.glyph = other.glyph;
         entry.moved = !seen;
-        entry.rival = !other.player && entity.predator != other.predator;
+        entry.rival = entity.player != other.player;
         entry.friend = friend;
 
         handle
