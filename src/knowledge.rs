@@ -156,6 +156,7 @@ pub struct EntityKnowledge {
     pub dir: Point,
     pub glyph: Glyph,
     pub alive: bool,
+    pub heard: bool,
     pub moved: bool,
     pub rival: bool,
     pub friend: bool,
@@ -250,10 +251,7 @@ impl Knowledge {
         self.age_out();
 
         let (pos, time) = (me.pos, self.time);
-        let (sun, dark) = match board.get_light() {
-            Light::None => (Point::default(), true),
-            Light::Sun(x) => (*x, false),
-        };
+        let dark = matches!(board.get_light(), Light::None);
 
         // Entities have exact knowledge about anything they can see.
         for point in &vision.points_seen {
@@ -266,8 +264,7 @@ impl Knowledge {
 
             let shadowed = cell.shadow > 0;
             let (delta, shade) = (point - pos, dark || shadowed);
-            if (dark || (shadowed && !(tile.blocked() && sun.dot(delta) < 0))) &&
-               delta.len_l1() > 1 {
+            if (dark || (shadowed && !tile.blocked())) && delta.len_l1() > 1 {
                 continue;
             }
 
@@ -312,6 +309,7 @@ impl Knowledge {
                 dir: Default::default(),
                 alive: Default::default(),
                 glyph: Default::default(),
+                heard: Default::default(),
                 moved: Default::default(),
                 rival: Default::default(),
                 friend: Default::default(),
@@ -330,6 +328,7 @@ impl Knowledge {
         entry.dir = other.dir;
         entry.alive = other.cur_hp > 0;
         entry.glyph = other.glyph;
+        entry.heard = !seen;
         entry.moved = !seen;
         entry.rival = entity.player != other.player;
         entry.friend = friend;
@@ -345,6 +344,13 @@ impl Knowledge {
     }
 
     fn forget(&mut self, player: bool) {
+        for entity in &mut self.entities {
+            if !entity.heard { continue; }
+            let lookup = self.cell_by_point.get(&entity.pos);
+            let Some(h) = lookup else { continue; };
+            if self.cells[*h].time == self.time { entity.heard = false; }
+        }
+
         if player {
             while let Some(x) = self.cells.back() && x.time != self.time {
                 self.forget_last_cell();

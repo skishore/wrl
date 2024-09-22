@@ -1164,7 +1164,10 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             }
 
             let factor = step.len_l2();
-            let target = entity.pos + step;
+            let player = entity.player;
+            let source = entity.pos;
+            let target = source + step;
+
             match state.board.get_status(target) {
                 Status::Blocked => {
                     state.board.entities[eid].dir = step;
@@ -1175,19 +1178,33 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                     ActionResult::failure()
                 }
                 Status::Free => {
+                    let mut updated = vec![];
+                    let max = if player { 4 } else { 12 };
+                    for oid in &state.board.entity_order {
+                        if *oid == eid { continue; }
+                        let other = &state.board.entities[*oid];
+                        let delta = min((other.pos - source).len_nethack(),
+                                        (other.pos - target).len_nethack());
+                        if delta <= max { updated.push(*oid); }
+                    }
                     state.board.move_entity(eid, target);
+                    for oid in updated { state.board.update_known_entity(oid, eid); }
                     ActionResult::success_turns(factor * turns)
                 }
             }
         }
         Action::Attack(target) => {
-            let entity = &state.board.entities[eid];
+            let entity = &mut state.board.entities[eid];
             let (known, source) = (&entity.known, entity.pos);
-            if !has_line_of_sight(source, target, known, ATTACK_RANGE) {
+            if source == target {
+                return ActionResult::failure();
+            } else if !has_line_of_sight(source, target, known, ATTACK_RANGE) {
                 return ActionResult::failure();
             }
 
+            entity.dir = target - source;
             let oid = state.board.get_cell(target).eid;
+
             let cb = move |board: &mut Board, rng: &mut RNG| {
                 let Some(oid) = oid else { return; };
                 let cb = move |board: &mut Board, _: &mut RNG| {
@@ -1577,6 +1594,11 @@ impl State {
                 let glyph = lookup(Point(x, y) + offset);
                 slice.set(Point(2 * x, y), glyph);
             }
+        }
+        for entity in &known.entities {
+            if !entity.heard { continue; }
+            let Point(x, y) = entity.pos - offset;
+            slice.set(Point(2 * x, y), Glyph::wide('?'));
         }
 
         // Render any animation that's currently running.
