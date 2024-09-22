@@ -50,13 +50,14 @@ const TURN_TIMES_LIMIT: usize = 64;
 const MOVE_TIMER: i32 = 960;
 const TURN_TIMER: i32 = 120;
 const SLOWED_TURNS: f64 = 2.;
+const SNEAKY_TURNS: f64 = 2.;
 const WANDER_TURNS: f64 = 1.5;
 
 const FOV_RADIUS_NPC: i32 = 12;
 const FOV_RADIUS_PC_: i32 = 21;
 
 const SPEED_PC_: f64 = 0.1;
-const SPEED_NPC: f64 = 0.1;
+const SPEED_NPC: f64 = 0.125;
 
 const LIGHT: Light = Light::Sun(Point(4, 1));
 const WEATHER: Weather = Weather::None;
@@ -350,13 +351,13 @@ impl Board {
         self.known = Some(known);
     }
 
-    fn update_known_entity(&mut self, eid: EID, oid: EID) {
+    fn update_known_entity(&mut self, eid: EID, oid: EID, heard: bool) {
         let mut known = self.known.take().unwrap_or_default();
         swap(&mut known, &mut self.entities[eid].known);
 
         let me = &self.entities[eid];
         let other = &self.entities[oid];
-        known.update_entity(me, other, self, /*seen=*/false);
+        known.update_entity(me, other, self, /*seen=*/false, /*heard=*/heard);
 
         swap(&mut known, &mut self.entities[eid].known);
         self.known = Some(known);
@@ -623,19 +624,15 @@ fn search_around(entity: &Entity, source: Point, age: i32, bias: Point) -> Optio
         if p == pos { return Status::Free; }
         known.get(p).status().unwrap_or(Status::Free)
     };
-    let done1 = |p: Point| {
+    let done = |p: Point| {
         let cell = known.get(p);
         if cell.age() < age || cell.blocked() { return false; }
         dirs::ALL.iter().any(|x| known.get(p + *x).unblocked())
     };
-    let done0 = |p: Point| {
-        done1(p) && dirs::ALL.iter().all(|x| !known.get(p + *x).blocked())
-    };
     let unit = AStarLength(dirs::N) / 2;
     let heuristic = |p: Point| { unit * (pos + bias - p).len_nethack() };
 
-    let path = Dijkstra(source, done0, ASTAR_LIMIT_SEARCH, check, heuristic).or_else(||
-               Dijkstra(source, done1, ASTAR_LIMIT_SEARCH, check, heuristic))?;
+    let path = Dijkstra(source, done, ASTAR_LIMIT_SEARCH, check, heuristic)?;
     Some(coerce(source, &path))
 }
 
@@ -1163,8 +1160,11 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 return ActionResult::success_turns(turns);
             }
 
-            let factor = step.len_l2();
-            let player = entity.player;
+            // It's more expensive to sneak, and to move diagonally.
+            let stealthy = entity.stealthy;
+            let factor = if stealthy { SNEAKY_TURNS } else { 1. };
+            let turns = step.len_l2() * factor * turns;
+
             let source = entity.pos;
             let target = source + step;
 
@@ -1179,17 +1179,20 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 }
                 Status::Free => {
                     let mut updated = vec![];
-                    let max = if player { 4 } else { 12 };
+                    let max = if stealthy { 1 } else { 12 };
                     for oid in &state.board.entity_order {
                         if *oid == eid { continue; }
                         let other = &state.board.entities[*oid];
+                        let heard = (other.pos - target).len_nethack() < max;
                         let delta = min((other.pos - source).len_nethack(),
                                         (other.pos - target).len_nethack());
-                        if delta <= max { updated.push(*oid); }
+                        if delta <= max { updated.push((*oid, heard)); }
                     }
                     state.board.move_entity(eid, target);
-                    for oid in updated { state.board.update_known_entity(oid, eid); }
-                    ActionResult::success_turns(factor * turns)
+                    for (oid, heard) in updated {
+                        state.board.update_known_entity(oid, eid, heard);
+                    }
+                    ActionResult::success_turns(turns)
                 }
             }
         }
@@ -1221,7 +1224,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
                     if other.cur_hp > damage {
                         other.cur_hp -= damage;
-                        board.update_known_entity(oid, eid);
+                        board.update_known_entity(oid, eid, /*heard=*/true);
                     } else {
                         board.remove_entity(oid);
                     }
@@ -1301,6 +1304,13 @@ fn process_input(state: &mut State, input: Input) {
     }
 
     let Input::Char(ch) = input else { return; };
+
+    if ch == 'c' {
+        let player = state.mut_player();
+        player.stealthy = !player.stealthy;
+        return;
+    }
+
     let Some(dir) = get_direction(ch) else { return; };
 
     if dir == Point::default() {
@@ -1436,6 +1446,8 @@ impl State {
 
     fn get_player(&self) -> &Entity { &self.board.entities[self.player] }
 
+    fn mut_player(&mut self) -> &mut Entity { &mut self.board.entities[self.player] }
+
     pub fn add_effect(&mut self, x: Effect) { self.board.add_effect(x, &mut self.rng) }
 
     pub fn add_input(&mut self, input: Input) { self.inputs.push(input) }
@@ -1456,7 +1468,7 @@ impl State {
         let size = Point(2 * UI_MAP_SIZE_X, UI_MAP_SIZE_Y);
         let bound = Rect { root: Point(0, size.1 + 2), size: Point(size.0, 1) };
         let slice = &mut Slice::new(buffer, bound);
-        let mode = if entity.sneaking { "SNEAKING" } else { "NORMAL" };
+        let mode = if entity.stealthy { "STEALTHY" } else { "NORMAL  " };
         slice.write_str(&format!("HP: {}/{}", entity.cur_hp, entity.max_hp));
         slice.write_str("; ");
         slice.write_str(&format!("Mode: {}", mode));
@@ -1579,13 +1591,23 @@ impl State {
             let cell = known.get(point);
             let Some(tile) = cell.tile() else { return unseen; };
 
-            let glyph = cell.entity().map(|x| x.glyph).unwrap_or(tile.glyph);
-            if !cell.visible() { return glyph.with_fg(0x011); }
+            let other = cell.entity();
+            let dead = other.is_some_and(|x| !x.alive);
+            let stealthy = point == entity.pos && entity.stealthy && !dead;
+            let obscured = stealthy && tile.obscure();
+            let shadowed = cell.shade();
 
-            let dead = cell.entity().is_some_and(|x| !x.alive);
-            if dead { return glyph.with_fg(0x400); }
+            let glyph = other.map(|x| x.glyph).unwrap_or(tile.glyph);
+            let glyph = if stealthy { Glyph::wdfg('e', glyph.fg()) } else { glyph };
 
-            if cell.shade() { glyph.with_fg(Color::gray()) } else { glyph }
+            let color = {
+                if !cell.visible() { 0x011.into() }
+                else if dead { 0x400.into() }
+                else if shadowed { Color::gray() }
+                else if obscured { tile.glyph.fg() }
+                else { glyph.fg() }
+            };
+            glyph.with_fg(color)
         };
 
         slice.fill(Glyph::wide(' '));

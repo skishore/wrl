@@ -263,14 +263,16 @@ impl Knowledge {
             let (eid, tile) = (cell.eid, cell.tile);
 
             let shadowed = cell.shadow > 0;
-            let (delta, shade) = (point - pos, dark || shadowed);
-            if (dark || (shadowed && !tile.blocked())) && delta.len_l1() > 1 {
+            let shade = dark || shadowed;
+            let nearby = (point - pos).len_l1() <= 1;
+            if (dark || (shadowed && !tile.blocked())) && !nearby {
                 continue;
             }
 
             let handle = (|| {
                 let other = board.get_entity(eid?)?;
-                Some(self.update_entity(me, other, board, /*seen=*/true))
+                if other.stealthy && tile.obscure() && !nearby { return None; }
+                Some(self.update_entity(me, other, board, /*seen=*/true, /*heard=*/false))
             })();
 
             let mut prev_handle = None;
@@ -287,11 +289,11 @@ impl Knowledge {
             };
         }
 
-        self.forget(me.player);
+        self.forget(me.pos, me.player);
     }
 
     pub fn update_entity(&mut self, entity: &Entity, other: &Entity,
-                         _: &Board, seen: bool) -> EntityHandle {
+                         _: &Board, seen: bool, heard: bool) -> EntityHandle {
         let handle = *self.entity_by_eid.entry(other.eid).and_modify(|x| {
             self.entities.move_to_front(*x);
             let existing = &mut self.entities[*x];
@@ -328,7 +330,7 @@ impl Knowledge {
         entry.dir = other.dir;
         entry.alive = other.cur_hp > 0;
         entry.glyph = other.glyph;
-        entry.heard = !seen;
+        entry.heard = heard;
         entry.moved = !seen;
         entry.rival = entity.player != other.player;
         entry.friend = friend;
@@ -343,12 +345,15 @@ impl Knowledge {
         self.time.0 += TURN_AGE as u32;
     }
 
-    fn forget(&mut self, player: bool) {
+    fn forget(&mut self, pos: Point, player: bool) {
         for entity in &mut self.entities {
             if !entity.heard { continue; }
             let lookup = self.cell_by_point.get(&entity.pos);
             let Some(h) = lookup else { continue; };
-            if self.cells[*h].time == self.time { entity.heard = false; }
+            let cell = &self.cells[*h];
+            if cell.time != self.time { continue; }
+            if cell.tile.obscure() && (entity.pos - pos).len_l1() > 1 { continue; }
+            entity.heard = false;
         }
 
         if player {
