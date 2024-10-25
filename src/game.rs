@@ -34,7 +34,7 @@ const ASSESS_STEPS: i32 = 4;
 const ASSESS_TURNS_EXPLORE: i32 = 4;
 const ASSESS_TURNS_FLIGHT: i32 = 1;
 
-//const ATTACK_DAMAGE: i32 = 40;
+const ATTACK_DAMAGE: i32 = 40;
 const ATTACK_RANGE: i32 = 8;
 
 const MAX_ASSESS: i32 = 32;
@@ -69,8 +69,6 @@ const UI_DAMAGE_TICKS: i32 = 6;
 const UI_COLOR: i32 = 0x430;
 const UI_MAP_SIZE_X: i32 = 2 * FOV_RADIUS_PC_ + 1;
 const UI_MAP_SIZE_Y: i32 = 2 * FOV_RADIUS_PC_ + 1;
-//const UI_MAP_SIZE_X: i32 = WORLD_SIZE;
-//const UI_MAP_SIZE_Y: i32 = WORLD_SIZE;
 
 #[derive(Eq, PartialEq)]
 pub enum Input { Escape, BackTab, Char(char) }
@@ -79,9 +77,13 @@ pub enum Input { Escape, BackTab, Char(char) }
 
 // Tile
 
-const FLAG_NONE: u32 = 0;
-const FLAG_BLOCKED: u32 = 1 << 0;
-const FLAG_OBSCURE: u32 = 1 << 1;
+const FLAG_BLOCKS_VISION: u32 = 1 << 0;
+const FLAG_LIMITS_VISION: u32 = 1 << 1;
+const FLAG_BLOCKS_MOVEMENT: u32 = 1 << 2;
+
+const FLAGS_NONE: u32 = 0;
+const FLAGS_BLOCKED: u32 = FLAG_BLOCKS_MOVEMENT | FLAG_BLOCKS_VISION;
+const FLAGS_PARTLY_BLOCKED: u32 = FLAG_BLOCKS_MOVEMENT | FLAG_LIMITS_VISION;
 
 pub struct Tile {
     pub flags: u32,
@@ -92,8 +94,10 @@ static_assert_size!(Tile, 24);
 
 impl Tile {
     fn get(ch: char) -> &'static Tile { TILES.get(&ch).unwrap() }
-    pub fn blocked(&self) -> bool { self.flags & FLAG_BLOCKED != 0 }
-    pub fn obscure(&self) -> bool { self.flags & FLAG_OBSCURE != 0 }
+    pub fn casts_shadow(&self) -> bool { self.flags & FLAG_BLOCKS_MOVEMENT != 0 }
+    pub fn blocks_vision(&self) -> bool { self.flags & FLAG_BLOCKS_VISION != 0 }
+    pub fn limits_vision(&self) -> bool { self.flags & FLAG_LIMITS_VISION != 0 }
+    pub fn blocks_movement(&self) -> bool { self.flags & FLAG_BLOCKS_MOVEMENT != 0 }
 }
 
 impl PartialEq for &'static Tile {
@@ -107,11 +111,11 @@ impl Eq for &'static Tile {}
 lazy_static! {
     static ref TILES: HashMap<char, Tile> = {
         let items = [
-            ('.', (FLAG_NONE,    Glyph::wdfg('.', 0x222), "grass")),
-            ('"', (FLAG_OBSCURE, Glyph::wdfg('"', 0x120), "tall grass")),
-            ('#', (FLAG_BLOCKED, Glyph::wdfg('#', 0x010), "a tree")),
-            ('%', (FLAG_NONE,    Glyph::wdfg('%', 0x200), "flowers")),
-            ('~', (FLAG_NONE,    Glyph::wdfg('~', 0x013), "water")),
+            ('.', (FLAGS_NONE,           Glyph::wdfg('.', 0x222), "grass")),
+            ('"', (FLAG_LIMITS_VISION,   Glyph::wdfg('"', 0x120), "tall grass")),
+            ('#', (FLAGS_PARTLY_BLOCKED, Glyph::wdfg('#', 0x010), "a tree")),
+            ('%', (FLAGS_NONE,           Glyph::wdfg('%', 0x200), "flowers")),
+            ('~', (FLAGS_NONE,           Glyph::wdfg('~', 0x013), "water")),
         ];
         let mut result = HashMap::default();
         for (ch, (flags, glyph, description)) in items {
@@ -262,7 +266,7 @@ impl Board {
     pub fn get_status(&self, p: Point) -> Status {
         let Cell { eid, tile, .. } = self.get_cell(p);
         if eid.is_some() { return Status::Occupied; }
-        if tile.blocked() { Status::Blocked } else { Status::Free }
+        if tile.blocks_movement() { Status::Blocked } else { Status::Free }
     }
 
     pub fn get_tile(&self, p: Point) -> &'static Tile { self.get_cell(p).tile }
@@ -327,8 +331,8 @@ impl Board {
 
     fn set_tile(&mut self, point: Point, tile: &'static Tile) {
         let Some(cell) = self.map.entry_mut(point) else { return; };
-        let old_shadow = if cell.tile.blocked() { 1 } else { 0 };
-        let new_shadow = if tile.blocked() { 1 } else { 0 };
+        let old_shadow = if cell.tile.casts_shadow() { 1 } else { 0 };
+        let new_shadow = if tile.casts_shadow() { 1 } else { 0 };
         cell.tile = tile;
         self.update_shadow(point, new_shadow - old_shadow);
     }
@@ -409,7 +413,7 @@ impl Board {
     }
 
     fn update_edge_shadows(&mut self) {
-        let delta = if self.map.default.tile.blocked() { 1 } else { 0 };
+        let delta = if self.map.default.tile.casts_shadow() { 1 } else { 0 };
         if delta == 0 || self.shadow.is_empty() { return; }
 
         for x in -1..(self.map.size.0 + 1) {
@@ -1412,7 +1416,7 @@ impl State {
 
         loop {
             mapgen(&mut board, &mut rng);
-            if !board.get_tile(pos).blocked() { break; }
+            if !board.get_tile(pos).blocks_movement() { break; }
         }
         let input = Action::WaitForInput;
         let glyph = Glyph::wdfg('@', 0x222);
@@ -1457,8 +1461,7 @@ impl State {
     pub fn render(&self, buffer: &mut Buffer, debug: &mut String) {
         if buffer.data.is_empty() {
             let size = Point(2 * UI_MAP_SIZE_X + 2, UI_MAP_SIZE_Y + 3);
-            let mut overwrite = Matrix::new(size, ' '.into());
-            std::mem::swap(buffer, &mut overwrite);
+            let _ = std::mem::replace(buffer, Matrix::new(size, ' '.into()));
         }
 
         let entity = self.pov.and_then(
@@ -1594,7 +1597,7 @@ impl State {
             let other = cell.entity();
             let dead = other.is_some_and(|x| !x.alive);
             let stealthy = point == entity.pos && entity.stealthy && !dead;
-            let obscured = stealthy && tile.obscure();
+            let obscured = stealthy && tile.limits_vision();
             let shadowed = cell.shade();
 
             let glyph = other.map(|x| x.glyph).unwrap_or(tile.glyph);

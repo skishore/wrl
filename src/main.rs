@@ -71,8 +71,10 @@ impl Screen {
         }
         std::mem::swap(&mut self.next, &mut self.prev);
 
-        self.write_debug_message(debug)?;
-        lines_changed += 1;
+        if !debug.is_empty() {
+            self.write_debug_message(debug)?;
+            lines_changed += 1;
+        }
 
         if delta > 1.0 {
             let out = format!(

@@ -20,7 +20,8 @@ const MAX_TILE_MEMORY: usize = 4096;
 // VISION_COSINE should be (0.5 * VISION_ANGLE).cos(), checked at runtime.
 const VISION_ANGLE: f64 = TAU / 3.;
 const VISION_COSINE: f64 = 0.5;
-const VISION_RADIUS: i32 = 3;
+const _PC_VISION_RADIUS: i32 = 4;
+const NPC_VISION_RADIUS: i32 = 3;
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -80,6 +81,7 @@ impl Vision {
             1.
         };
         let cone = FOVEndpoint { pos: dir, inv_l2 };
+        let radius = if player { _PC_VISION_RADIUS } else { NPC_VISION_RADIUS };
 
         self.offset = self.center - pos;
         self.visibility.fill(-1);
@@ -97,13 +99,13 @@ impl Vision {
                 // These constant values come from Point.distanceNethack.
                 // They are chosen such that, in a field of tall grass, we'll
                 // only see cells at a distanceNethack <= kVisionRadius.
-                if first { return 100 * (VISION_RADIUS + 1) - 95 - 46 - 25; }
+                if first { return 100 * (radius + 1) - 95 - 46 - 25; }
 
                 let tile = f(p + pos);
-                if tile.blocked() { return 0; }
+                if tile.blocks_vision() { return 0; }
 
                 let parent = node.prev;
-                let obscure = tile.obscure();
+                let obscure = tile.limits_vision();
                 let diagonal = p.0 != parent.0 && p.1 != parent.1;
                 let loss = if obscure { 95 + if diagonal { 46 } else { 0 } } else { 0 };
                 let prev = self.visibility.get(parent + self.center);
@@ -206,18 +208,18 @@ impl<'a> CellResult<'a> {
     pub fn status(&self) -> Option<Status> {
         self.cell.map(|x| {
             if x.handle.is_some() { return Status::Occupied; }
-            if x.tile.blocked() { Status::Blocked } else { Status::Free }
+            if x.tile.blocks_movement() { Status::Blocked } else { Status::Free }
         })
     }
 
     // Predicates
 
     pub fn blocked(&self) -> bool {
-        self.cell.map(|x| x.tile.blocked()).unwrap_or(false)
+        self.cell.map(|x| x.tile.blocks_movement()).unwrap_or(false)
     }
 
     pub fn unblocked(&self) -> bool {
-        self.cell.map(|x| !x.tile.blocked()).unwrap_or(false)
+        self.cell.map(|x| !x.tile.blocks_movement()).unwrap_or(false)
     }
 
     pub fn unknown(&self) -> bool {
@@ -265,13 +267,13 @@ impl Knowledge {
             let shadowed = cell.shadow > 0;
             let shade = dark || shadowed;
             let nearby = (point - pos).len_l1() <= 1;
-            if (dark || (shadowed && !tile.blocked())) && !nearby {
+            if (dark || (shadowed && !tile.casts_shadow())) && !nearby {
                 continue;
             }
 
             let handle = (|| {
                 let other = board.get_entity(eid?)?;
-                if other.stealthy && tile.obscure() && !nearby { return None; }
+                if other.stealthy && tile.limits_vision() && !nearby { return None; }
                 Some(self.update_entity(me, other, board, /*seen=*/true, /*heard=*/false))
             })();
 
@@ -350,9 +352,9 @@ impl Knowledge {
             if !entity.heard { continue; }
             let lookup = self.cell_by_point.get(&entity.pos);
             let Some(h) = lookup else { continue; };
-            let cell = &self.cells[*h];
-            if cell.time != self.time { continue; }
-            if cell.tile.obscure() && (entity.pos - pos).len_l1() > 1 { continue; }
+            let CellKnowledge { tile, time, .. } = self.cells[*h];
+            if time != self.time { continue; }
+            if tile.limits_vision() && (entity.pos - pos).len_l1() > 1 { continue; }
             entity.heard = false;
         }
 
