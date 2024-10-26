@@ -149,7 +149,7 @@ pub struct CellKnowledge {
     pub time: Timestamp,
     pub visibility: i32,
 }
-static_assert_size!(CellKnowledge, 32);
+static_assert_size!(CellKnowledge, 28);
 
 pub struct EntityKnowledge {
     pub eid: EID,
