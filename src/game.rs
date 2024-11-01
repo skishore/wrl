@@ -1458,7 +1458,8 @@ impl State {
 
     pub fn update(&mut self) { update_state(self); }
 
-    pub fn render(&self, buffer: &mut Buffer, debug: &mut String) {
+    pub fn render(
+            &self, buffer: &mut Buffer, fovs: &mut Vec<i32>, debug: &mut String) {
         if buffer.data.is_empty() {
             let size = Point(2 * UI_MAP_SIZE_X + 2, UI_MAP_SIZE_Y + 3);
             let _ = std::mem::replace(buffer, Matrix::new(size, ' '.into()));
@@ -1481,7 +1482,7 @@ impl State {
 
         let frame = self.board.get_frame();
         let slice = &mut Slice::new(buffer, bound);
-        self.render_map(entity, frame, offset, slice);
+        self.render_map(entity, frame, offset, slice, fovs);
         let known = &*entity.known;
 
         if entity.eid != self.player && frame.is_none() {
@@ -1585,7 +1586,7 @@ impl State {
     }
 
     fn render_map(&self, entity: &Entity, frame: Option<&Frame>,
-                  offset: Point, slice: &mut Slice) {
+                  offset: Point, slice: &mut Slice, fovs: &mut Vec<i32>) {
         // Render each tile's base glyph, if it's known.
         let (known, player) = (&*entity.known, entity.player);
         let unseen = Glyph::wide(' ');
@@ -1635,26 +1636,12 @@ impl State {
             }
         }
 
-        // If we're still playing, animate arrows showing NPC facing.
-        if entity.cur_hp == 0 { return; }
-
-        let length = 3 as usize;
-        let mut arrows = vec![];
         for other in &known.entities {
             if other.friend || other.age > 0 { continue; }
-
-            let (pos, dir) = (other.pos, other.dir);
-            let ch = Glyph::ray(dir);
-            let diff = dir.normalize(length as f64);
-            arrows.push((ch, LOS(pos, pos + diff)));
-        }
-
-        for (ch, arrow) in &arrows {
-            let index = (self.frame / 2) % (8 * length);
-            if let Some(x) = arrow.get(index + 1) {
-                let point = Point(2 * (x.0 - offset.0), x.1 - offset.1);
-                slice.set(point, Glyph::wide(*ch));
-            }
+            fovs.push(other.pos.0 - offset.0);
+            fovs.push(other.pos.1 - offset.1);
+            fovs.push(other.dir.0);
+            fovs.push(other.dir.1);
         }
     }
 }

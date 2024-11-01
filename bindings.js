@@ -1,5 +1,5 @@
-const render = (ptr, sx, sy) => {
-  window.wasmCallbacks.render(ptr, sx, sy);
+const render = (mapData, mx, my, fovData, fovSize) => {
+  window.wasmCallbacks.render(mapData, mx, my, fovData, fovSize);
 };
 
 export {render};

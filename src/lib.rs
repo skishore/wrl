@@ -13,7 +13,7 @@ use std::cell::RefCell;
 
 use wasm_bindgen::prelude::*;
 
-use base::{Glyph, Matrix};
+use base::{Glyph, Matrix, Point};
 use game::{Input, State};
 
 thread_local! {
@@ -22,7 +22,8 @@ thread_local! {
 
 #[wasm_bindgen(module = "/bindings.js")]
 extern "C" {
-    fn render(ptr: *const Glyph, sx: i32, sy: i32) -> i32;
+    fn render(map_data: *const Glyph, mx: i32, my: i32,
+              fov_data: *const i32, fov_size: i32) -> i32;
 }
 
 #[wasm_bindgen]
@@ -43,7 +44,13 @@ pub fn tick() {
         game.update();
         let mut output = Matrix::default();
         let mut debug = String::default();
-        game.render(&mut output, &mut debug);
-        unsafe { render(output.data.as_ptr(), output.size.0, output.size.1) }
+        let mut fovs = vec![];
+        game.render(&mut output, &mut fovs, &mut debug);
+
+        let map_data = output.data.as_ptr();
+        let Point(mx, my) = output.size;
+        let fov_data = fovs.as_ptr();
+        let fov_size = fovs.len() as i32;
+        unsafe { render(map_data, mx, my, fov_data, fov_size); }
     });
 }

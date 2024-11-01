@@ -50,18 +50,50 @@ const main = async () => {
     }
   }
 
+  const arcs = [];
+
   const wasm = await init();
   window.wasmCallbacks = {
-    render: (ptr, sx, sy) => {
-      const buffer = new Uint32Array(wasm.memory.buffer, ptr, sx * sy);
+    render: (mapData, mx, my, fovData, fovSize) => {
+      const buffer = wasm.memory.buffer;
+      const mapArray = new Uint32Array(buffer, mapData, mx * my);
+      const fovArray = new Int32Array(buffer, fovData, fovSize);
+
       for (let y = 0; y < view; y++) {
         for (let x = 0; x < view; x++) {
           const sprite = map[x + y * view];
-          const glyph = buffer[(2 * x + 1) + (y + 1) * sx];
+          const glyph = mapArray[(2 * x + 1) + (y + 1) * mx];
           const code = (glyph & 0xffff) - 0xff00 + 0x20;
           sprite.texture = ascii[code];
           sprite.tint = tints[(glyph >> 16) & 0xff];
         }
+      }
+
+      const n = fovArray.length / 4;
+      const angleWidth = (2 * Math.PI) / 36;
+
+      for (const arc of arcs) arc.clear();
+
+      for (let i = 0; i < n; i++) {
+        const cx = unit * (fovArray[4 * i + 0] + 0.5);
+        const cy = unit * (fovArray[4 * i + 1] + 0.5);
+        const dx = fovArray[4 * i + 2];
+        const dy = fovArray[4 * i + 3];
+
+        if (i >= arcs.length) {
+          arcs.push(new PIXI.Graphics());
+          app.stage.addChild(arcs[i]);
+        }
+        const arc = arcs[i];
+        const angle = Math.atan2(dy, dx);
+        const ax = angle - angleWidth;
+        const ay = angle + angleWidth;
+        arc.moveTo(cx, cy);
+        arc.lineTo(cx + Math.cos(ax), cy + Math.sin(ay));
+        arc.arc(cx, cy, 12 * unit, ax, ay);
+        arc.lineTo(cx, cy);
+        arc.fill(0xffffff);
+        arc.alpha = 0.1;
       }
     },
   };
