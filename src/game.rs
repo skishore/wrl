@@ -90,7 +90,7 @@ pub struct Tile {
     pub glyph: Glyph,
     pub description: &'static str,
 }
-static_assert_size!(Tile, 24);
+static_assert_size!(Tile, 32);
 
 impl Tile {
     fn get(ch: char) -> &'static Tile { TILES.get(&ch).unwrap() }

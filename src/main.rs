@@ -112,8 +112,11 @@ impl Screen {
     fn set_foreground(&mut self, color: Color) -> io::Result<()> {
         if color == self.fg { return Ok(()); }
         self.fg = color;
-        if color.0 < 0xff {
-            write!(self.output, "{}", color::Fg(color::AnsiValue(color.0)))
+        if color != Color::default() {
+            let r = ((color.0 >> 16) & 0xff) as u8;
+            let g = ((color.0 >> 8) & 0xff) as u8;
+            let b = (color.0 & 0xff) as u8;
+            write!(self.output, "{}", color::Fg(color::Rgb(r, g, b)))
         } else {
             write!(self.output, "{}", color::Fg(color::Reset))
         }
@@ -122,8 +125,11 @@ impl Screen {
     fn set_background(&mut self, color: Color) -> io::Result<()> {
         if color == self.bg { return Ok(()); }
         self.bg = color;
-        if color.0 < 0xff {
-            write!(self.output, "{}", color::Bg(color::AnsiValue(color.0)))
+        if color != Color::default() {
+            let r = ((color.0 >> 16) & 0xff) as u8;
+            let g = ((color.0 >> 8) & 0xff) as u8;
+            let b = (color.0 & 0xff) as u8;
+            write!(self.output, "{}", color::Bg(color::Rgb(r, g, b)))
         } else {
             write!(self.output, "{}", color::Bg(color::Reset))
         }

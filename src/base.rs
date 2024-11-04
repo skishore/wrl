@@ -1,4 +1,4 @@
-use std::cmp::max;
+use std::cmp::{max, min};
 
 use rand::Rng;
 
@@ -49,30 +49,32 @@ impl Char {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct Color(pub u8);
-static_assert_size!(Color, 1);
+pub struct Color(pub u32);
+static_assert_size!(Color, 4);
 
 impl Default for Color {
-    fn default() -> Self { Self(0xff) }
+    fn default() -> Self { Self(1) }
 }
 
 impl From<i32> for Color {
     fn from(val: i32) -> Self {
-        let r = (val >> 8) & 0xf;
-        let g = (val >> 4) & 0xf;
-        let b = val & 0xf;
-        Color((16 + b + 6 * g + 36 * r) as u8)
+        let scale = 84;
+        let r = min(0xff, scale * ((val >> 8) & 0xf));
+        let g = min(0xff, scale * ((val >> 4) & 0xf));
+        let b = min(0xff, scale * ((val & 0xf)));
+        Color(((r << 16) | (g << 8) | b) as u32)
     }
 }
 
 impl Color {
-    pub fn black() -> Self { Self(16) }
-    pub fn gray() -> Self { Self::dark(5) }
-    pub fn dark(n: u8) -> Self { Self(16 + 216 + n) }
+    pub fn black() -> Self { Self(0) }
+    pub fn gray() -> Self { Self::dark(4) }
+    pub fn dark(n: u8) -> Self { Self(0x111111 * min(n, 0xf) as u32) }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
-pub struct Glyph(u32);
+pub struct Glyph(u64);
+static_assert_size!(Glyph, 8);
 
 impl From<char> for Glyph {
     fn from(val: char) -> Self { Self::char(val) }
@@ -82,7 +84,7 @@ impl Glyph {
     // Constructors
 
     pub fn new(ch: Char, fg: Color, bg: Color) -> Self {
-        Self((ch.0 as u32) | ((fg.0 as u32) << 16) | ((bg.0 as u32) << 24))
+        Self((ch.0 as u64) | ((fg.0 as u64) << 16) | ((bg.0 as u64) << 40))
     }
 
     pub fn char(ch: char) -> Self {
@@ -104,11 +106,11 @@ impl Glyph {
     }
 
     pub fn with_fg<T: Into<Color>>(&self, color: T) -> Self {
-        Self((self.0 & 0xff00ffff) | ((color.into().0 as u32) << 16))
+        Self((self.0 & 0xffffff000000ffff) | ((color.into().0 as u64) << 16))
     }
 
     pub fn with_bg<T: Into<Color>>(&self, color: T) -> Self {
-        Self((self.0 & 0x00ffffff) | ((color.into().0 as u32) << 24))
+        Self((self.0 & 0x000000ffffffffff) | ((color.into().0 as u64) << 40))
     }
 
     pub fn ray(delta: Point) -> char {
@@ -123,9 +125,9 @@ impl Glyph {
 
     pub fn ch(&self) -> Char { Char(self.0 as u16) }
 
-    pub fn fg(&self) -> Color { Color((self.0 >> 16) as u8) }
+    pub fn fg(&self) -> Color { Color((self.0 >> 16) as u32 & 0xffffff) }
 
-    pub fn bg(&self) -> Color { Color((self.0 >> 24) as u8) }
+    pub fn bg(&self) -> Color { Color((self.0 >> 40) as u32 & 0xffffff) }
 }
 
 //////////////////////////////////////////////////////////////////////////////

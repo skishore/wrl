@@ -163,7 +163,7 @@ pub struct EntityKnowledge {
     pub rival: bool,
     pub friend: bool,
 }
-static_assert_size!(EntityKnowledge, 40);
+static_assert_size!(EntityKnowledge, 48);
 
 #[derive(Default)]
 pub struct Knowledge {
