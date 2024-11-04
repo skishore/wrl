@@ -51,13 +51,13 @@ const MOVE_TIMER: i32 = 960;
 const TURN_TIMER: i32 = 120;
 const SLOWED_TURNS: f64 = 2.;
 const SNEAKY_TURNS: f64 = 2.;
-const WANDER_TURNS: f64 = 1.5;
+const WANDER_TURNS: f64 = 2.;
 
 const FOV_RADIUS_NPC: i32 = 12;
 const FOV_RADIUS_PC_: i32 = 21;
 
 const SPEED_PC_: f64 = 0.1;
-const SPEED_NPC: f64 = 0.125;
+const SPEED_NPC: f64 = 0.1;
 
 const LIGHT: Light = Light::Sun(Point(4, 1));
 const WEATHER: Weather = Weather::None;
@@ -113,7 +113,7 @@ lazy_static! {
         let items = [
             ('.', (FLAGS_NONE,           Glyph::wdfg('.', 0x222), "grass")),
             ('"', (FLAG_LIMITS_VISION,   Glyph::wdfg('"', 0x120), "tall grass")),
-            ('#', (FLAGS_PARTLY_BLOCKED, Glyph::wdfg('#', 0x010), "a tree")),
+            ('#', (FLAGS_BLOCKED,        Glyph::wdfg('#', 0x010), "a tree")),
             ('%', (FLAGS_NONE,           Glyph::wdfg('%', 0x200), "flowers")),
             ('~', (FLAGS_NONE,           Glyph::wdfg('~', 0x013), "water")),
         ];
@@ -1194,7 +1194,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                     }
                     state.board.move_entity(eid, target);
                     for (oid, heard) in updated {
-                        state.board.update_known_entity(oid, eid, heard);
+                        //state.board.update_known_entity(oid, eid, heard);
                     }
                     ActionResult::success_turns(turns)
                 }
@@ -1225,6 +1225,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                     } else {
                         other.cur_hp
                     };
+                    let damage = 0;
 
                     if other.cur_hp > damage {
                         other.cur_hp -= damage;
@@ -1377,7 +1378,7 @@ fn update_state(state: &mut State) {
         let result = act(state, eid, action);
         if player && !result.success { break; }
 
-        state.board.update_known(eid);
+        //state.board.update_known(eid);
 
         if let Some(x) = state.board.entities.get_mut(eid) { drain(x, &result); }
     }
@@ -1434,7 +1435,7 @@ impl State {
         };
         for i in 0..20 {
             if let Some(x) = pos(&board, &mut rng) {
-                let predator = i < 20;
+                let predator = i % 10 == 0;
                 let (player, speed) = (false, SPEED_NPC);
                 let glyph = Glyph::wdfg(if predator { 'R' } else { 'P' }, 0x222);
                 let args = EntityArgs { glyph, player, predator, pos: x, speed };

@@ -334,7 +334,7 @@ impl Knowledge {
         entry.glyph = other.glyph;
         entry.heard = heard;
         entry.moved = !seen;
-        entry.rival = entity.player != other.player;
+        entry.rival = !other.player && entity.predator != other.predator;
         entry.friend = friend;
 
         handle
