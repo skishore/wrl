@@ -43,7 +43,7 @@ const MAX_THIRST: i32 = 256;
 
 const MIN_FLIGHT_TURNS: i32 = 16;
 const MAX_FLIGHT_TURNS: i32 = 64;
-const MIN_FOLLOW_TURNS: i32 = 32;
+const MIN_FOLLOW_TURNS: i32 = 16;
 const MAX_FOLLOW_TURNS: i32 = 64;
 const TURN_TIMES_LIMIT: usize = 64;
 
@@ -646,12 +646,10 @@ fn attack_target(entity: &Entity, target: Point, rng: &mut RNG) -> Action {
 
     let range = ATTACK_RANGE;
     let valid = |x| has_line_of_sight(x, target, known, range);
-    if !valid(source) {
-        return path_to_target(entity, target, known, range, valid, rng);
-    } else if !move_ready(entity) {
-        return Action::Look(target - source);
+    if move_ready(entity) && valid(source) {
+        return Action::Attack(target);
     }
-    Action::Attack(target)
+    path_to_target(entity, target, known, range, valid, rng)
 }
 
 fn assess_dirs(dirs: &[Point], turns: i32, ai: &mut AIState, rng: &mut RNG) {
@@ -694,6 +692,8 @@ fn flee_from_threats(entity: &Entity, ai: &mut AIState) -> Option<BFSResult> {
     let scale = AStarLength(Point(1, 0)) as f64;
     let check = |p: Point| {
         if p == pos { return Status::Free; }
+        // WARNING: This code doesn't flag squares where we heard something,
+        // but those squares tend to be where nearby enemies are!
         known.get(p).status().unwrap_or(Status::Blocked)
     };
 
@@ -1072,8 +1072,8 @@ fn path_to_target<F: Fn(Point) -> bool>(
         let scores: Vec<_> = dirs.iter().map(
             |x| ((*x + source - target).len_nethack() - range).abs()).collect();
         let best = *scores.iter().reduce(|acc, x| min(acc, x)).unwrap();
-        let opts: Vec<_> = dirs.iter().enumerate().filter(|(i, _)| scores[*i] == best).collect();
-        return step(*sample(&opts, rng).1);
+        let opts: Vec<_> = (0..dirs.len()).filter(|i| scores[*i] == best).collect();
+        return step(dirs[*sample(&opts, rng)]);
     }
 
     let path = AStar(source, target, ASTAR_LIMIT_ATTACK, check);
@@ -1507,16 +1507,16 @@ impl State {
             }
             for eid in &self.board.entity_order {
                 let other = &self.board.entities[*eid];
-                let point = Point(2 * other.pos.0, other.pos.1);
-                slice.set(point, other.glyph);
+                let Point(x, y) = other.pos - offset;
+                slice.set(Point(2 * x, y), other.glyph);
             }
             for other in &known.entities {
                 let color = if other.age == 0 { 0x040 } else {
                     if other.moved { 0x400 } else { 0x440 }
                 };
                 let glyph = other.glyph.with_fg(Color::black()).with_bg(color);
-                let point = Point(2 * other.pos.0, other.pos.1);
-                slice.set(point, glyph);
+                let Point(x, y) = other.pos - offset;
+                slice.set(Point(2 * x, y), glyph);
             };
         }
 

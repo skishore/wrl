@@ -320,8 +320,10 @@ impl Knowledge {
             })
         });
 
+        let same = other.eid == entity.eid;
         let entry = &mut self.entities[handle];
-        let friend = other.eid == entity.eid;
+        let aggressor = |x: &Entity| x.player || x.predator;
+        let rival = !same && (aggressor(entity) != aggressor(other));
 
         // It seems strange that we would assign a future age to an entity
         // that when we learn about without seeing it. The reason we do so is
@@ -334,8 +336,8 @@ impl Knowledge {
         entry.glyph = other.glyph;
         entry.heard = heard;
         entry.moved = !seen;
-        entry.rival = !other.player && entity.predator != other.predator;
-        entry.friend = friend;
+        entry.rival = rival;
+        entry.friend = same;
 
         handle
     }
