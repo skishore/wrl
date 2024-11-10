@@ -59,9 +59,9 @@ const FOV_RADIUS_PC_: i32 = 21;
 const SPEED_PC_: f64 = 0.1;
 const SPEED_NPC: f64 = 0.1;
 
-const LIGHT: Light = Light::Sun(Point(4, 1));
+const LIGHT: Light = Light::Sun(Point(0, 0));
 const WEATHER: Weather = Weather::None;
-const WORLD_SIZE: i32 = 100;
+const WORLD_SIZE: i32 = 50;
 
 const UI_DAMAGE_FLASH: i32 = 6;
 const UI_DAMAGE_TICKS: i32 = 6;
@@ -491,9 +491,9 @@ fn mapgen(board: &mut Board, rng: &mut RNG) {
         for x in 0..size.0 {
             let point = Point(x, y);
             if walls.get(point) {
-                board.set_tile(point, wt);
+                //board.set_tile(point, wt);
             } else if grass.get(point) {
-                board.set_tile(point, gt);
+                //board.set_tile(point, gt);
             }
         }
     }
@@ -710,6 +710,9 @@ fn flee_from_threats(entity: &Entity, ai: &mut AIState) -> Option<BFSResult> {
         };
         let frontier = dirs::ALL.iter().any(|x| known.get(p + *x).unknown());
 
+        // WARNING: This heuristic can cause a piece to be "checkmated" in a
+        // corner, if the Dijkstra search below isn't wide enough for us to
+        // find a cell which is further from the threat than the corner cell.
         1.1 * (threat_distance as f64) +
         -1. * (source_distance as f64) +
         16. * scale * (blocked as i32 as f64) +
@@ -852,7 +855,7 @@ fn plan_cached(entity: &Entity, hints: &[Hint],
     let mut goals: Vec<Goal> = vec![];
     if let Some(x) = &ai.flight && !x.done {
         if x.since_seen > 0 { goals.push(Goal::Assess); }
-        if x.since_seen < x.till_assess { goals.push(Goal::Flee); }
+        if x.since_seen < max(x.till_assess, 1) { goals.push(Goal::Flee); }
     } else if ai.fight.is_some() {
         goals.push(Goal::Chase);
     } else if ai.goal == Goal::Assess {
@@ -1433,9 +1436,9 @@ impl State {
             }
             None
         };
-        for i in 0..20 {
+        for i in 0..1 {
             if let Some(x) = pos(&board, &mut rng) {
-                let predator = i % 10 == 0;
+                let predator = i % 10 == 1;
                 let (player, speed) = (false, SPEED_NPC);
                 let glyph = Glyph::wdfg(if predator { 'R' } else { 'P' }, 0x222);
                 let args = EntityArgs { glyph, player, predator, pos: x, speed };
@@ -1668,6 +1671,43 @@ mod tests {
     use super::*;
     extern crate test;
 
+    const BFS_LIMIT: i32 = 32;
+    const DIJKSTRA_LIMIT: i32 = 4096;
+
+    #[bench]
+    fn bench_bfs(b: &mut test::Bencher) {
+        let map = generate_map(2 * BFS_LIMIT);
+        b.iter(|| {
+            let done = |_: Point| { false };
+            let check = |p: Point| { map.get(&p).copied().unwrap_or(Status::Free) };
+            //let check = |_: Point| { Status::Free };
+            BFS(Point::default(), done, BFS_LIMIT, check);
+        });
+    }
+
+    #[bench]
+    fn bench_dijkstra(b: &mut test::Bencher) {
+        let map = generate_map(2 * BFS_LIMIT);
+        b.iter(|| {
+            let done = |_: Point| { false };
+            let check = |p: Point| { map.get(&p).copied().unwrap_or(Status::Free) };
+            //let check = |_: Point| { Status::Free };
+            DijkstraSearch(Point::default(), done, DIJKSTRA_LIMIT, check);
+        });
+    }
+
+    #[bench]
+    fn bench_dijkstra_map(b: &mut test::Bencher) {
+        let map = generate_map(2 * BFS_LIMIT);
+        b.iter(|| {
+            let mut result = HashMap::default();
+            result.insert(Point::default(), 0);
+            let check = |p: Point| { map.get(&p).copied().unwrap_or(Status::Free) };
+            //let check = |_: Point| { Status::Free };
+            DijkstraMap(check, DIJKSTRA_LIMIT, &mut result);
+        });
+    }
+
     #[bench]
     fn bench_state_update(b: &mut test::Bencher) {
         let mut state = State::new(Some(17));
@@ -1676,5 +1716,18 @@ mod tests {
             state.update();
             while state.board.get_frame().is_some() { state.update(); }
         });
+    }
+
+    fn generate_map(n: i32) -> HashMap<Point, Status> {
+        let mut result = HashMap::default();
+        let mut rng = RNG::seed_from_u64(17);
+        for x in -n..n + 1 {
+            for y in -n..n + 1 {
+                let f = rng.gen::<i32>().rem_euclid(100);
+                let s = if f < 20 { Status::Blocked } else { Status::Free };
+                result.insert(Point(x, y), s);
+            }
+        }
+        result
     }
 }

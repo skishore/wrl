@@ -68,8 +68,8 @@ impl From<i32> for Color {
 
 impl Color {
     pub fn black() -> Self { Self(0) }
-    pub fn gray() -> Self { Self::dark(4) }
-    pub fn dark(n: u8) -> Self { Self(0x111111 * min(n, 0xf) as u32) }
+    pub fn gray() -> Self { Self::dark(0x44) }
+    pub fn dark(n: u8) -> Self { Self(0x010101 * n as u32) }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
