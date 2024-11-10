@@ -15,7 +15,7 @@ use crate::effect::{Effect, Event, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
 use crate::knowledge::{EntityKnowledge, Knowledge, Timestamp, Vision, VisionArgs};
 use crate::pathing::{AStar, AStarLength, BFS, BFSResult, Status};
-use crate::pathing::{Dijkstra, DijkstraMap, DijkstraSearch};
+use crate::pathing::{Dijkstra, DijkstraMap, DijkstraSearch, FastDijkstraMap};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -1673,6 +1673,20 @@ mod tests {
 
     const BFS_LIMIT: i32 = 32;
     const DIJKSTRA_LIMIT: i32 = 4096;
+
+    #[bench]
+    fn bench_a(b: &mut test::Bencher) {
+        let map = generate_map(2 * BFS_LIMIT);
+        b.iter(|| {
+            let mut result = HashMap::default();
+            result.insert(Point::default(), 0);
+            let check = |p: Point| { map.get(&p).copied().unwrap_or(Status::Free) };
+            //let check = |_: Point| { Status::Free };
+            FastDijkstraMap(Point::default(), check, DIJKSTRA_LIMIT, 2 * BFS_LIMIT);
+            //FastDijkstraMap(Point::default(), check, 16, 2);
+            //assert!(false);
+        });
+    }
 
     #[bench]
     fn bench_bfs(b: &mut test::Bencher) {

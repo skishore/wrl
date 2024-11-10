@@ -413,3 +413,127 @@ pub fn DijkstraMap<F: Fn(Point) -> Status>(
         result.insert(node.pos, node.score);
     }
 }
+
+//////////////////////////////////////////////////////////////////////////////
+
+// FastDijkstraMap
+
+const DIJKSTRA_COST: i32 = 5;
+const DIJKSTRA_DIAGONAL_PENALTY: i32 = 2;
+const DIJKSTRA_OCCUPIED_PENALTY: i32 = 20;
+
+#[repr(C)]
+#[derive(Clone, Default)]
+struct FastDijkstraLink {
+    next: i32,
+    prev: i32,
+}
+
+#[repr(C)]
+#[derive(Clone, Default)]
+struct FastDijkstraNode {
+    link: FastDijkstraLink,
+    point: Point,
+    score: i32,
+    status: Option<Status>,
+}
+
+struct FastDijkstraState {
+    lists: Vec<FastDijkstraLink>,
+    map: Matrix<FastDijkstraNode>,
+}
+
+impl FastDijkstraState {
+    fn link(&mut self, base: i32, score: i32) -> &mut FastDijkstraLink {
+        if base == 0 { return &mut self.lists[score as usize]; }
+        &mut self.map.data[base as usize - 1].link
+    }
+}
+
+#[allow(non_snake_case)]
+pub fn FastDijkstraMap<F: Fn(Point) -> Status>(
+        source: Point, check: F, cells: i32, limit: i32) {
+    let n = 2 * limit + 1;
+    let initial = Point(limit, limit);
+    let offset = source - initial;
+
+    let mut checked = 0;
+    let mut current = 0;
+    let mut finished = 0;
+    let map = Matrix::new(Point(n, n), FastDijkstraNode::default());
+    let mut state = FastDijkstraState { lists: vec![], map };
+
+    let init = |state: &mut FastDijkstraState,
+                index: usize, point: Point, score: i32, status: Status| {
+        while state.lists.len() <= score as usize {
+            state.lists.push(FastDijkstraLink::default())
+        }
+
+        // Add the entry to the tail of its selected list.
+        let head = &mut state.lists[score as usize];
+        let prev = head.prev;
+        head.prev = (index as i32) + 1;
+        let tail = state.link(prev, score);
+        tail.next = (index as i32) + 1;
+
+        let entry = &mut state.map.data[index];
+        entry.link.prev = prev;
+        entry.link.next = 0;
+        entry.point = point;
+        entry.score = score;
+        entry.status = Some(status);
+    };
+
+    let index = state.map.index(initial);
+    init(&mut state, index, initial, 0, Status::Free);
+
+    for _ in 0..cells {
+        let lists = &state.lists;
+        while current < lists.len() && lists[current].next == 0 { current += 1; }
+        if current == lists.len() { break; }
+
+        // Remove the entry at the head of the selected list.
+        let head = &mut state.lists[current];
+        let prev = head.next as usize - 1;
+        let next = state.map.data[prev].link.next;
+        head.next = next;
+        let next = state.link(next, current as i32);
+        next.prev = 0;
+
+        let node = &state.map.data[prev];
+        let (prev_point, prev_score) = (node.point, node.score);
+        //println!("Node {}: {:?} @ {}", finished, prev_point + offset, prev_score);
+        finished += 1;
+
+        for dir in &dirs::ALL {
+            let point = prev_point + *dir;
+            if !state.map.contains(point) { continue; }
+
+            let index = state.map.index(point);
+            let entry = &mut state.map.data[index];
+            let visited = entry.status.is_some();
+            let status = entry.status.unwrap_or_else(|| check(point + offset));
+
+            if !visited { checked += 1; }
+            entry.status = Some(status);
+            if status == Status::Blocked { continue; }
+
+            let diagonal = dir.0 != 0 && dir.1 != 0;
+            let occipied = status == Status::Occupied;
+            let score = prev_score + DIJKSTRA_COST +
+                        if diagonal { DIJKSTRA_DIAGONAL_PENALTY } else { 0 } +
+                        if occipied { DIJKSTRA_OCCUPIED_PENALTY } else { 0 };
+            if visited && score >= entry.score { continue; }
+
+            if visited {
+                let score = entry.score;
+                let FastDijkstraLink { next, prev } = entry.link;
+                state.link(next, score).prev = prev;
+                state.link(prev, score).next = next;
+            }
+            init(&mut state, index, point, score, status);
+        }
+    }
+
+    //println!("FastDijkstraMap: done. Checked {} nodes; finished {}.", checked, finished);
+}
