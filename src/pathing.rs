@@ -452,7 +452,7 @@ impl FastDijkstraState {
 
 #[allow(non_snake_case)]
 pub fn FastDijkstraMap<F: Fn(Point) -> Status>(
-        source: Point, check: F, cells: i32, limit: i32) {
+        source: Point, check: F, cells: i32, limit: i32) -> HashMap<Point, i32> {
     let n = 2 * limit + 1;
     let initial = Point(limit, limit);
     let offset = source - initial;
@@ -462,6 +462,7 @@ pub fn FastDijkstraMap<F: Fn(Point) -> Status>(
     let mut finished = 0;
     let map = Matrix::new(Point(n, n), FastDijkstraNode::default());
     let mut state = FastDijkstraState { lists: vec![], map };
+    let mut result = HashMap::default();
 
     let init = |state: &mut FastDijkstraState,
                 index: usize, point: Point, score: i32, status: Status| {
@@ -503,7 +504,7 @@ pub fn FastDijkstraMap<F: Fn(Point) -> Status>(
         let node = &state.map.data[prev];
         let (prev_point, prev_score) = (node.point, node.score);
         //println!("Node {}: {:?} @ {}", finished, prev_point + offset, prev_score);
-        finished += 1;
+        result.insert(prev_point + offset, prev_score);
 
         for dir in &dirs::ALL {
             let point = prev_point + *dir;
@@ -536,4 +537,5 @@ pub fn FastDijkstraMap<F: Fn(Point) -> Status>(
     }
 
     //println!("FastDijkstraMap: done. Checked {} nodes; finished {}.", checked, finished);
+    result
 }

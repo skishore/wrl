@@ -6,11 +6,12 @@ use std::mem::{replace, swap};
 use lazy_static::lazy_static;
 use rand::{Rng, SeedableRng};
 use rand_distr::{Distribution, Normal};
+use rand_distr::num_traits::Pow;
 
 use crate::static_assert_size;
 use crate::base::{Buffer, Color, Glyph, Rect, Slice};
 use crate::base::{HashMap, HashSet, LOS, Matrix, Point, dirs};
-use crate::base::{sample, RNG};
+use crate::base::{sample, weighted, RNG};
 use crate::effect::{Effect, Event, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
 use crate::knowledge::{EntityKnowledge, Knowledge, Timestamp, Vision, VisionArgs};
@@ -59,16 +60,16 @@ const FOV_RADIUS_PC_: i32 = 21;
 const SPEED_PC_: f64 = 0.1;
 const SPEED_NPC: f64 = 0.1;
 
-const LIGHT: Light = Light::Sun(Point(0, 0));
+const LIGHT: Light = Light::Sun(Point(4, 1));
 const WEATHER: Weather = Weather::None;
-const WORLD_SIZE: i32 = 50;
+const WORLD_SIZE: i32 = 100;
 
 const UI_DAMAGE_FLASH: i32 = 6;
 const UI_DAMAGE_TICKS: i32 = 6;
 
 const UI_COLOR: i32 = 0x430;
-const UI_MAP_SIZE_X: i32 = 2 * FOV_RADIUS_PC_ + 1;
-const UI_MAP_SIZE_Y: i32 = 2 * FOV_RADIUS_PC_ + 1;
+const UI_MAP_SIZE_X: i32 = WORLD_SIZE;
+const UI_MAP_SIZE_Y: i32 = WORLD_SIZE;
 
 #[derive(Eq, PartialEq)]
 pub enum Input { Escape, BackTab, Char(char) }
@@ -491,9 +492,9 @@ fn mapgen(board: &mut Board, rng: &mut RNG) {
         for x in 0..size.0 {
             let point = Point(x, y);
             if walls.get(point) {
-                //board.set_tile(point, wt);
+                board.set_tile(point, wt);
             } else if grass.get(point) {
-                //board.set_tile(point, gt);
+                board.set_tile(point, gt);
             }
         }
     }
@@ -604,22 +605,34 @@ fn coerce(source: Point, path: &[Point]) -> BFSResult {
     }
 }
 
-fn explore(entity: &Entity) -> Option<BFSResult> {
-    let (known, pos) = (&*entity.known, entity.pos);
+fn explore(entity: &Entity, rng: &mut RNG) -> Option<BFSResult> {
+    let (known, pos, dir) = (&*entity.known, entity.pos, entity.dir);
     let check = |p: Point| {
         if p == pos { return Status::Free; }
         known.get(p).status().unwrap_or(Status::Free)
     };
-    let done1 = |p: Point| {
-        if !known.get(p).unknown() { return false; }
-        dirs::ALL.iter().any(|x| known.get(p + *x).unblocked())
-    };
-    let done0 = |p: Point| {
-        done1(p) && dirs::ALL.iter().all(|x| !known.get(p + *x).blocked())
+    let map = FastDijkstraMap(pos, check, 4096, 64);
+    if map.is_empty() { return None; }
+
+    let score = |p: Point, distance: i32| {
+        if p == pos { return 0. };
+        if !known.get(p).unknown() { return 0. }
+        1. / (distance as f64).pow(3)
+        //let age = (known.get(p).age() as f64 + 1.).log2();
+        //let cos = (p - pos).dot(dir) as f64 / (p - pos).len_l2() / dir.len_l2();
+        //age * (cos + 1.) * (1. / (distance as f64).pow(2))
     };
 
-    BFS(pos, done0, BFS_LIMIT_WANDER, check).or_else(||
-    BFS(pos, done1, BFS_LIMIT_WANDER, check))
+    let mut values = vec![];
+    for (p, distance) in map.iter() {
+        let score = (1e6 * score(*p, *distance)) as i32;
+        if score > 0 { values.push((score, *p)); }
+    }
+    if values.is_empty() { return None; }
+
+    let target = *weighted(&values, rng);
+    let path = AStar(pos, target, 1024, check)?;
+    Some(coerce(pos, &path))
 }
 
 fn search_around(entity: &Entity, source: Point, age: i32, bias: Point) -> Option<BFSResult> {
@@ -1001,7 +1014,7 @@ fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
 
         if result.dirs.is_empty() && ai.till_assess == 0 {
             (ai.goal, result) = (Goal::Assess, coerce(pos, &[]));
-        } else if result.dirs.is_empty() && let Some(x) = explore(entity) {
+        } else if result.dirs.is_empty() && let Some(x) = explore(entity, rng) {
             (ai.goal, result) = (Goal::Explore, x);
         }
         result
@@ -1016,14 +1029,14 @@ fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
     if result.targets.is_empty() { return fallback(result, rng); }
 
     ai.debug_targets = result.targets.clone();
-    let mut target = *result.targets.select_nth_unstable_by_key(
+    let target = *result.targets.select_nth_unstable_by_key(
         0, |x| (*x - pos).len_l2_squared()).1;
-    if ai.goal == Goal::Explore {
-        for _ in 0..EXPLORE_FUZZ {
-            let candidate = target + *sample(&dirs::ALL, rng);
-            if known.get(candidate).unknown() { target = candidate; }
-        }
-    }
+    //if ai.goal == Goal::Explore {
+    //    for _ in 0..EXPLORE_FUZZ {
+    //        let candidate = target + *sample(&dirs::ALL, rng);
+    //        if known.get(candidate).unknown() { target = candidate; }
+    //    }
+    //}
 
     if let Some(path) = AStar(pos, target, ASTAR_LIMIT_WANDER, check) {
         let kind = StepKind::Move;
@@ -1436,9 +1449,9 @@ impl State {
             }
             None
         };
-        for i in 0..1 {
+        for i in 0..20 {
             if let Some(x) = pos(&board, &mut rng) {
-                let predator = i % 10 == 1;
+                let predator = i % 10 == 0;
                 let (player, speed) = (false, SPEED_NPC);
                 let glyph = Glyph::wdfg(if predator { 'R' } else { 'P' }, 0x222);
                 let args = EntityArgs { glyph, player, predator, pos: x, speed };
@@ -1471,6 +1484,7 @@ impl State {
         let entity = self.pov.and_then(
             |x| self.board.get_entity(x)).unwrap_or(self.get_player());
         let offset = entity.pos - Point(UI_MAP_SIZE_X / 2, UI_MAP_SIZE_Y / 2);
+        let offset = Point::default();
 
         let size = Point(2 * UI_MAP_SIZE_X, UI_MAP_SIZE_Y);
         let bound = Rect { root: Point(0, size.1 + 2), size: Point(size.0, 1) };
