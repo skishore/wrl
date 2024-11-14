@@ -323,7 +323,7 @@ impl Knowledge {
         let same = other.eid == entity.eid;
         let entry = &mut self.entities[handle];
         let aggressor = |x: &Entity| x.player || x.predator;
-        let rival = !same && (aggressor(entity) != aggressor(other));
+        let rival = !same && (aggressor(entity) != aggressor(other)) && false;
 
         // It seems strange that we would assign a future age to an entity
         // that when we learn about without seeing it. The reason we do so is

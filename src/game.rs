@@ -566,6 +566,7 @@ pub struct AIState {
     till_hunger: i32,
     till_thirst: i32,
     debug_targets: Vec<Point>,
+    debug_utility: HashMap<Point, u8>,
 }
 
 impl AIState {
@@ -582,6 +583,7 @@ impl AIState {
             till_hunger: rng.gen::<i32>().rem_euclid(MAX_HUNGER),
             till_thirst: rng.gen::<i32>().rem_euclid(MAX_THIRST),
             debug_targets: vec![],
+            debug_utility: Default::default(),
         }
     }
 
@@ -605,30 +607,49 @@ fn coerce(source: Point, path: &[Point]) -> BFSResult {
     }
 }
 
-fn explore(entity: &Entity, rng: &mut RNG) -> Option<BFSResult> {
+fn explore(entity: &Entity, rng: &mut RNG,
+           utility: &mut HashMap<Point, u8>) -> Option<BFSResult> {
+    utility.clear();
     let (known, pos, dir) = (&*entity.known, entity.pos, entity.dir);
     let check = |p: Point| {
         if p == pos { return Status::Free; }
         known.get(p).status().unwrap_or(Status::Free)
     };
-    let map = FastDijkstraMap(pos, check, 4096, 64);
+    let map = FastDijkstraMap(pos, check, 1024, 64);
     if map.is_empty() { return None; }
 
-    let score = |p: Point, distance: i32| {
-        if p == pos { return 0. };
-        if !known.get(p).unknown() { return 0. }
-        1. / (distance as f64).pow(3)
-        //let age = (known.get(p).age() as f64 + 1.).log2();
+    let score = |p: Point, distance: i32| -> f64 {
+        if p == pos { return 0.; }
+
+        let bonus0 = known.get(p).unknown();
+        let bonus1 = dirs::ALL.iter().any(|x| known.get(p + *x).unblocked());
+        let bonus2 = dirs::ALL.iter().all(|x| !known.get(p + *x).blocked());
+
+        let base = (if bonus0 {  1.0 } else { 0.0 }) *
+                   (if bonus1 {  8.0 } else { 1.0 }) *
+                   (if bonus2 { 64.0 } else { 1.0 });
+        base / (distance as f64).pow(4)
+
+        //let cell = known.get(p);
+        //let age = if cell.unknown() { 0xffff } else { cell.age() };
         //let cos = (p - pos).dot(dir) as f64 / (p - pos).len_l2() / dir.len_l2();
-        //age * (cos + 1.) * (1. / (distance as f64).pow(2))
+        //(age as f64) * (cos + 1.).pow(3) / (distance as f64)
     };
 
-    let mut values = vec![];
-    for (p, distance) in map.iter() {
-        let score = (1e6 * score(*p, *distance)) as i32;
-        if score > 0 { values.push((score, *p)); }
-    }
+    let scores: Vec<_> = map.iter().map(
+        |(p, distance)| (*p, score(*p, *distance))).collect();
+    let max = scores.iter().fold(
+        0., |acc, x| if acc > x.1 { acc } else { x.1 });
+    if max == 0. { return None; }
+
+    let inverse = 255. / max;
+    let values: Vec<_> = scores.into_iter().map(
+        |(p, score)| (min((inverse * score) as i32, 255), p)).collect();
     if values.is_empty() { return None; }
+
+    for (score, point) in &values {
+        utility.insert(*point, *score as u8);
+    }
 
     let target = *weighted(&values, rng);
     let path = AStar(pos, target, 1024, check)?;
@@ -1014,7 +1035,8 @@ fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
 
         if result.dirs.is_empty() && ai.till_assess == 0 {
             (ai.goal, result) = (Goal::Assess, coerce(pos, &[]));
-        } else if result.dirs.is_empty() && let Some(x) = explore(entity, rng) {
+        } else if result.dirs.is_empty() &&
+               let Some(x) = explore(entity, rng, &mut ai.debug_utility) {
             (ai.goal, result) = (Goal::Explore, x);
         }
         result
@@ -1505,6 +1527,7 @@ impl State {
         if entity.eid != self.player && frame.is_none() {
             let mut ai = entity.ai.clone();
             while ai.turn_times.len() > 2 { ai.turn_times.pop_back(); }
+            ai.debug_utility.clear();
             ai.plan.clear();
             *debug = format!("{:?}", ai);
 
@@ -1515,6 +1538,12 @@ impl State {
                 let mut glyph = slice.get(point);
                 if glyph.ch() == Glyph::wide(' ').ch() { glyph = Glyph::wide('.'); }
                 slice.set(point, glyph.with_fg(0x400));
+            }
+            for (point, score) in &entity.ai.debug_utility {
+                let Point(x, y) = *point - offset;
+                let point = Point(2 * x, y);
+                let glyph = slice.get(point);
+                slice.set(point, glyph.with_bg(Color::dark(*score)));
             }
             for target in &entity.ai.debug_targets {
                 let Point(x, y) = *target - offset;
