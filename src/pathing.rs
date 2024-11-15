@@ -7,7 +7,7 @@ use crate::base::{HashMap, LOS, Matrix, Point, dirs};
 // BFS (breadth-first search)
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-pub enum Status { Free, Blocked, Occupied }
+pub enum Status { Free, Blocked, Occupied, Unknown }
 
 #[derive(Default)]
 pub struct BFSResult {
@@ -457,9 +457,7 @@ pub fn FastDijkstraMap<F: Fn(Point) -> Status>(
     let initial = Point(limit, limit);
     let offset = source - initial;
 
-    let mut checked = 0;
     let mut current = 0;
-    let mut finished = 0;
     let map = Matrix::new(Point(n, n), FastDijkstraNode::default());
     let mut state = FastDijkstraState { lists: vec![], map };
     let mut result = HashMap::default();
@@ -503,8 +501,8 @@ pub fn FastDijkstraMap<F: Fn(Point) -> Status>(
 
         let node = &state.map.data[prev];
         let (prev_point, prev_score) = (node.point, node.score);
-        //println!("Node {}: {:?} @ {}", finished, prev_point + offset, prev_score);
         result.insert(prev_point + offset, prev_score);
+        if node.status == Some(Status::Unknown) { continue; }
 
         for dir in &dirs::ALL {
             let point = prev_point + *dir;
@@ -515,7 +513,6 @@ pub fn FastDijkstraMap<F: Fn(Point) -> Status>(
             let visited = entry.status.is_some();
             let status = entry.status.unwrap_or_else(|| check(point + offset));
 
-            if !visited { checked += 1; }
             entry.status = Some(status);
             if status == Status::Blocked { continue; }
 
@@ -536,6 +533,5 @@ pub fn FastDijkstraMap<F: Fn(Point) -> Status>(
         }
     }
 
-    //println!("FastDijkstraMap: done. Checked {} nodes; finished {}.", checked, finished);
     result
 }

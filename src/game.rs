@@ -32,8 +32,8 @@ const FLIGHT_MAP_LIMIT: i32 = 256;
 
 const ASSESS_ANGLE: f64 = TAU / 18.;
 const ASSESS_STEPS: i32 = 4;
-const ASSESS_TURNS_EXPLORE: i32 = 4;
-const ASSESS_TURNS_FLIGHT: i32 = 1;
+const ASSESS_TURNS_EXPLORE: i32 = 8;
+const ASSESS_TURNS_FLIGHT: i32 = 2;
 
 const ATTACK_DAMAGE: i32 = 40;
 const ATTACK_RANGE: i32 = 8;
@@ -611,29 +611,31 @@ fn explore(entity: &Entity, rng: &mut RNG,
            utility: &mut HashMap<Point, u8>) -> Option<BFSResult> {
     utility.clear();
     let (known, pos, dir) = (&*entity.known, entity.pos, entity.dir);
-    let check = |p: Point| {
-        if p == pos { return Status::Free; }
-        known.get(p).status().unwrap_or(Status::Free)
-    };
+    let check = |p: Point| known.get(p).status();
     let map = FastDijkstraMap(pos, check, 1024, 64);
     if map.is_empty() { return None; }
 
-    let score = |p: Point, distance: i32| -> f64 {
-        if p == pos { return 0.; }
+    let mut min_age = std::i32::MAX;
+    for point in map.keys() {
+        let age = known.get(*point).age();
+        if age > 0 { min_age = min(min_age, age); }
+    }
+    if min_age == std::i32::MAX { min_age = 1; }
 
-        let bonus0 = known.get(p).unknown();
+    let score = |p: Point, distance: i32| -> f64 {
+        if distance == 0 { return 0.; }
+        let age = known.get(p).age();
+
+        let bonus0 = 1. / 65536. * ((age as f64 / min_age as f64) + 1. / 16.);
         let bonus1 = dirs::ALL.iter().any(|x| known.get(p + *x).unblocked());
         let bonus2 = dirs::ALL.iter().all(|x| !known.get(p + *x).blocked());
 
-        let base = (if bonus0 {  1.0 } else { 0.0 }) *
+        let cos = (p - pos).dot(dir) as f64 / (p - pos).len_l2() / dir.len_l2();
+
+        let base = (if bonus0 > 1. { 1. } else { bonus0 }) *
                    (if bonus1 {  8.0 } else { 1.0 }) *
                    (if bonus2 { 64.0 } else { 1.0 });
-        base / (distance as f64).pow(4)
-
-        //let cell = known.get(p);
-        //let age = if cell.unknown() { 0xffff } else { cell.age() };
-        //let cos = (p - pos).dot(dir) as f64 / (p - pos).len_l2() / dir.len_l2();
-        //(age as f64) * (cos + 1.).pow(3) / (distance as f64)
+        base * (cos + 1.).pow(4) / (distance as f64).pow(2)
     };
 
     let scores: Vec<_> = map.iter().map(
@@ -658,10 +660,7 @@ fn explore(entity: &Entity, rng: &mut RNG,
 
 fn search_around(entity: &Entity, source: Point, age: i32, bias: Point) -> Option<BFSResult> {
     let (known, pos) = (&*entity.known, entity.pos);
-    let check = |p: Point| {
-        if p == pos { return Status::Free; }
-        known.get(p).status().unwrap_or(Status::Free)
-    };
+    let check = |p: Point| known.get(p).status();
     let done = |p: Point| {
         let cell = known.get(p);
         if cell.age() < age || cell.blocked() { return false; }
@@ -724,12 +723,10 @@ fn flee_from_threats(entity: &Entity, ai: &mut AIState) -> Option<BFSResult> {
 
     let (known, pos) = (&*entity.known, entity.pos);
     let scale = AStarLength(Point(1, 0)) as f64;
-    let check = |p: Point| {
-        if p == pos { return Status::Free; }
-        // WARNING: This code doesn't flag squares where we heard something,
-        // but those squares tend to be where nearby enemies are!
-        known.get(p).status().unwrap_or(Status::Blocked)
-    };
+
+    // WARNING: This code doesn't flag squares where we heard something,
+    // but those squares tend to be where nearby enemies are!
+    let check = |p: Point| known.get(p).status();
 
     let score = |p: Point, source_distance: i32| {
         let mut threat = Point::default();
@@ -911,7 +908,7 @@ fn plan_cached(entity: &Entity, hints: &[Hint],
             |x| if x.kind == StepKind::Move { Some(x.target) } else { None });
         if let Some(y) = target && AStarLength(pos - *x) < AStarLength(pos - y) {
             let los = LOS(pos, *x);
-            let check = |p: Point| { known.get(p).status().unwrap_or(Status::Free) };
+            let check = |p: Point| known.get(p).status();
             let free = (1..los.len() - 1).all(|i| check(los[i]) == Status::Free);
             if free { return None; }
         }
@@ -928,10 +925,11 @@ fn plan_cached(entity: &Entity, hints: &[Hint],
         StepKind::Drink => point_matches_goal(Goal::Drink, target),
         StepKind::Eat => point_matches_goal(Goal::Eat, target),
         StepKind::Look => true,
-        StepKind::Move => match known.get(target).status().unwrap_or(Status::Free) {
+        StepKind::Move => match known.get(target).status() {
             Status::Occupied => target != next.target,
             Status::Blocked  => false,
             Status::Free     => true,
+            Status::Unknown  => true,
         }
     };
     if !ai.plan.iter().all(|x| step_valid(*x)) { return None; }
@@ -987,11 +985,7 @@ fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
     ai.debug_targets.clear();
 
     let (known, pos) = (&*entity.known, entity.pos);
-
-    let check = |p: Point| {
-        if p == pos { return Status::Free; }
-        known.get(p).status().unwrap_or(Status::Free)
-    };
+    let check = |p: Point| known.get(p).status();
 
     let mut result = {
         let mut result = BFSResult::default();
@@ -1085,17 +1079,14 @@ fn has_line_of_sight(source: Point, target: Point, known: &Knowledge, range: i32
     let last = los.len() - 1;
     los.iter().enumerate().all(|(i, p)| {
         if i == 0 || i == last { return true; }
-        known.get(*p).status() == Some(Status::Free)
+        known.get(*p).status() == Status::Free
     })
 }
 
 fn path_to_target<F: Fn(Point) -> bool>(
         entity: &Entity, target: Point, known: &Knowledge,
         range: i32, valid: F, rng: &mut RNG) -> Action {
-    let check = |p: Point| {
-        if p == entity.pos { return Status::Free; }
-        known.get(p).status().unwrap_or(Status::Free)
-    };
+    let check = |p: Point| known.get(p).status();
     let source = entity.pos;
     let result = BFS(source, &valid, BFS_LIMIT_ATTACK, check);
     let mut dirs = result.map(|x| x.dirs).unwrap_or_default();
@@ -1211,7 +1202,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let target = source + step;
 
             match state.board.get_status(target) {
-                Status::Blocked => {
+                Status::Blocked | Status::Unknown => {
                     state.board.entities[eid].dir = step;
                     ActionResult::failure()
                 }

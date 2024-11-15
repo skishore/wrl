@@ -205,11 +205,10 @@ impl<'a> CellResult<'a> {
         self.cell.and_then(|x| x.handle.map(|y| &self.root.entities[y]))
     }
 
-    pub fn status(&self) -> Option<Status> {
-        self.cell.map(|x| {
-            if x.handle.is_some() { return Status::Occupied; }
-            if x.tile.blocks_movement() { Status::Blocked } else { Status::Free }
-        })
+    pub fn status(&self) -> Status {
+        let Some(x) = self.cell else { return Status::Unknown; };
+        if x.handle.is_some() { return Status::Occupied; }
+        if x.tile.blocks_movement() { Status::Blocked } else { Status::Free }
     }
 
     // Predicates
@@ -323,7 +322,7 @@ impl Knowledge {
         let same = other.eid == entity.eid;
         let entry = &mut self.entities[handle];
         let aggressor = |x: &Entity| x.player || x.predator;
-        let rival = !same && (aggressor(entity) != aggressor(other)) && false;
+        let rival = !same && (aggressor(entity) != aggressor(other));
 
         // It seems strange that we would assign a future age to an entity
         // that when we learn about without seeing it. The reason we do so is
