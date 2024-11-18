@@ -33,7 +33,7 @@ const FLIGHT_MAP_LIMIT: i32 = 256;
 const ASSESS_ANGLE: f64 = TAU / 18.;
 const ASSESS_STEPS: i32 = 4;
 const ASSESS_TURNS_EXPLORE: i32 = 8;
-const ASSESS_TURNS_FLIGHT: i32 = 2;
+const ASSESS_TURNS_FLIGHT: i32 = 1;
 
 const ATTACK_DAMAGE: i32 = 40;
 const ATTACK_RANGE: i32 = 8;
@@ -41,6 +41,9 @@ const ATTACK_RANGE: i32 = 8;
 const MAX_ASSESS: i32 = 32;
 const MAX_HUNGER: i32 = 1024;
 const MAX_THIRST: i32 = 256;
+
+const MIN_RESTED: i32 = 2048;
+const MAX_RESTED: i32 = 4096;
 
 const MIN_FLIGHT_TURNS: i32 = 16;
 const MAX_FLIGHT_TURNS: i32 = 64;
@@ -176,8 +179,7 @@ pub struct Board {
 impl Board {
     fn new(size: Point, light: Light, weather: Weather) -> Self {
         let shadow = match light {
-            Light::Sun(x) =>
-                LOS(Point::default(), x).into_iter().skip(1).collect(),
+            Light::Sun(x) => LOS(Point::default(), x).into_iter().skip(1).collect(),
             Light::None => vec![],
         };
         let rain = match weather {
@@ -527,10 +529,10 @@ fn mapgen(board: &mut Board, rng: &mut RNG) {
 // AI
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-enum Goal { Assess, Chase, Drink, Eat, Explore, Flee }
+enum Goal { Assess, Chase, Drink, Eat, Explore, Flee, Rest }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-enum StepKind { Drink, Eat, Move, Look }
+enum StepKind { Drink, Eat, Move, Look, Rest }
 
 #[derive(Clone, Copy, Debug)]
 struct Step { kind: StepKind, target: Point }
@@ -565,6 +567,7 @@ pub struct AIState {
     till_assess: i32,
     till_hunger: i32,
     till_thirst: i32,
+    till_rested: i32,
     debug_targets: Vec<Point>,
     debug_utility: HashMap<Point, u8>,
 }
@@ -582,6 +585,7 @@ impl AIState {
             till_assess: rng.gen::<i32>().rem_euclid(MAX_ASSESS),
             till_hunger: rng.gen::<i32>().rem_euclid(MAX_HUNGER),
             till_thirst: rng.gen::<i32>().rem_euclid(MAX_THIRST),
+            till_rested: rng.gen::<i32>().rem_euclid(MAX_RESTED),
             debug_targets: vec![],
             debug_utility: Default::default(),
         }
@@ -601,7 +605,7 @@ impl AIState {
 
 fn coerce(source: Point, path: &[Point]) -> BFSResult {
     if path.is_empty() {
-        BFSResult { dirs: vec![Point::default()], targets: vec![source] }
+        BFSResult { dirs: vec![dirs::NONE], targets: vec![source] }
     } else {
         BFSResult { dirs: vec![path[0] - source], targets: vec![path[path.len() - 1]] }
     }
@@ -719,7 +723,7 @@ fn assess_nearby(entity: &Entity, ai: &mut AIState, rng: &mut RNG) {
 fn flee_from_threats(entity: &Entity, ai: &mut AIState) -> Option<BFSResult> {
     let Some(flight) = &ai.flight else { return None };
     if flight.done || flight.threats.is_empty() { return None; }
-    if flight.since_seen >= flight.till_assess { return None; }
+    if flight.since_seen >= max(flight.till_assess, 1) { return None; }
 
     let (known, pos) = (&*entity.known, entity.pos);
     let scale = AStarLength(Point(1, 0)) as f64;
@@ -776,7 +780,7 @@ fn flee_from_threats(entity: &Entity, ai: &mut AIState) -> Option<BFSResult> {
 
     let mut target = pos;
     let mut target_score = std::f64::MIN;
-    let mut dir = Point::default();
+    let mut dir = dirs::NONE;
     let mut dir_score = std::f64::MIN;
     for (k, v) in &map {
         let s = score(*k, *v);
@@ -797,6 +801,7 @@ fn update_ai_state(entity: &Entity, hints: &[Hint], ai: &mut AIState) {
     ai.till_assess = max(0, ai.till_assess - 1);
     ai.till_hunger = max(0, ai.till_hunger - 1);
     ai.till_thirst = max(0, ai.till_thirst - 1);
+    ai.till_rested = max(0, ai.till_rested - 1);
 
     let (known, pos) = (&*entity.known, entity.pos);
     let last_turn_age = known.time - ai.time;
@@ -830,13 +835,13 @@ fn update_ai_state(entity: &Entity, hints: &[Hint], ai: &mut AIState) {
         if !targets.is_empty() {
             targets.sort_unstable_by_key(
                 |x| (x.age, (x.pos - pos).len_l2_squared()));
-            let EntityKnowledge { age, dir, pos: target, .. } = *targets[0];
+            let EntityKnowledge { age, pos: target, .. } = *targets[0];
             let reset = age < last_turn_age;
             if age < limit {
                 let (bias, search_turns) = if !reset && let Some(x) = fight {
                     (x.bias, x.search_turns + 1)
                 } else {
-                    (target - pos + dir.normalize(4.), 0)
+                    (target - pos, 0)
                 };
                 ai.fight = Some(FightState { age, bias, search_turns, target });
             }
@@ -898,6 +903,11 @@ fn plan_cached(entity: &Entity, hints: &[Hint],
         if ai.till_thirst == 0 && ai.hints.contains_key(&Goal::Drink) {
             goals.push(Goal::Drink);
         }
+        if ai.till_rested < MIN_RESTED && ai.hints.contains_key(&Goal::Rest) {
+            goals.push(Goal::Rest);
+        } else if ai.goal == Goal::Rest {
+            goals.push(Goal::Rest);
+        }
     }
     if goals.is_empty() { goals.push(Goal::Explore); }
     if !goals.contains(&ai.goal) { return None; }
@@ -922,6 +932,7 @@ fn plan_cached(entity: &Entity, hints: &[Hint],
         known.get(point).tile() == tile
     };
     let step_valid = |Step { kind, target }| match kind {
+        StepKind::Rest => point_matches_goal(Goal::Rest, target),
         StepKind::Drink => point_matches_goal(Goal::Drink, target),
         StepKind::Eat => point_matches_goal(Goal::Eat, target),
         StepKind::Look => true,
@@ -938,6 +949,7 @@ fn plan_cached(entity: &Entity, hints: &[Hint],
     ai.plan.pop();
     let wait = Some(Action::Idle);
     match next.kind {
+        StepKind::Rest => { ai.till_rested += 2; wait }
         StepKind::Drink => { ai.till_thirst = MAX_THIRST; wait }
         StepKind::Eat => { ai.till_hunger = MAX_HUNGER; wait }
         StepKind::Look => {
@@ -975,7 +987,8 @@ fn plan_cached(entity: &Entity, hints: &[Hint],
 fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
     let hints = [
         (Goal::Drink, Tile::get('~')),
-        (Goal::Eat, Tile::get('%')),
+        (Goal::Eat,   Tile::get('%')),
+        (Goal::Rest,  Tile::get('"')),
     ];
     update_ai_state(entity, &hints, ai);
     if let Some(x) = plan_cached(entity, &hints, ai, rng) { return x; }
@@ -1024,6 +1037,7 @@ fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
                 (ai.goal, result) = (goal, coerce(pos, &x));
             }
         };
+        if ai.till_rested < MIN_RESTED { add_candidates(ai, Goal::Rest); }
         if ai.till_thirst == 0 { add_candidates(ai, Goal::Drink); }
         if ai.till_hunger == 0 { add_candidates(ai, Goal::Eat); }
 
@@ -1064,6 +1078,10 @@ fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
             Goal::Eat => ai.plan.push(Step { kind: StepKind::Eat, target }),
             Goal::Explore => {}
             Goal::Flee => {}
+            Goal::Rest => {
+                let delta = max(MAX_RESTED - ai.till_rested, 0);
+                for _ in 0..delta { ai.plan.push(Step { kind: StepKind::Rest, target }) };
+            }
         }
         ai.plan.reverse();
         if let Some(x) = plan_cached(entity, &hints, ai, rng) { return x; }
@@ -1086,25 +1104,39 @@ fn has_line_of_sight(source: Point, target: Point, known: &Knowledge, range: i32
 fn path_to_target<F: Fn(Point) -> bool>(
         entity: &Entity, target: Point, known: &Knowledge,
         range: i32, valid: F, rng: &mut RNG) -> Action {
-    let check = |p: Point| known.get(p).status();
     let source = entity.pos;
-    let result = BFS(source, &valid, BFS_LIMIT_ATTACK, check);
-    let mut dirs = result.map(|x| x.dirs).unwrap_or_default();
-    if valid(source) { dirs.push(Point::default()); }
-
+    let check = |p: Point| known.get(p).status();
     let step = |dir: Point| {
         let look = target - source - dir;
         Action::Move(Move { step: dir, look, turns: 1. })
     };
 
-    if !dirs.is_empty() {
+    // Given a non-empty list of "good" directions (each of which brings us
+    // close to attacking the target), choose one closest to our attack range.
+    let pick = |dirs: &Vec<Point>, rng: &mut RNG| {
+        assert!(!dirs.is_empty());
         let scores: Vec<_> = dirs.iter().map(
             |x| ((*x + source - target).len_nethack() - range).abs()).collect();
         let best = *scores.iter().reduce(|acc, x| min(acc, x)).unwrap();
         let opts: Vec<_> = (0..dirs.len()).filter(|i| scores[*i] == best).collect();
-        return step(dirs[*sample(&opts, rng)]);
+        step(dirs[*sample(&opts, rng)])
+    };
+
+    // If we could already attack the target, don't move out of view.
+    if valid(source) {
+        let mut dirs = vec![Point::default()];
+        for x in &dirs::ALL {
+            if check(source + *x) != Status::Free { continue; }
+            if valid(source + *x) { dirs.push(*x); }
+        }
+        return pick(&dirs, rng);
     }
 
+    // Else, pick a direction which brings us in view.
+    let result = BFS(source, &valid, BFS_LIMIT_ATTACK, check);
+    if let Some(x) = result && !x.dirs.is_empty() { return pick(&x.dirs, rng); }
+
+    // Else, move towards the target.
     let path = AStar(source, target, ASTAR_LIMIT_ATTACK, check);
     let dir = path.and_then(|x| if x.is_empty() { None } else { Some(x[0] - source) });
     step(dir.unwrap_or_else(|| *sample(&dirs::ALL, rng)))
@@ -1186,12 +1218,8 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
         }
         Action::Move(Move { look, step, turns }) => {
             let entity = &mut state.board.entities[eid];
-            if look != Point::default() {
-                entity.dir = look;
-            }
-            if step == Point::default() {
-                return ActionResult::success_turns(turns);
-            }
+            if look != dirs::NONE { entity.dir = look; }
+            if step == dirs::NONE { return ActionResult::success_turns(turns); }
 
             // It's more expensive to sneak, and to move diagonally.
             let stealthy = entity.stealthy;
