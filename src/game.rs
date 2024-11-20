@@ -1114,9 +1114,13 @@ fn path_to_target<F: Fn(Point) -> bool>(
     // Given a non-empty list of "good" directions (each of which brings us
     // close to attacking the target), choose one closest to our attack range.
     let pick = |dirs: &Vec<Point>, rng: &mut RNG| {
+        let cell = known.get(target);
+        let obscured = cell.shade() || matches!(cell.tile(), Some(x) if x.limits_vision());
+        let distance = if obscured { 1 } else { range };
+
         assert!(!dirs.is_empty());
         let scores: Vec<_> = dirs.iter().map(
-            |x| ((*x + source - target).len_nethack() - range).abs()).collect();
+            |x| ((*x + source - target).len_nethack() - distance).abs()).collect();
         let best = *scores.iter().reduce(|acc, x| min(acc, x)).unwrap();
         let opts: Vec<_> = (0..dirs.len()).filter(|i| scores[*i] == best).collect();
         step(dirs[*sample(&opts, rng)])
