@@ -266,13 +266,10 @@ impl Knowledge {
             let shadowed = cell.shadow > 0;
             let shade = dark || shadowed;
             let nearby = (point - pos).len_l1() <= 1;
-            if (dark || (shadowed && !tile.casts_shadow())) && !nearby {
-                continue;
-            }
 
             let handle = (|| {
                 let other = board.get_entity(eid?)?;
-                if other.stealthy && tile.limits_vision() && !nearby { return None; }
+                if !nearby && (shade || tile.limits_vision()) { return None; }
                 Some(self.update_entity(me, other, board, /*seen=*/true, /*heard=*/false))
             })();
 
