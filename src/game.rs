@@ -74,6 +74,9 @@ const UI_COLOR: i32 = 0x430;
 const UI_MAP_SIZE_X: i32 = WORLD_SIZE;
 const UI_MAP_SIZE_Y: i32 = WORLD_SIZE;
 
+const UI_MOVE_ALPHA: f64 = 0.75;
+const UI_MOVE_FRAMES: i32 = 12;
+
 #[derive(Eq, PartialEq)]
 pub enum Input { Escape, BackTab, Char(char) }
 
@@ -1232,6 +1235,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
             let source = entity.pos;
             let target = source + step;
+            let color = entity.glyph.fg();
 
             match state.board.get_status(target) {
                 Status::Blocked | Status::Unknown => {
@@ -1256,6 +1260,26 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                     state.board.move_entity(eid, target);
                     for (oid, heard) in updated {
                         //state.board.update_known_entity(oid, eid, heard);
+                    }
+                    // Move animations, only for the player.
+                    if eid != state.player {
+                        let known = &state.board.entities[state.player].known;
+                        let source_seen = known.get(source).can_see_entity_at();
+                        let target_seen = known.get(target).can_see_entity_at();
+                        if source_seen || target_seen {
+                            let limit = UI_MOVE_FRAMES;
+                            if target_seen {
+                                let m = MoveAnimation { color, frame: 0, limit };
+                                state.moves.insert(source, m);
+                            } else {
+                                //let (a, b) = (1 * limit / 3, 2 * limit / 3);
+                                let a = limit / 2;
+                                let m = MoveAnimation { color, frame: 0, limit };
+                                state.moves.insert(source, m);
+                                let m = MoveAnimation { color, frame: -a, limit };
+                                state.moves.insert(target, m);
+                            }
+                        }
                     }
                     ActionResult::success_turns(turns)
                 }
@@ -1398,6 +1422,9 @@ fn update_state(state: &mut State) {
     let pos = state.get_player().pos;
     state.board.update_env(state.frame, pos, &mut state.rng);
 
+    for x in state.moves.values_mut() { x.frame += 1; }
+    state.moves.retain(|_, v| v.frame < v.limit);
+
     if state.board.advance_effect(&mut state.rng) {
         state.board.update_known(state.player);
         return;
@@ -1433,6 +1460,7 @@ fn update_state(state: &mut State) {
         }
 
         state.board.update_known(eid);
+        state.board.update_known(state.player);
 
         update = true;
         let action = plan(state, eid);
@@ -1440,6 +1468,7 @@ fn update_state(state: &mut State) {
         if player && !result.success { break; }
 
         //state.board.update_known(eid);
+        //state.board.update_known(state.player);
 
         if let Some(x) = state.board.entities.get_mut(eid) { drain(x, &result); }
     }
@@ -1456,6 +1485,13 @@ fn update_state(state: &mut State) {
 
 // State
 
+#[derive(Copy, Clone)]
+struct MoveAnimation {
+    color: Color,
+    frame: i32,
+    limit: i32,
+}
+
 pub struct State {
     board: Board,
     frame: usize,
@@ -1466,6 +1502,8 @@ pub struct State {
     rng: RNG,
     // Update fields
     ai: Option<Box<AIState>>,
+    // Animations
+    moves: HashMap<Point, MoveAnimation>,
 }
 
 impl State {
@@ -1506,8 +1544,9 @@ impl State {
         board.entities[player].dir = Point::default();
         board.update_known(player);
 
+        let moves = Default::default();
         let ai = Some(Box::new(AIState::new(&mut rng)));
-        Self { board, frame: 0, input, inputs: vec![], player, pov: None, rng, ai }
+        Self { board, frame: 0, input, inputs: vec![], player, pov: None, rng, ai, moves }
     }
 
     fn get_player(&self) -> &Entity { &self.board.entities[self.player] }
@@ -1666,13 +1705,10 @@ impl State {
 
             let other = cell.entity();
             let dead = other.is_some_and(|x| !x.alive);
-            let stealthy = point == entity.pos && entity.stealthy && !dead;
-            let obscured = stealthy && tile.limits_vision();
+            let obscured = tile.limits_vision();
             let shadowed = cell.shade();
 
             let glyph = other.map(|x| x.glyph).unwrap_or(tile.glyph);
-            let glyph = if stealthy { Glyph::wdfg('e', glyph.fg()) } else { glyph };
-
             let color = {
                 if !cell.visible() { 0x011.into() }
                 else if dead { 0x400.into() }
@@ -1694,6 +1730,17 @@ impl State {
             if !entity.heard { continue; }
             let Point(x, y) = entity.pos - offset;
             slice.set(Point(2 * x, y), Glyph::wide('?'));
+        }
+        if entity.player {
+            for (k, v) in &self.moves {
+                let Point(x, y) = *k - offset;
+                let p = Point(2 * x, y);
+                if v.frame < 0 || !slice.contains(p) { continue; }
+
+                let alpha = 1.0 - (v.frame as f64 / v.limit as f64);
+                let color = v.color.fade(UI_MOVE_ALPHA * alpha);
+                slice.set(p, slice.get(p).with_bg(color));
+            }
         }
 
         // Render any animation that's currently running.

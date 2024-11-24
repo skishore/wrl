@@ -145,6 +145,7 @@ pub struct CellKnowledge {
     handle: Option<EntityHandle>,
     pub point: Point,
     pub shade: bool,
+    pub see_entity_at: bool,
     pub tile: &'static Tile,
     pub time: Timestamp,
     pub visibility: i32,
@@ -196,7 +197,8 @@ impl<'a> CellResult<'a> {
     }
 
     pub fn visibility(&self) -> i32 {
-        self.cell.map(|x| x.visibility).unwrap_or(-1)
+        let Some(x) = self.cell else { return -1 };
+        if x.time == self.root.time { x.visibility } else { -1 }
     }
 
     // Derived fields
@@ -226,7 +228,12 @@ impl<'a> CellResult<'a> {
     }
 
     pub fn visible(&self) -> bool {
-        self.cell.map(|x| self.root.time == x.time).unwrap_or(false)
+        self.cell.map(|x| x.time == self.root.time).unwrap_or(false)
+    }
+
+    pub fn can_see_entity_at(&self) -> bool {
+        let Some(x) = self.cell else { return false };
+        x.time == self.root.time && x.see_entity_at
     }
 }
 
@@ -266,15 +273,24 @@ impl Knowledge {
             let shadowed = cell.shadow > 0;
             let shade = dark || shadowed;
             let nearby = (point - pos).len_l1() <= 1;
+            let see_entity_at = nearby || !(shade || tile.limits_vision());
 
             let handle = (|| {
+                if !see_entity_at { return None; }
                 let other = board.get_entity(eid?)?;
-                if !nearby && (shade || tile.limits_vision()) { return None; }
                 Some(self.update_entity(me, other, board, /*seen=*/true, /*heard=*/false))
             })();
 
             let mut prev_handle = None;
-            let cell = CellKnowledge { handle, point, shade, tile, time, visibility };
+            let cell = CellKnowledge {
+                handle,
+                point,
+                shade,
+                see_entity_at,
+                tile,
+                time,
+                visibility,
+            };
             self.cell_by_point.entry(point).and_modify(|x| {
                 self.cells.move_to_front(*x);
                 prev_handle = std::mem::replace(&mut self.cells[*x], cell).handle;

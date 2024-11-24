@@ -70,6 +70,17 @@ impl Color {
     pub fn black() -> Self { Self(0) }
     pub fn gray() -> Self { Self::dark(0x44) }
     pub fn dark(n: u8) -> Self { Self(0x010101 * n as u32) }
+
+    pub fn fade(&self, alpha: f64) -> Self {
+        let s = self.0;
+        let (x, y) = (alpha, 1. - alpha);
+        let (sr, sg, sb) = (s >> 16, (s >> 8) & 0xff, s & 0xff);
+        let (br, bg, bb) = (0x1d as u32, 0x1f as u32, 0x21 as u32);
+        let r = (x * sr as f64 + y * br as f64) as i32;
+        let g = (x * sg as f64 + y * bg as f64) as i32;
+        let b = (x * sb as f64 + y * bb as f64) as i32;
+        Color(((r << 16) | (g << 8) | b) as u32)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
