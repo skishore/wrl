@@ -54,7 +54,6 @@ const TURN_TIMES_LIMIT: usize = 64;
 const MOVE_TIMER: i32 = 960;
 const TURN_TIMER: i32 = 120;
 const SLOWED_TURNS: f64 = 2.;
-const SNEAKY_TURNS: f64 = 2.;
 const WANDER_TURNS: f64 = 2.;
 
 const FOV_RADIUS_NPC: i32 = 12;
@@ -1228,14 +1227,12 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             if look != dirs::NONE { entity.dir = look; }
             if step == dirs::NONE { return ActionResult::success_turns(turns); }
 
-            // It's more expensive to sneak, and to move diagonally.
-            let stealthy = entity.stealthy;
-            let factor = if stealthy { SNEAKY_TURNS } else { 1. };
-            let turns = step.len_l2() * factor * turns;
-
+            // Moving diagonally is slower. Moving quickly is noisier.
+            let turns = step.len_l2() * turns;
+            let noisy = !(entity.player || turns > 1.);
+            let color = entity.glyph.fg();
             let source = entity.pos;
             let target = source + step;
-            let color = entity.glyph.fg();
 
             match state.board.get_status(target) {
                 Status::Blocked | Status::Unknown => {
@@ -1247,8 +1244,9 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                     ActionResult::failure()
                 }
                 Status::Free => {
+                    // Noise generation, for quick mover.
                     let mut updated = vec![];
-                    let max = if stealthy { 1 } else { 12 };
+                    let max = if noisy { 4 } else { 1 };
                     for oid in &state.board.entity_order {
                         if *oid == eid { continue; }
                         let other = &state.board.entities[*oid];
@@ -1259,8 +1257,9 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                     }
                     state.board.move_entity(eid, target);
                     for (oid, heard) in updated {
-                        //state.board.update_known_entity(oid, eid, heard);
+                        state.board.update_known_entity(oid, eid, heard);
                     }
+
                     // Move animations, only for the player.
                     if eid != state.player {
                         let known = &state.board.entities[state.player].known;
@@ -1394,13 +1393,6 @@ fn process_input(state: &mut State, input: Input) {
     }
 
     let Input::Char(ch) = input else { return; };
-
-    if ch == 'c' {
-        let player = state.mut_player();
-        player.stealthy = !player.stealthy;
-        return;
-    }
-
     let Some(dir) = get_direction(ch) else { return; };
 
     if dir == Point::default() {
@@ -1573,10 +1565,7 @@ impl State {
         let size = Point(2 * UI_MAP_SIZE_X, UI_MAP_SIZE_Y);
         let bound = Rect { root: Point(0, size.1 + 2), size: Point(size.0, 1) };
         let slice = &mut Slice::new(buffer, bound);
-        let mode = if entity.stealthy { "STEALTHY" } else { "NORMAL  " };
         slice.write_str(&format!("HP: {}/{}", entity.cur_hp, entity.max_hp));
-        slice.write_str("; ");
-        slice.write_str(&format!("Mode: {}", mode));
 
         let bound = Rect { root: Point(1, 1), size };
         self.render_box(buffer, &bound);
@@ -1788,20 +1777,6 @@ mod tests {
     const DIJKSTRA_LIMIT: i32 = 4096;
 
     #[bench]
-    fn bench_a(b: &mut test::Bencher) {
-        let map = generate_map(2 * BFS_LIMIT);
-        b.iter(|| {
-            let mut result = HashMap::default();
-            result.insert(Point::default(), 0);
-            let check = |p: Point| { map.get(&p).copied().unwrap_or(Status::Free) };
-            //let check = |_: Point| { Status::Free };
-            FastDijkstraMap(Point::default(), check, DIJKSTRA_LIMIT, 2 * BFS_LIMIT);
-            //FastDijkstraMap(Point::default(), check, 16, 2);
-            //assert!(false);
-        });
-    }
-
-    #[bench]
     fn bench_bfs(b: &mut test::Bencher) {
         let map = generate_map(2 * BFS_LIMIT);
         b.iter(|| {
@@ -1832,6 +1807,17 @@ mod tests {
             let check = |p: Point| { map.get(&p).copied().unwrap_or(Status::Free) };
             //let check = |_: Point| { Status::Free };
             DijkstraMap(check, DIJKSTRA_LIMIT, &mut result);
+        });
+    }
+
+    #[bench]
+    fn bench_fast_dijkstra_map(b: &mut test::Bencher) {
+        let map = generate_map(2 * BFS_LIMIT);
+        b.iter(|| {
+            let mut result = HashMap::default();
+            result.insert(Point::default(), 0);
+            let check = |p: Point| { map.get(&p).copied().unwrap_or(Status::Free) };
+            FastDijkstraMap(Point::default(), check, DIJKSTRA_LIMIT, 2 * BFS_LIMIT);
         });
     }
 
