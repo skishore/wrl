@@ -64,7 +64,7 @@ const SPEED_NPC: f64 = 0.1;
 
 const LIGHT: Light = Light::Sun(Point(4, 1));
 const WEATHER: Weather = Weather::None;
-const WORLD_SIZE: i32 = 100;
+const WORLD_SIZE: i32 = 50;
 
 const UI_DAMAGE_FLASH: i32 = 6;
 const UI_DAMAGE_TICKS: i32 = 6;
@@ -587,7 +587,7 @@ impl AIState {
             till_assess: rng.gen::<i32>().rem_euclid(MAX_ASSESS),
             till_hunger: rng.gen::<i32>().rem_euclid(MAX_HUNGER),
             till_thirst: rng.gen::<i32>().rem_euclid(MAX_THIRST),
-            till_rested: rng.gen::<i32>().rem_euclid(MAX_RESTED),
+            till_rested: MAX_RESTED,
             debug_targets: vec![],
             debug_utility: Default::default(),
         }
@@ -623,14 +623,14 @@ fn explore(entity: &Entity, rng: &mut RNG,
 
     let mut min_age = std::i32::MAX;
     for point in map.keys() {
-        let age = known.get(*point).age();
+        let age = known.get(*point).time_since_seen();
         if age > 0 { min_age = min(min_age, age); }
     }
     if min_age == std::i32::MAX { min_age = 1; }
 
     let score = |p: Point, distance: i32| -> f64 {
         if distance == 0 { return 0.; }
-        let age = known.get(p).age();
+        let age = known.get(p).time_since_seen();
 
         let bonus0 = 1. / 65536. * ((age as f64 / min_age as f64) + 1. / 16.);
         let bonus1 = dirs::ALL.iter().any(|x| known.get(p + *x).unblocked());
@@ -669,7 +669,7 @@ fn search_around(entity: &Entity, source: Point, age: i32, bias: Point) -> Optio
     let check = |p: Point| known.get(p).status();
     let done = |p: Point| {
         let cell = known.get(p);
-        if cell.age() < age || cell.blocked() { return false; }
+        if cell.time_since_entity_visible() < age || cell.blocked() { return false; }
         dirs::ALL.iter().any(|x| known.get(p + *x).unblocked())
     };
     let unit = AStarLength(dirs::N) / 2;
@@ -809,7 +809,7 @@ fn update_ai_state(entity: &Entity, hints: &[Hint], ai: &mut AIState) {
     let last_turn_age = known.time - ai.time;
     let mut seen = HashSet::default();
     for cell in &known.cells {
-        if (ai.time - cell.time) >= 0 { break; }
+        if (ai.time - cell.last_seen) >= 0 { break; }
         for (goal, tile) in hints {
             if cell.tile == tile && seen.insert(goal) {
                 ai.hints.insert(*goal, cell.point);
@@ -1271,7 +1271,6 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                                 let m = MoveAnimation { color, frame: 0, limit };
                                 state.moves.insert(source, m);
                             } else {
-                                //let (a, b) = (1 * limit / 3, 2 * limit / 3);
                                 let a = limit / 2;
                                 let m = MoveAnimation { color, frame: 0, limit };
                                 state.moves.insert(source, m);
@@ -1524,7 +1523,7 @@ impl State {
             }
             None
         };
-        for i in 0..20 {
+        for i in 0..2 {
             if let Some(x) = pos(&board, &mut rng) {
                 let predator = i % 10 == 0;
                 let (player, speed) = (false, SPEED_NPC);

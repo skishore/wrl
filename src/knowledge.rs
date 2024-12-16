@@ -143,14 +143,14 @@ type EntityHandle = Handle<EntityKnowledge>;
 #[derive(Clone, Copy)]
 pub struct CellKnowledge {
     handle: Option<EntityHandle>,
+    pub last_see_entity_at: Timestamp,
+    pub last_seen: Timestamp,
     pub point: Point,
     pub shade: bool,
-    pub see_entity_at: bool,
     pub tile: &'static Tile,
-    pub time: Timestamp,
-    pub visibility: i32,
+    visibility: i32,
 }
-static_assert_size!(CellKnowledge, 32);
+static_assert_size!(CellKnowledge, 40);
 
 pub struct EntityKnowledge {
     pub eid: EID,
@@ -184,8 +184,14 @@ pub struct CellResult<'a> {
 impl<'a> CellResult<'a> {
     // Field lookups
 
-    pub fn age(&self) -> i32 {
-        self.cell.map(|x| self.root.time - x.time).unwrap_or(std::i32::MAX)
+    pub fn time_since_seen(&self) -> i32 {
+        let time = self.cell.map(|x| x.last_seen).unwrap_or_default();
+        if time == Default::default() { std::i32::MAX } else { self.root.time - time }
+    }
+
+    pub fn time_since_entity_visible(&self) -> i32 {
+        let time = self.cell.map(|x| x.last_see_entity_at).unwrap_or_default();
+        if time == Default::default() { std::i32::MAX } else { self.root.time - time }
     }
 
     pub fn shade(&self) -> bool {
@@ -198,7 +204,7 @@ impl<'a> CellResult<'a> {
 
     pub fn visibility(&self) -> i32 {
         let Some(x) = self.cell else { return -1 };
-        if x.time == self.root.time { x.visibility } else { -1 }
+        if x.last_seen == self.root.time { x.visibility } else { -1 }
     }
 
     // Derived fields
@@ -228,12 +234,19 @@ impl<'a> CellResult<'a> {
     }
 
     pub fn visible(&self) -> bool {
-        self.cell.map(|x| x.time == self.root.time).unwrap_or(false)
+        self.cell.map(|x| x.last_seen == self.root.time).unwrap_or(false)
     }
 
     pub fn can_see_entity_at(&self) -> bool {
-        let Some(x) = self.cell else { return false };
-        x.time == self.root.time && x.see_entity_at
+        self.cell.map(|x| x.last_see_entity_at == self.root.time).unwrap_or(false)
+    }
+}
+
+impl CellKnowledge {
+    fn new(point: Point, tile: &'static Tile) -> Self {
+        let (handle, shade, visibility) = (None, false, -1);
+        let (last_seen, last_see_entity_at) = (Default::default(), Default::default());
+        Self { handle, last_seen, last_see_entity_at, point, shade, tile, visibility }
     }
 }
 
@@ -270,33 +283,34 @@ impl Knowledge {
             let cell = board.get_cell(point);
             let (eid, tile) = (cell.eid, cell.tile);
 
-            let shadowed = cell.shadow > 0;
-            let shade = dark || shadowed;
             let nearby = (point - pos).len_l1() <= 1;
+            if dark && !nearby { continue; }
+
+            let shade = dark || cell.shadow > 0;
             let see_entity_at = nearby || !(shade || tile.limits_vision());
 
             let handle = (|| {
                 if !see_entity_at { return None; }
                 let other = board.get_entity(eid?)?;
-                Some(self.update_entity(me, other, board, /*seen=*/true, /*heard=*/false))
+                let (seen, heard) = (true, false);
+                Some(self.update_entity(me, other, board, seen, heard))
             })();
 
-            let mut prev_handle = None;
-            let cell = CellKnowledge {
-                handle,
-                point,
-                shade,
-                see_entity_at,
-                tile,
-                time,
-                visibility,
-            };
-            self.cell_by_point.entry(point).and_modify(|x| {
+            let cell_handle = self.cell_by_point.entry(point).and_modify(|x| {
                 self.cells.move_to_front(*x);
-                prev_handle = std::mem::replace(&mut self.cells[*x], cell).handle;
             }).or_insert_with(|| {
-                self.cells.push_front(cell)
+                self.cells.push_front(CellKnowledge::new(point, tile))
             });
+
+            let cell = &mut self.cells[*cell_handle];
+            let prev_handle = std::mem::replace(&mut cell.handle, handle);
+
+            if see_entity_at { cell.last_see_entity_at = time; }
+
+            cell.last_seen = time;
+            cell.point = point;
+            cell.shade = shade;
+            cell.tile = tile;
 
             if prev_handle != handle && let Some(other) = prev_handle {
                 self.mark_entity_moved(other, point);
@@ -366,14 +380,14 @@ impl Knowledge {
             if !entity.heard { continue; }
             let lookup = self.cell_by_point.get(&entity.pos);
             let Some(h) = lookup else { continue; };
-            let CellKnowledge { tile, time, .. } = self.cells[*h];
-            if time != self.time { continue; }
+            let CellKnowledge { tile, last_seen, .. } = self.cells[*h];
+            if last_seen != self.time { continue; }
             if tile.limits_vision() && (entity.pos - pos).len_l1() > 1 { continue; }
             entity.heard = false;
         }
 
         if player {
-            while let Some(x) = self.cells.back() && x.time != self.time {
+            while let Some(x) = self.cells.back() && x.last_seen != self.time {
                 self.forget_last_cell();
             }
             return;
