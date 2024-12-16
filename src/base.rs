@@ -1,4 +1,5 @@
 use std::cmp::{max, min};
+use std::fmt::Debug;
 
 use rand::Rng;
 
@@ -24,9 +25,9 @@ pub fn sample<'a, T>(xs: &'a [T], rng: &mut RNG) -> &'a T {
     &xs[rng.gen::<usize>() % xs.len()]
 }
 
-pub fn weighted<'a, T>(xs: &'a [(i32, T)], rng: &mut RNG) -> &'a T {
+pub fn weighted<'a, T: Debug>(xs: &'a [(i32, T)], rng: &mut RNG) -> &'a T {
     let total = xs.iter().fold(0, |acc, x| acc + x.0);
-    assert!(total > 0);
+    assert!(total > 0, "Total: {}; values: {:?}", total, xs);
     let mut value = (rng.gen::<usize>() % total as usize) as i32;
     for (weight, choice) in xs {
         value -= weight;

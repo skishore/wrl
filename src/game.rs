@@ -613,6 +613,32 @@ fn coerce(source: Point, path: &[Point]) -> BFSResult {
     }
 }
 
+fn sample_scored_points(entity: &Entity, scores: &Vec<(Point, f64)>,
+                        rng: &mut RNG, utility: &mut HashMap<Point, u8>) -> Option<BFSResult> {
+    let (known, pos) = (&*entity.known, entity.pos);
+    let check = |p: Point| known.get(p).status();
+
+    let max = scores.iter().fold(
+        0., |acc, x| if acc > x.1 { acc } else { x.1 });
+    if max == 0. { return None; }
+
+    let limit = 0xffff;
+    let inverse = (limit as f64) / max;
+    let values: Vec<_> = scores.iter().filter_map(|(p, score)| {
+        let score = min((inverse * score) as i32, limit);
+        if score > 0 { Some((score, *p)) } else { None }
+    }).collect();
+    if values.is_empty() { return None; }
+
+    for (score, point) in &values {
+        utility.insert(*point, (*score >> 8) as u8);
+    }
+
+    let target = *weighted(&values, rng);
+    let path = AStar(pos, target, 1024, check)?;
+    Some(coerce(pos, &path))
+}
+
 fn explore(entity: &Entity, rng: &mut RNG,
            utility: &mut HashMap<Point, u8>) -> Option<BFSResult> {
     utility.clear();
@@ -628,15 +654,19 @@ fn explore(entity: &Entity, rng: &mut RNG,
     }
     if min_age == std::i32::MAX { min_age = 1; }
 
+    let inv_dir_l2 = 1. / dir.len_l2();
+
     let score = |p: Point, distance: i32| -> f64 {
         if distance == 0 { return 0.; }
         let age = known.get(p).time_since_seen();
 
+        let delta = p - pos;
+        let inv_delta_l2 = 1. / delta.len_l2();
+        let cos = delta.dot(dir) as f64 * inv_delta_l2 * inv_dir_l2;
+
         let bonus0 = 1. / 65536. * ((age as f64 / min_age as f64) + 1. / 16.);
         let bonus1 = dirs::ALL.iter().any(|x| known.get(p + *x).unblocked());
         let bonus2 = dirs::ALL.iter().all(|x| !known.get(p + *x).blocked());
-
-        let cos = (p - pos).dot(dir) as f64 / (p - pos).len_l2() / dir.len_l2();
 
         let base = (if bonus0 > 1. { 1. } else { bonus0 }) *
                    (if bonus1 {  8.0 } else { 1.0 }) *
@@ -646,37 +676,37 @@ fn explore(entity: &Entity, rng: &mut RNG,
 
     let scores: Vec<_> = map.iter().map(
         |(p, distance)| (*p, score(*p, *distance))).collect();
-    let max = scores.iter().fold(
-        0., |acc, x| if acc > x.1 { acc } else { x.1 });
-    if max == 0. { return None; }
-
-    let inverse = 255. / max;
-    let values: Vec<_> = scores.into_iter().map(
-        |(p, score)| (min((inverse * score) as i32, 255), p)).collect();
-    if values.is_empty() { return None; }
-
-    for (score, point) in &values {
-        utility.insert(*point, *score as u8);
-    }
-
-    let target = *weighted(&values, rng);
-    let path = AStar(pos, target, 1024, check)?;
-    Some(coerce(pos, &path))
+    sample_scored_points(entity, &scores, rng, utility)
 }
 
-fn search_around(entity: &Entity, source: Point, age: i32, bias: Point) -> Option<BFSResult> {
-    let (known, pos) = (&*entity.known, entity.pos);
+fn search_around(entity: &Entity, source: Point, age: i32, bias: Point,
+                 rng: &mut RNG, utility: &mut HashMap<Point, u8>) -> Option<BFSResult> {
+    utility.clear();
+    let (known, pos, dir) = (&*entity.known, entity.pos, entity.dir);
     let check = |p: Point| known.get(p).status();
-    let done = |p: Point| {
-        let cell = known.get(p);
-        if cell.time_since_entity_visible() < age || cell.blocked() { return false; }
-        dirs::ALL.iter().any(|x| known.get(p + *x).unblocked())
-    };
-    let unit = AStarLength(dirs::N) / 2;
-    let heuristic = |p: Point| { unit * (pos + bias - p).len_nethack() };
+    let map = FastDijkstraMap(pos, check, 1024, 64);
+    if map.is_empty() { return None; }
 
-    let path = Dijkstra(source, done, ASTAR_LIMIT_SEARCH, check, heuristic)?;
-    Some(coerce(source, &path))
+    let inv_dir_l2 = 1. / dir.len_l2();
+    let inv_bias_l2 = 1. / bias.len_l2();
+
+    let score = |p: Point, distance: i32| -> f64 {
+        if distance == 0 { return 0.; }
+        let cell = known.get(p);
+        if cell.time_since_entity_visible() < age || cell.blocked() { return 0. }
+
+        let delta = p - pos;
+        let inv_delta_l2 = 1. / delta.len_l2();
+        let cos0 = delta.dot(dir) as f64 * inv_delta_l2 * inv_dir_l2;
+        let cos1 = delta.dot(bias) as f64 * inv_delta_l2 * inv_bias_l2;
+        let angle = ((cos0 + 1.) * (cos1 + 1.)).pow(4);
+
+        angle / (((p - source).len_l2_squared() + 1) as f64).pow(2)
+    };
+
+    let scores: Vec<_> = map.iter().map(
+        |(p, distance)| (*p, score(*p, *distance))).collect();
+    sample_scored_points(entity, &scores, rng, utility)
 }
 
 fn attack_target(entity: &Entity, target: Point, rng: &mut RNG) -> Action {
@@ -1014,9 +1044,10 @@ fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
                 ai.goal = Goal::Chase;
                 return attack_target(entity, x.target, rng);
             }
+            let utility = &mut ai.debug_utility;
             let search_nearby = x.search_turns > x.bias.len_l1();
             let source = if search_nearby { entity.pos } else { x.target };
-            if let Some(y) = search_around(entity, source, x.age, x.bias) {
+            if let Some(y) = search_around(entity, source, x.age, x.bias, rng, utility) {
                 (ai.goal, result) = (Goal::Chase, y);
             }
         }
@@ -1244,7 +1275,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                     ActionResult::failure()
                 }
                 Status::Free => {
-                    // Noise generation, for quick mover.
+                    // Noise generation, for quick moves.
                     let mut updated = vec![];
                     let max = if noisy { 4 } else { 1 };
                     for oid in &state.board.entity_order {
@@ -1523,7 +1554,7 @@ impl State {
             }
             None
         };
-        for i in 0..2 {
+        for i in 0..4 {
             if let Some(x) = pos(&board, &mut rng) {
                 let predator = i % 10 == 0;
                 let (player, speed) = (false, SPEED_NPC);
