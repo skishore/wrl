@@ -702,8 +702,9 @@ fn search_around(entity: &Entity, source: Point, age: i32, bias: Point,
         let cos0 = delta.dot(dir) as f64 * inv_delta_l2 * inv_dir_l2;
         let cos1 = delta.dot(bias) as f64 * inv_delta_l2 * inv_bias_l2;
         let angle = ((cos0 + 1.) * (cos1 + 1.)).pow(4);
+        let bonus = if p == source && source != pos { 64. } else { 1. };
 
-        angle / (((p - source).len_l2_squared() + 1) as f64).pow(2)
+        angle * bonus / (((p - source).len_l2_squared() + 1) as f64).pow(2)
     };
 
     let scores: Vec<_> = map.iter().map(
@@ -1263,8 +1264,8 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             if step == dirs::NONE { return ActionResult::success_turns(turns); }
 
             // Moving diagonally is slower. Moving quickly is noisier.
-            let turns = step.len_l2() * turns;
             let noisy = !(entity.player || turns > 1.);
+            let turns = step.len_l2() * turns;
             let color = entity.glyph.fg();
             let source = entity.pos;
             let target = source + step;
