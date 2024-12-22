@@ -62,7 +62,7 @@ const FOV_RADIUS_PC_: i32 = 21;
 const SPEED_PC_: f64 = 0.1;
 const SPEED_NPC: f64 = 0.1;
 
-const LIGHT: Light = Light::Sun(Point(4, 1));
+const LIGHT: Light = Light::None;
 const WEATHER: Weather = Weather::None;
 const WORLD_SIZE: i32 = 50;
 
@@ -622,10 +622,10 @@ fn sample_scored_points(entity: &Entity, scores: &Vec<(Point, f64)>,
         0., |acc, x| if acc > x.1 { acc } else { x.1 });
     if max == 0. { return None; }
 
-    let limit = 0xffff;
+    let limit = 1 << 16;
     let inverse = (limit as f64) / max;
     let values: Vec<_> = scores.iter().filter_map(|(p, score)| {
-        let score = min((inverse * score) as i32, limit);
+        let score = min((inverse * score).floor() as i32, limit);
         if score > 0 { Some((score, *p)) } else { None }
     }).collect();
     if values.is_empty() { return None; }
@@ -663,10 +663,12 @@ fn explore(entity: &Entity, rng: &mut RNG,
         let delta = p - pos;
         let inv_delta_l2 = 1. / delta.len_l2();
         let cos = delta.dot(dir) as f64 * inv_delta_l2 * inv_dir_l2;
+        let unblocked_neighbors = dirs::ALL.iter().filter(
+                |&x| !known.get(p + *x).blocked()).count();
 
         let bonus0 = 1. / 65536. * ((age as f64 / min_age as f64) + 1. / 16.);
-        let bonus1 = dirs::ALL.iter().any(|x| known.get(p + *x).unblocked());
-        let bonus2 = dirs::ALL.iter().all(|x| !known.get(p + *x).blocked());
+        let bonus1 = unblocked_neighbors == dirs::ALL.len();
+        let bonus2 = unblocked_neighbors > 0;
 
         let base = (if bonus0 > 1. { 1. } else { bonus0 }) *
                    (if bonus1 {  8.0 } else { 1.0 }) *
@@ -757,6 +759,7 @@ fn flee_from_threats(entity: &Entity, ai: &mut AIState) -> Option<BFSResult> {
     if flight.done || flight.threats.is_empty() { return None; }
     if flight.since_seen >= max(flight.till_assess, 1) { return None; }
 
+    ai.debug_utility.clear();
     let (known, pos) = (&*entity.known, entity.pos);
     let scale = AStarLength(Point(1, 0)) as f64;
 
@@ -822,6 +825,7 @@ fn flee_from_threats(entity: &Entity, ai: &mut AIState) -> Option<BFSResult> {
         if s > dir_score && (*k - pos).len_l1() <= 1 {
             (dir, dir_score) = (*k - pos, s);
         }
+        ai.debug_utility.insert(*k, 0);
     }
 
     if target == pos { return None; }

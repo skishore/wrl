@@ -1,6 +1,6 @@
 use std::cmp::{max, min};
 
-use crate::base::{HashMap, LOS, Matrix, Point, dirs};
+use crate::base::{HashMap, FOV, FOVNode, LOS, Matrix, Point, dirs};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -483,8 +483,49 @@ pub fn FastDijkstraMap<F: Fn(Point) -> Status>(
         entry.status = Some(status);
     };
 
+    // Returns true if the cell is blocked, so we can short-circuit populating
+    // the initial FOV-based seed for the Dijkstra iteration.
+    let step = |state: &mut FastDijkstraState, dir: Point,
+                prev_point: Point, prev_score: i32| -> bool {
+        let point = prev_point + dir;
+        if !state.map.contains(point) { return true; }
+
+        let index = state.map.index(point);
+        let entry = &mut state.map.data[index];
+        let visited = entry.status.is_some();
+        let status = entry.status.unwrap_or_else(|| check(point + offset));
+
+        entry.status = Some(status);
+        if status == Status::Blocked { return true; }
+
+        let diagonal = dir.0 != 0 && dir.1 != 0;
+        let occipied = status == Status::Occupied;
+        let score = prev_score + DIJKSTRA_COST +
+                    if diagonal { DIJKSTRA_DIAGONAL_PENALTY } else { 0 } +
+                    if occipied { DIJKSTRA_OCCUPIED_PENALTY } else { 0 };
+        if visited && score >= entry.score { return false; }
+
+        if visited {
+            let score = entry.score;
+            let FastDijkstraLink { next, prev } = entry.link;
+            state.link(next, score).prev = prev;
+            state.link(prev, score).next = next;
+        }
+        init(state, index, point, score, status);
+        false
+    };
+
     let index = state.map.index(initial);
     init(&mut state, index, initial, 0, Status::Free);
+
+    let mut fov = FOV::new(12);
+    fov.apply(|n: &FOVNode| {
+        if n.next == Point::default() { return false; }
+
+        let node = &state.map.entry_ref(n.prev + initial);
+        let (prev_point, prev_score) = (node.point, node.score);
+        step(&mut state, n.next - n.prev, prev_point, prev_score)
+    });
 
     for _ in 0..cells {
         let lists = &state.lists;
@@ -505,31 +546,7 @@ pub fn FastDijkstraMap<F: Fn(Point) -> Status>(
         if node.status == Some(Status::Unknown) { continue; }
 
         for dir in &dirs::ALL {
-            let point = prev_point + *dir;
-            if !state.map.contains(point) { continue; }
-
-            let index = state.map.index(point);
-            let entry = &mut state.map.data[index];
-            let visited = entry.status.is_some();
-            let status = entry.status.unwrap_or_else(|| check(point + offset));
-
-            entry.status = Some(status);
-            if status == Status::Blocked { continue; }
-
-            let diagonal = dir.0 != 0 && dir.1 != 0;
-            let occipied = status == Status::Occupied;
-            let score = prev_score + DIJKSTRA_COST +
-                        if diagonal { DIJKSTRA_DIAGONAL_PENALTY } else { 0 } +
-                        if occipied { DIJKSTRA_OCCUPIED_PENALTY } else { 0 };
-            if visited && score >= entry.score { continue; }
-
-            if visited {
-                let score = entry.score;
-                let FastDijkstraLink { next, prev } = entry.link;
-                state.link(next, score).prev = prev;
-                state.link(prev, score).next = next;
-            }
-            init(&mut state, index, point, score, status);
+            step(&mut state, *dir, prev_point, prev_score);
         }
     }
 
