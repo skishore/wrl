@@ -1286,10 +1286,9 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                     for oid in &state.board.entity_order {
                         if *oid == eid { continue; }
                         let other = &state.board.entities[*oid];
-                        let heard = (other.pos - target).len_nethack() < max;
-                        let delta = min((other.pos - source).len_nethack(),
-                                        (other.pos - target).len_nethack());
-                        if delta <= max { updated.push((*oid, heard)); }
+                        let sr = (other.pos - source).len_nethack() <= max;
+                        let tr = (other.pos - target).len_nethack() <= max;
+                        if sr || tr { updated.push((*oid, tr)); }
                     }
                     state.board.move_entity(eid, target);
                     for (oid, heard) in updated {

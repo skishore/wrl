@@ -317,7 +317,7 @@ impl Knowledge {
             };
         }
 
-        self.forget(me.pos, me.player);
+        self.forget(me.player);
     }
 
     pub fn update_entity(&mut self, entity: &Entity, other: &Entity,
@@ -375,14 +375,12 @@ impl Knowledge {
         self.time.0 += TURN_AGE as u32;
     }
 
-    fn forget(&mut self, pos: Point, player: bool) {
+    fn forget(&mut self, player: bool) {
         for entity in &mut self.entities {
             if !entity.heard { continue; }
             let lookup = self.cell_by_point.get(&entity.pos);
             let Some(h) = lookup else { continue; };
-            let CellKnowledge { tile, last_seen, .. } = self.cells[*h];
-            if last_seen != self.time { continue; }
-            if tile.limits_vision() && (entity.pos - pos).len_l1() > 1 { continue; }
+            if self.cells[*h].last_see_entity_at != self.time { continue; }
             entity.heard = false;
         }
 
