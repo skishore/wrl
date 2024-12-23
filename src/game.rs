@@ -62,7 +62,7 @@ const FOV_RADIUS_PC_: i32 = 21;
 const SPEED_PC_: f64 = 0.1;
 const SPEED_NPC: f64 = 0.1;
 
-const LIGHT: Light = Light::None;
+const LIGHT: Light = Light::Sun(Point(4, 1));
 const WEATHER: Weather = Weather::None;
 const WORLD_SIZE: i32 = 50;
 
@@ -446,7 +446,7 @@ fn mapgen(board: &mut Board, rng: &mut RNG) {
     board.reset(ft);
     let size = board.get_size();
 
-    let automata = |rng: &mut RNG| -> Matrix<bool> {
+    let automata = |rng: &mut RNG, init: u32| -> Matrix<bool> {
         let mut d100 = || rng.gen::<u32>() % 100;
         let mut result = Matrix::new(size, false);
         for x in 0..size.0 {
@@ -460,7 +460,7 @@ fn mapgen(board: &mut Board, rng: &mut RNG) {
 
         for y in 0..size.1 {
             for x in 0..size.0 {
-                if d100() < 45 { result.set(Point(x, y),  true); }
+                if d100() < init { result.set(Point(x, y),  true); }
             }
         }
 
@@ -490,8 +490,8 @@ fn mapgen(board: &mut Board, rng: &mut RNG) {
         result
     };
 
-    let walls = automata(rng);
-    let grass = automata(rng);
+    let walls = automata(rng, 45);
+    let grass = automata(rng, 45);
     for y in 0..size.1 {
         for x in 0..size.0 {
             let point = Point(x, y);
