@@ -450,6 +450,13 @@ impl FastDijkstraState {
     }
 }
 
+// Expose a distance function for use in other heuristics.
+#[allow(non_snake_case)]
+pub fn FastDijkstraLength(p: Point) -> i32 {
+    let (x, y) = (p.0.abs(), p.1.abs());
+    DIJKSTRA_COST * max(x, y) + DIJKSTRA_DIAGONAL_PENALTY * min(x, y)
+}
+
 #[allow(non_snake_case)]
 pub fn FastDijkstraMap<F: Fn(Point) -> Status>(
         source: Point, check: F, cells: i32, limit: i32) -> HashMap<Point, i32> {

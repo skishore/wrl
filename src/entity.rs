@@ -86,7 +86,7 @@ impl EntityMap {
             max_hp: MAX_HP,
             move_timer: 0,
             turn_timer: 0,
-            speed: args.speed,
+            speed: args.speed * if args.player || args.predator { 1. } else { 1. },
             pos: args.pos,
             dir,
         });

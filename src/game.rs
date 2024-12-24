@@ -16,7 +16,7 @@ use crate::effect::{Effect, Event, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
 use crate::knowledge::{EntityKnowledge, Knowledge, Timestamp, Vision, VisionArgs};
 use crate::pathing::{AStar, AStarLength, BFS, BFSResult, Status};
-use crate::pathing::{Dijkstra, DijkstraMap, DijkstraSearch, FastDijkstraMap};
+use crate::pathing::{DijkstraSearch, FastDijkstraLength, FastDijkstraMap};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -622,7 +622,7 @@ fn sample_scored_points(entity: &Entity, scores: &Vec<(Point, f64)>,
         0., |acc, x| if acc > x.1 { acc } else { x.1 });
     if max == 0. { return None; }
 
-    let limit = 1 << 16;
+    let limit = (1 << 16) - 1;
     let inverse = (limit as f64) / max;
     let values: Vec<_> = scores.iter().filter_map(|(p, score)| {
         let score = min((inverse * score).floor() as i32, limit);
@@ -755,83 +755,58 @@ fn assess_nearby(entity: &Entity, ai: &mut AIState, rng: &mut RNG) {
     assess_dirs(&dirs, ASSESS_TURNS_FLIGHT, ai, rng);
 }
 
-fn flee_from_threats(entity: &Entity, ai: &mut AIState) -> Option<BFSResult> {
+fn flee_from_threats(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Option<BFSResult> {
     let Some(flight) = &ai.flight else { return None };
     if flight.done || flight.threats.is_empty() { return None; }
     if flight.since_seen >= max(flight.till_assess, 1) { return None; }
 
+    // WARNING: FastDijkstraMap doesn't flag squares where we heard something,
+    // but those squares tend to be where nearby enemies are!
+    //
+    // This reasoning applies to all uses of FastDijkstraMap, but it's worse
+    // for fleeing entities because often the first step they try to make to
+    // flee is to move into cell where they heard a target.
+
     ai.debug_utility.clear();
     let (known, pos) = (&*entity.known, entity.pos);
-    let scale = AStarLength(Point(1, 0)) as f64;
-
-    // WARNING: This code doesn't flag squares where we heard something,
-    // but those squares tend to be where nearby enemies are!
     let check = |p: Point| known.get(p).status();
+    let map = FastDijkstraMap(pos, check, 1024, 64);
+    if map.is_empty() { return None; }
 
-    let score = |p: Point, source_distance: i32| {
+    let scale = FastDijkstraLength(Point(1, 0)) as f64;
+
+    //let inv_dir_l2 = 1. / dir.len_l2();
+
+    let score = |p: Point, source_distance: i32| -> f64 {
         let mut threat = Point::default();
         let mut threat_distance = std::i32::MAX;
         for x in &flight.threats {
-            let y = AStarLength(*x - p);
+            let y = FastDijkstraLength(*x - p);
             if y < threat_distance { (threat, threat_distance) = (*x, y); }
         }
         let blocked = {
             let los = LOS(p, threat);
-            (1..los.len() - 1).filter(|i| !known.get(los[*i]).unblocked()).count()
+            (1..los.len() - 1).any(|i| !known.get(los[i]).unblocked())
         };
         let frontier = dirs::ALL.iter().any(|x| known.get(p + *x).unknown());
+
+        //let delta = p - pos;
+        //let inv_delta_l2 = if p == pos { 1. } else { 1. / delta.len_l2() };
+        //let cos = delta.dot(dir) as f64 * inv_delta_l2 * inv_dir_l2;
 
         // WARNING: This heuristic can cause a piece to be "checkmated" in a
         // corner, if the Dijkstra search below isn't wide enough for us to
         // find a cell which is further from the threat than the corner cell.
-        1.1 * (threat_distance as f64) +
-        -1. * (source_distance as f64) +
-        16. * scale * (blocked as i32 as f64) +
-        16. * scale * (frontier as i32 as f64)
+        let base = 1.5 * (threat_distance as f64) +
+                   -1. * (source_distance as f64) +
+                   16. * scale * (blocked as i32 as f64) +
+                   16. * scale * (frontier as i32 as f64);
+        base.pow(17)
     };
 
-    // Fast path: if we haven't seen any of the neighboring squares, then that
-    // could be a good direction in which to flee. Choose the best one.
-    let steps: Vec<_> = dirs::ALL.iter().filter_map(
-        |x| if known.get(pos + *x).unknown() { Some(*x) } else { None }).collect();
-    if !steps.is_empty() {
-        let mut best_steps = vec![];
-        let mut best_score = std::f64::MIN;
-        for step in &steps {
-            let s = score(pos + *step, AStarLength(*step));
-            if s < best_score { continue; }
-            if s > best_score { best_steps.clear(); }
-            best_steps.push(*step);
-            best_score = s;
-        }
-        assert!(!best_steps.is_empty());
-        let targets: Vec<_> = best_steps.iter().map(|x| pos + *x).collect();
-        return Some(BFSResult { dirs: best_steps, targets });
-    }
-
-    // Slow path: do a large Dijkstra search, then score each point found.
-    let mut map = HashMap::default();
-    map.insert(pos, 0);
-    DijkstraMap(check, FLIGHT_MAP_LIMIT, &mut map);
-
-    let mut target = pos;
-    let mut target_score = std::f64::MIN;
-    let mut dir = dirs::NONE;
-    let mut dir_score = std::f64::MIN;
-    for (k, v) in &map {
-        let s = score(*k, *v);
-        if s > target_score {
-            (target, target_score) = (*k, s);
-        }
-        if s > dir_score && (*k - pos).len_l1() <= 1 {
-            (dir, dir_score) = (*k - pos, s);
-        }
-        ai.debug_utility.insert(*k, 0);
-    }
-
-    if target == pos { return None; }
-
-    Some(BFSResult { dirs: vec![dir], targets: vec![target] })
+    let scores: Vec<_> = map.iter().map(
+        |(p, distance)| (*p, score(*p, *distance))).collect();
+    sample_scored_points(entity, &scores, rng, &mut ai.debug_utility)
 }
 
 fn update_ai_state(entity: &Entity, hints: &[Hint], ai: &mut AIState) {
@@ -1040,7 +1015,7 @@ fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
     let mut result = {
         let mut result = BFSResult::default();
 
-        if let Some(x) = flee_from_threats(entity, ai) {
+        if let Some(x) = flee_from_threats(entity, ai, rng) {
             (ai.goal, result) = (Goal::Flee, x);
         } else if let Some(x) = &ai.flight && !x.done {
             (ai.goal, result) = (Goal::Assess, coerce(pos, &[]));
@@ -1806,6 +1781,7 @@ impl State {
 mod tests {
     use super::*;
     extern crate test;
+    use crate::pathing::DijkstraMap;
 
     const BFS_LIMIT: i32 = 32;
     const DIJKSTRA_LIMIT: i32 = 4096;
