@@ -766,8 +766,10 @@ fn assess_nearby(entity: &Entity, ai: &mut AIState, rng: &mut RNG) {
     let Some(flight) = &ai.flight else { return base(ai) };
     if flight.done() || flight.threats.is_empty() { return base(ai); }
 
+    let hiding = flight.stage == FlightStage::Hide;
+    let turns = if hiding { ASSESS_TURNS_EXPLORE } else { ASSESS_TURNS_FLIGHT };
     let dirs: Vec<_> = flight.threats.iter().map(|&x| x - entity.pos).collect();
-    assess_dirs(&dirs, ASSESS_TURNS_FLIGHT, ai, rng);
+    assess_dirs(&dirs, turns, ai, rng);
 }
 
 fn is_hiding_place(entity: &Entity, point: Point, threats: &Vec<Point>) -> bool {
