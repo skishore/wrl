@@ -27,7 +27,6 @@ const ASTAR_LIMIT_SEARCH: i32 = 256;
 const ASTAR_LIMIT_WANDER: i32 = 1024;
 const BFS_LIMIT_ATTACK: i32 = 8;
 const BFS_LIMIT_WANDER: i32 = 64;
-const EXPLORE_FUZZ: i32 = 64;
 const FLIGHT_MAP_LIMIT: i32 = 256;
 
 const ASSESS_ANGLE: f64 = TAU / 18.;
@@ -47,8 +46,8 @@ const MAX_RESTED: i32 = 4096;
 
 const MIN_FLIGHT_TURNS: i32 = 16;
 const MAX_FLIGHT_TURNS: i32 = 64;
-const MIN_FOLLOW_TURNS: i32 = 16;
-const MAX_FOLLOW_TURNS: i32 = 64;
+const MIN_SEARCH_TURNS: i32 = 16;
+const MAX_SEARCH_TURNS: i32 = 32;
 const TURN_TIMES_LIMIT: usize = 64;
 
 const MOVE_TIMER: i32 = 960;
@@ -62,7 +61,7 @@ const FOV_RADIUS_PC_: i32 = 21;
 const SPEED_PC_: f64 = 0.1;
 const SPEED_NPC: f64 = 0.1;
 
-const LIGHT: Light = Light::Sun(Point(4, 1));
+const LIGHT: Light = Light::Sun(Point(0, 0));
 const WEATHER: Weather = Weather::None;
 const WORLD_SIZE: i32 = 50;
 
@@ -613,6 +612,11 @@ fn coerce(source: Point, path: &[Point]) -> BFSResult {
     }
 }
 
+fn safe_inv_l2(point: Point) -> f64 {
+    if point == Point::default() { return 0. }
+    (point.len_l2_squared() as f64).sqrt().recip()
+}
+
 fn sample_scored_points(entity: &Entity, scores: &Vec<(Point, f64)>,
                         rng: &mut RNG, utility: &mut HashMap<Point, u8>) -> Option<BFSResult> {
     let (known, pos) = (&*entity.known, entity.pos);
@@ -654,14 +658,14 @@ fn explore(entity: &Entity, rng: &mut RNG,
     }
     if min_age == std::i32::MAX { min_age = 1; }
 
-    let inv_dir_l2 = 1. / dir.len_l2();
+    let inv_dir_l2 = safe_inv_l2(dir);
 
     let score = |p: Point, distance: i32| -> f64 {
         if distance == 0 { return 0.; }
         let age = known.get(p).time_since_seen();
 
         let delta = p - pos;
-        let inv_delta_l2 = 1. / delta.len_l2();
+        let inv_delta_l2 = safe_inv_l2(delta);
         let cos = delta.dot(dir) as f64 * inv_delta_l2 * inv_dir_l2;
         let unblocked_neighbors = dirs::ALL.iter().filter(
                 |&x| !known.get(p + *x).blocked()).count();
@@ -689,8 +693,8 @@ fn search_around(entity: &Entity, source: Point, age: i32, bias: Point,
     let map = FastDijkstraMap(pos, check, 1024, 64);
     if map.is_empty() { return None; }
 
-    let inv_dir_l2 = 1. / dir.len_l2();
-    let inv_bias_l2 = 1. / bias.len_l2();
+    let inv_dir_l2 = safe_inv_l2(dir);
+    let inv_bias_l2 = safe_inv_l2(bias);
 
     let score = |p: Point, distance: i32| -> f64 {
         if distance == 0 { return 0.; }
@@ -698,7 +702,7 @@ fn search_around(entity: &Entity, source: Point, age: i32, bias: Point,
         if cell.time_since_entity_visible() < age || cell.blocked() { return 0. }
 
         let delta = p - pos;
-        let inv_delta_l2 = 1. / delta.len_l2();
+        let inv_delta_l2 = safe_inv_l2(delta);
         let cos0 = delta.dot(dir) as f64 * inv_delta_l2 * inv_dir_l2;
         let cos1 = delta.dot(bias) as f64 * inv_delta_l2 * inv_bias_l2;
         let angle = ((cos0 + 1.) * (cos1 + 1.)).pow(4);
@@ -773,16 +777,17 @@ fn flee_from_threats(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Option
     let map = FastDijkstraMap(pos, check, 1024, 64);
     if map.is_empty() { return None; }
 
+    let threat_inv_l2s = flight.threats.iter().map(
+        |&x| (x, safe_inv_l2(pos - x))).collect::<Vec<_>>();
     let scale = FastDijkstraLength(Point(1, 0)) as f64;
 
-    //let inv_dir_l2 = 1. / dir.len_l2();
-
     let score = |p: Point, source_distance: i32| -> f64 {
+        let mut inv_l2 = 0.;
         let mut threat = Point::default();
         let mut threat_distance = std::i32::MAX;
-        for x in &flight.threats {
-            let y = FastDijkstraLength(*x - p);
-            if y < threat_distance { (threat, threat_distance) = (*x, y); }
+        for &(x, y) in &threat_inv_l2s {
+            let z = FastDijkstraLength(x - p);
+            if z < threat_distance { (threat, inv_l2, threat_distance) = (x, y, z); }
         }
         let blocked = {
             let los = LOS(p, threat);
@@ -790,9 +795,9 @@ fn flee_from_threats(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Option
         };
         let frontier = dirs::ALL.iter().any(|x| known.get(p + *x).unknown());
 
-        //let delta = p - pos;
-        //let inv_delta_l2 = if p == pos { 1. } else { 1. / delta.len_l2() };
-        //let cos = delta.dot(dir) as f64 * inv_delta_l2 * inv_dir_l2;
+        let delta = p - pos;
+        let inv_delta_l2 = safe_inv_l2(delta);
+        let cos = delta.dot(pos - threat) as f64 * inv_delta_l2 * inv_l2;
 
         // WARNING: This heuristic can cause a piece to be "checkmated" in a
         // corner, if the Dijkstra search below isn't wide enough for us to
@@ -801,7 +806,7 @@ fn flee_from_threats(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Option
                    -1. * (source_distance as f64) +
                    16. * scale * (blocked as i32 as f64) +
                    16. * scale * (frontier as i32 as f64);
-        base.pow(17)
+        (cos + 1.).pow(3) * base.pow(9)
     };
 
     let scores: Vec<_> = map.iter().map(
@@ -841,7 +846,7 @@ fn update_ai_state(entity: &Entity, hints: &[Hint], ai: &mut AIState) {
     // We're a predator, and we should chase and attack rivals.
     if entity.predator {
         let fight = std::mem::take(&mut ai.fight);
-        let limit = ai.age_at_turn(MAX_FOLLOW_TURNS);
+        let limit = ai.age_at_turn(MAX_SEARCH_TURNS);
         let mut targets = known.entities.iter().filter(
             |x| x.rival).collect::<Vec<_>>();
         if !targets.is_empty() {
@@ -988,7 +993,7 @@ fn plan_cached(entity: &Entity, hints: &[Hint],
                 if !move_ready(entity) { return SLOWED_TURNS; }
                 if ai.goal == Goal::Flee { return 1.; }
                 let Some(fight) = &ai.fight else { return WANDER_TURNS; };
-                if fight.search_turns < MIN_FOLLOW_TURNS { 1. } else { WANDER_TURNS }
+                if fight.search_turns < MIN_SEARCH_TURNS { 1. } else { WANDER_TURNS }
             })();
             let look = if target == pos { entity.dir } else { target - pos };
             Some(Action::Move(Move { look, step: dir, turns }))
@@ -1074,12 +1079,6 @@ fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
     ai.debug_targets = result.targets.clone();
     let target = *result.targets.select_nth_unstable_by_key(
         0, |x| (*x - pos).len_l2_squared()).1;
-    //if ai.goal == Goal::Explore {
-    //    for _ in 0..EXPLORE_FUZZ {
-    //        let candidate = target + *sample(&dirs::ALL, rng);
-    //        if known.get(candidate).unknown() { target = candidate; }
-    //    }
-    //}
 
     if let Some(path) = AStar(pos, target, ASTAR_LIMIT_WANDER, check) {
         let kind = StepKind::Move;
