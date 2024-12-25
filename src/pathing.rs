@@ -459,7 +459,7 @@ pub fn FastDijkstraLength(p: Point) -> i32 {
 
 #[allow(non_snake_case)]
 pub fn FastDijkstraMap<F: Fn(Point) -> Status>(
-        source: Point, check: F, cells: i32, limit: i32, radius: i32) -> HashMap<Point, i32> {
+        source: Point, check: F, cells: i32, limit: i32, radius: i32) -> Vec<(Point, i32)> {
     let n = 2 * limit + 1;
     let initial = Point(limit, limit);
     let offset = source - initial;
@@ -467,7 +467,8 @@ pub fn FastDijkstraMap<F: Fn(Point) -> Status>(
     let mut current = 0;
     let map = Matrix::new(Point(n, n), FastDijkstraNode::default());
     let mut state = FastDijkstraState { lists: vec![], map };
-    let mut result = HashMap::default();
+    let mut result = vec![];
+    result.reserve(cells as usize);
 
     let init = |state: &mut FastDijkstraState,
                 index: usize, point: Point, score: i32, status: Status| {
@@ -549,13 +550,15 @@ pub fn FastDijkstraMap<F: Fn(Point) -> Status>(
 
         let node = &state.map.data[prev];
         let (prev_point, prev_score) = (node.point, node.score);
-        result.insert(prev_point + offset, prev_score);
+        result.push((prev_point + offset, prev_score));
         if node.status == Some(Status::Unknown) { continue; }
 
         for dir in &dirs::ALL {
             step(&mut state, *dir, prev_point, prev_score);
         }
     }
+
+    assert!(result.len() <= cells as usize);
 
     result
 }

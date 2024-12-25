@@ -652,7 +652,7 @@ fn explore(entity: &Entity, rng: &mut RNG,
     if map.is_empty() { return None; }
 
     let mut min_age = std::i32::MAX;
-    for &point in map.keys() {
+    for &(point, _) in &map {
         let age = known.get(point).time_since_seen();
         if age > 0 { min_age = min(min_age, age); }
     }
@@ -680,8 +680,8 @@ fn explore(entity: &Entity, rng: &mut RNG,
         base * (cos + 1.).pow(4) / (distance as f64).pow(2)
     };
 
-    let scores: Vec<_> = map.iter().map(
-        |(&p, &distance)| (p, score(p, distance))).collect();
+    let scores: Vec<_> = map.into_iter().map(
+        |(p, distance)| (p, score(p, distance))).collect();
     sample_scored_points(entity, &scores, rng, utility)
 }
 
@@ -711,8 +711,8 @@ fn search_around(entity: &Entity, source: Point, age: i32, bias: Point,
         angle * bonus / (((p - source).len_l2_squared() + 1) as f64).pow(2)
     };
 
-    let scores: Vec<_> = map.iter().map(
-        |(&p, &distance)| (p, score(p, distance))).collect();
+    let scores: Vec<_> = map.into_iter().map(
+        |(p, distance)| (p, score(p, distance))).collect();
     sample_scored_points(entity, &scores, rng, utility)
 }
 
@@ -809,8 +809,8 @@ fn flee_from_threats(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Option
         (cos + 1.).pow(3) * base.pow(9)
     };
 
-    let scores: Vec<_> = map.iter().map(
-        |(&p, &distance)| (p, score(p, distance))).collect();
+    let scores: Vec<_> = map.into_iter().map(
+        |(p, distance)| (p, score(p, distance))).collect();
     sample_scored_points(entity, &scores, rng, &mut ai.debug_utility)
 }
 
