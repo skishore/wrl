@@ -14,8 +14,8 @@ use crate::base::{HashMap, HashSet, LOS, Matrix, Point, dirs};
 use crate::base::{sample, weighted, RNG};
 use crate::effect::{Effect, Event, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
-use crate::knowledge::{CellResult, EntityKnowledge, Knowledge, Timestamp, Vision, VisionArgs};
-use crate::pathing::{AStar, AStarLength, BFS, BFSResult, Status};
+use crate::knowledge::{EntityKnowledge, Knowledge, Timestamp, Vision, VisionArgs};
+use crate::pathing::{AStar, BFS, BFSResult, Status};
 use crate::pathing::{DijkstraSearch, FastDijkstraLength, FastDijkstraMap};
 
 //////////////////////////////////////////////////////////////////////////////
@@ -23,11 +23,12 @@ use crate::pathing::{DijkstraSearch, FastDijkstraLength, FastDijkstraMap};
 // Constants
 
 const ASTAR_LIMIT_ATTACK: i32 = 32;
-const ASTAR_LIMIT_SEARCH: i32 = 256;
 const ASTAR_LIMIT_WANDER: i32 = 1024;
 const BFS_LIMIT_ATTACK: i32 = 8;
-const BFS_LIMIT_WANDER: i32 = 64;
-const FLIGHT_MAP_LIMIT: i32 = 256;
+const HIDING_CELLS: i32 = 256;
+const HIDING_LIMIT: i32 = 32;
+const SEARCH_CELLS: i32 = 1024;
+const SEARCH_LIMIT: i32 = 64;
 
 const ASSESS_ANGLE: f64 = TAU / 18.;
 const ASSESS_STEPS: i32 = 4;
@@ -64,6 +65,8 @@ const SPEED_NPC: f64 = 0.1;
 const LIGHT: Light = Light::Sun(Point(4, 1));
 const WEATHER: Weather = Weather::None;
 const WORLD_SIZE: i32 = 50;
+const NUM_PREDATORS: i32 = 1;
+const NUM_PREY: i32 = 3;
 
 const UI_DAMAGE_FLASH: i32 = 6;
 const UI_DAMAGE_TICKS: i32 = 6;
@@ -628,9 +631,6 @@ fn safe_inv_l2(point: Point) -> f64 {
 
 fn sample_scored_points(entity: &Entity, scores: &Vec<(Point, f64)>,
                         rng: &mut RNG, utility: &mut HashMap<Point, u8>) -> Option<BFSResult> {
-    let (known, pos) = (&*entity.known, entity.pos);
-    let check = |p: Point| known.get(p).status();
-
     let max = scores.iter().fold(
         0., |acc, x| if acc > x.1 { acc } else { x.1 });
     if max == 0. { return None; }
@@ -648,7 +648,9 @@ fn sample_scored_points(entity: &Entity, scores: &Vec<(Point, f64)>,
     }
 
     let target = *weighted(&values, rng);
-    let path = AStar(pos, target, 1024, check)?;
+    let (known, pos) = (&*entity.known, entity.pos);
+    let check = |p: Point| known.get(p).status();
+    let path = AStar(pos, target, ASTAR_LIMIT_WANDER, check)?;
     Some(coerce(pos, &path))
 }
 
@@ -657,7 +659,7 @@ fn explore(entity: &Entity, rng: &mut RNG,
     utility.clear();
     let (known, pos, dir) = (&*entity.known, entity.pos, entity.dir);
     let check = |p: Point| known.get(p).status();
-    let map = FastDijkstraMap(pos, check, 1024, 64, 12);
+    let map = FastDijkstraMap(pos, check, SEARCH_CELLS, SEARCH_LIMIT, FOV_RADIUS_NPC);
     if map.is_empty() { return None; }
 
     let mut min_age = std::i32::MAX;
@@ -699,7 +701,7 @@ fn search_around(entity: &Entity, source: Point, age: i32, bias: Point,
     utility.clear();
     let (known, pos, dir) = (&*entity.known, entity.pos, entity.dir);
     let check = |p: Point| known.get(p).status();
-    let map = FastDijkstraMap(pos, check, 1024, 64, 12);
+    let map = FastDijkstraMap(pos, check, SEARCH_CELLS, SEARCH_LIMIT, FOV_RADIUS_NPC);
     if map.is_empty() { return None; }
 
     let inv_dir_l2 = safe_inv_l2(dir);
@@ -839,7 +841,7 @@ fn hide_from_threats(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Option
     ai.debug_utility.clear();
     flight.stage = FlightStage::Hide;
 
-    let map = FastDijkstraMap(pos, check, 256, 32, 12);
+    let map = FastDijkstraMap(pos, check, HIDING_CELLS, HIDING_LIMIT, FOV_RADIUS_NPC);
     run_away(entity, map, ai, rng)
 }
 
@@ -860,7 +862,7 @@ fn flee_from_threats(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Option
 
     let (known, pos) = (&*entity.known, entity.pos);
     let check = |p: Point| known.get(p).status();
-    let map = FastDijkstraMap(pos, check, 1024, 64, 12);
+    let map = FastDijkstraMap(pos, check, SEARCH_CELLS, SEARCH_LIMIT, FOV_RADIUS_NPC);
     run_away(entity, map, ai, rng)
 }
 
@@ -985,7 +987,7 @@ fn plan_cached(entity: &Entity, hints: &[Hint],
     if let Some(&x) = ai.hints.get(&ai.goal) && known.get(x).visible() {
         let target = ai.plan.iter().find_map(
             |x| if x.kind == StepKind::Move { Some(x.target) } else { None });
-        if let Some(y) = target && AStarLength(pos - x) < AStarLength(pos - y) {
+        if let Some(y) = target && (pos - x).len_l2_squared() < (pos - y).len_l2_squared() {
             let los = LOS(pos, x);
             let check = |p: Point| known.get(p).status();
             let free = (1..los.len() - 1).all(|i| check(los[i]) == Status::Free);
@@ -1589,9 +1591,9 @@ impl State {
             }
             None
         };
-        for i in 0..4 {
+        for i in 0..(NUM_PREDATORS + NUM_PREY) {
             if let Some(x) = pos(&board, &mut rng) {
-                let predator = i % 10 == 0;
+                let predator = i < NUM_PREDATORS;
                 let (player, speed) = (false, SPEED_NPC);
                 let glyph = Glyph::wdfg(if predator { 'R' } else { 'P' }, 0x222);
                 let args = EntityArgs { glyph, player, predator, pos: x, speed };
@@ -1840,7 +1842,7 @@ mod tests {
     use crate::pathing::DijkstraMap;
 
     const BFS_LIMIT: i32 = 32;
-    const DIJKSTRA_LIMIT: i32 = 4096;
+    const DIJKSTRA_CELLS: i32 = 4096;
 
     #[bench]
     fn bench_bfs(b: &mut test::Bencher) {
@@ -1858,7 +1860,7 @@ mod tests {
         b.iter(|| {
             let done = |_: Point| { false };
             let check = |p: Point| { map.get(&p).copied().unwrap_or(Status::Free) };
-            DijkstraSearch(Point::default(), done, DIJKSTRA_LIMIT, check);
+            DijkstraSearch(Point::default(), done, DIJKSTRA_CELLS, check);
         });
     }
 
@@ -1869,7 +1871,7 @@ mod tests {
             let mut result = HashMap::default();
             result.insert(Point::default(), 0);
             let check = |p: Point| { map.get(&p).copied().unwrap_or(Status::Free) };
-            DijkstraMap(check, DIJKSTRA_LIMIT, &mut result);
+            DijkstraMap(check, DIJKSTRA_CELLS, &mut result);
         });
     }
 
@@ -1880,7 +1882,7 @@ mod tests {
             let mut result = HashMap::default();
             result.insert(Point::default(), 0);
             let check = |p: Point| { map.get(&p).copied().unwrap_or(Status::Free) };
-            FastDijkstraMap(Point::default(), check, DIJKSTRA_LIMIT,
+            FastDijkstraMap(Point::default(), check, DIJKSTRA_CELLS,
                             2 * BFS_LIMIT, FOV_RADIUS_NPC);
         });
     }

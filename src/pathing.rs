@@ -224,9 +224,8 @@ const ASTAR_DIAGONAL_PENALTY: i32 = 6;
 const ASTAR_LOS_DIFF_PENALTY: i32 = 1;
 const ASTAR_OCCUPIED_PENALTY: i32 = 64;
 
-// Expose a distance function for use in other heuristics.
 #[allow(non_snake_case)]
-pub fn AStarLength(p: Point) -> i32 {
+fn AStarLength(p: Point) -> i32 {
     let (x, y) = (p.0.abs(), p.1.abs());
     ASTAR_UNIT_COST * max(x, y) + ASTAR_DIAGONAL_PENALTY * min(x, y)
 }
