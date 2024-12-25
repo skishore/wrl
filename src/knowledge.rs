@@ -125,8 +125,8 @@ impl Vision {
 
     fn include_ray(cone: &FOVEndpoint, ends: &[FOVEndpoint]) -> bool {
         if cone.pos == Point::default() { return true; }
-        for FOVEndpoint { pos, inv_l2 } in ends {
-            let cos = (cone.pos.dot(*pos) as f64) * cone.inv_l2 * *inv_l2;
+        for &FOVEndpoint { pos, inv_l2 } in ends {
+            let cos = (cone.pos.dot(pos) as f64) * cone.inv_l2 * inv_l2;
             if cos >= VISION_COSINE { return true; }
         }
         false
@@ -258,12 +258,12 @@ impl Knowledge {
     }
 
     pub fn entity(&self, eid: EID) -> Option<&EntityKnowledge> {
-        self.entity_by_eid.get(&eid).map(|x| &self.entities[*x])
+        self.entity_by_eid.get(&eid).map(|&x| &self.entities[x])
     }
 
     pub fn get(&self, p: Point) -> CellResult {
         let cell_handle = self.cell_by_point.get(&p);
-        CellResult { root: self, cell: cell_handle.map(|x| &self.cells[*x]) }
+        CellResult { root: self, cell: cell_handle.map(|&x| &self.cells[x]) }
     }
 
     // Writes
@@ -275,8 +275,7 @@ impl Knowledge {
         let dark = matches!(board.get_light(), Light::None);
 
         // Entities have exact knowledge about anything they can see.
-        for point in &vision.points_seen {
-            let point = *point;
+        for &point in &vision.points_seen {
             let visibility = vision.get_visibility_at(point);
             assert!(visibility >= 0);
 
@@ -296,13 +295,13 @@ impl Knowledge {
                 Some(self.update_entity(me, other, board, seen, heard))
             })();
 
-            let cell_handle = self.cell_by_point.entry(point).and_modify(|x| {
-                self.cells.move_to_front(*x);
+            let cell_handle = *self.cell_by_point.entry(point).and_modify(|&mut x| {
+                self.cells.move_to_front(x);
             }).or_insert_with(|| {
                 self.cells.push_front(CellKnowledge::new(point, tile))
             });
 
-            let cell = &mut self.cells[*cell_handle];
+            let cell = &mut self.cells[cell_handle];
             let prev_handle = std::mem::replace(&mut cell.handle, handle);
 
             if see_entity_at { cell.last_see_entity_at = time; }
@@ -322,13 +321,13 @@ impl Knowledge {
 
     pub fn update_entity(&mut self, entity: &Entity, other: &Entity,
                          _: &Board, seen: bool, heard: bool) -> EntityHandle {
-        let handle = *self.entity_by_eid.entry(other.eid).and_modify(|x| {
-            self.entities.move_to_front(*x);
-            let existing = &mut self.entities[*x];
+        let handle = *self.entity_by_eid.entry(other.eid).and_modify(|&mut x| {
+            self.entities.move_to_front(x);
+            let existing = &mut self.entities[x];
             if !existing.moved && !(seen && existing.pos == other.pos) {
                 let cell_handle = self.cell_by_point.get(&existing.pos);
                 let cell = &mut self.cells[*cell_handle.unwrap()];
-                assert!(cell.handle == Some(*x));
+                assert!(cell.handle == Some(x));
                 cell.handle = None;
             };
         }).or_insert_with(|| {
@@ -379,8 +378,8 @@ impl Knowledge {
         for entity in &mut self.entities {
             if !entity.heard { continue; }
             let lookup = self.cell_by_point.get(&entity.pos);
-            let Some(h) = lookup else { continue; };
-            if self.cells[*h].last_see_entity_at != self.time { continue; }
+            let Some(&h) = lookup else { continue; };
+            if self.cells[h].last_see_entity_at != self.time { continue; }
             entity.heard = false;
         }
 

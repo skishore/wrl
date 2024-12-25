@@ -317,7 +317,7 @@ impl Board {
         assert!(existing == Some(eid));
 
         // Remove the entity from the entity_order list.
-        let index = self.entity_order.iter().position(|x| *x == eid).unwrap();
+        let index = self.entity_order.iter().position(|&x| x == eid).unwrap();
         self.entity_order.remove(index);
         if self.active_entity_index > index {
             self.active_entity_index -= 1;
@@ -409,8 +409,8 @@ impl Board {
 
     fn update_shadow(&mut self, point: Point, delta: i32) {
         if delta == 0 { return; }
-        for x in &self.shadow {
-            let Some(cell) = self.map.entry_mut(point + *x) else { continue; };
+        for &x in &self.shadow {
+            let Some(cell) = self.map.entry_mut(point + x) else { continue; };
             cell.shadow += delta;
             assert!(cell.shadow >= 0);
         }
@@ -505,13 +505,13 @@ fn mapgen(board: &mut Board, rng: &mut RNG) {
     let die = |n: i32, rng: &mut RNG| rng.gen::<i32>().rem_euclid(n);
     let mut river = vec![Point::default()];
     for i in 1..size.1 {
-        let last = river.iter().last().unwrap().0;
+        let last = river.last().unwrap().0;
         let next = last + die(3, rng) - 1;
         river.push(Point(next, i));
     }
-    let target = river[0] + *river.iter().last().unwrap();
+    let target = river[0] + *river.last().unwrap();
     let offset = Point((size - target).0 / 2, 0);
-    for x in &river { board.set_tile(*x + offset, wa); }
+    for &x in &river { board.set_tile(x + offset, wa); }
 
     let pos = |board: &Board, rng: &mut RNG| {
         for _ in 0..100 {
@@ -628,14 +628,14 @@ fn sample_scored_points(entity: &Entity, scores: &Vec<(Point, f64)>,
 
     let limit = (1 << 16) - 1;
     let inverse = (limit as f64) / max;
-    let values: Vec<_> = scores.iter().filter_map(|(p, score)| {
+    let values: Vec<_> = scores.iter().filter_map(|&(p, score)| {
         let score = min((inverse * score).floor() as i32, limit);
-        if score > 0 { Some((score, *p)) } else { None }
+        if score > 0 { Some((score, p)) } else { None }
     }).collect();
     if values.is_empty() { return None; }
 
-    for (score, point) in &values {
-        utility.insert(*point, (*score >> 8) as u8);
+    for &(score, point) in &values {
+        utility.insert(point, (score >> 8) as u8);
     }
 
     let target = *weighted(&values, rng);
@@ -648,12 +648,12 @@ fn explore(entity: &Entity, rng: &mut RNG,
     utility.clear();
     let (known, pos, dir) = (&*entity.known, entity.pos, entity.dir);
     let check = |p: Point| known.get(p).status();
-    let map = FastDijkstraMap(pos, check, 1024, 64);
+    let map = FastDijkstraMap(pos, check, 1024, 64, 12);
     if map.is_empty() { return None; }
 
     let mut min_age = std::i32::MAX;
-    for point in map.keys() {
-        let age = known.get(*point).time_since_seen();
+    for &point in map.keys() {
+        let age = known.get(point).time_since_seen();
         if age > 0 { min_age = min(min_age, age); }
     }
     if min_age == std::i32::MAX { min_age = 1; }
@@ -668,7 +668,7 @@ fn explore(entity: &Entity, rng: &mut RNG,
         let inv_delta_l2 = safe_inv_l2(delta);
         let cos = delta.dot(dir) as f64 * inv_delta_l2 * inv_dir_l2;
         let unblocked_neighbors = dirs::ALL.iter().filter(
-                |&x| !known.get(p + *x).blocked()).count();
+                |&&x| !known.get(p + x).blocked()).count();
 
         let bonus0 = 1. / 65536. * ((age as f64 / min_age as f64) + 1. / 16.);
         let bonus1 = unblocked_neighbors == dirs::ALL.len();
@@ -681,7 +681,7 @@ fn explore(entity: &Entity, rng: &mut RNG,
     };
 
     let scores: Vec<_> = map.iter().map(
-        |(p, distance)| (*p, score(*p, *distance))).collect();
+        |(&p, &distance)| (p, score(p, distance))).collect();
     sample_scored_points(entity, &scores, rng, utility)
 }
 
@@ -690,7 +690,7 @@ fn search_around(entity: &Entity, source: Point, age: i32, bias: Point,
     utility.clear();
     let (known, pos, dir) = (&*entity.known, entity.pos, entity.dir);
     let check = |p: Point| known.get(p).status();
-    let map = FastDijkstraMap(pos, check, 1024, 64);
+    let map = FastDijkstraMap(pos, check, 1024, 64, 12);
     if map.is_empty() { return None; }
 
     let inv_dir_l2 = safe_inv_l2(dir);
@@ -712,7 +712,7 @@ fn search_around(entity: &Entity, source: Point, age: i32, bias: Point,
     };
 
     let scores: Vec<_> = map.iter().map(
-        |(p, distance)| (*p, score(*p, *distance))).collect();
+        |(&p, &distance)| (p, score(p, distance))).collect();
     sample_scored_points(entity, &scores, rng, utility)
 }
 
@@ -755,7 +755,7 @@ fn assess_nearby(entity: &Entity, ai: &mut AIState, rng: &mut RNG) {
     let Some(flight) = &ai.flight else { return base(ai) };
     if flight.done || flight.threats.is_empty() { return base(ai); }
 
-    let dirs: Vec<_> = flight.threats.iter().map(|x| *x - entity.pos).collect();
+    let dirs: Vec<_> = flight.threats.iter().map(|&x| x - entity.pos).collect();
     assess_dirs(&dirs, ASSESS_TURNS_FLIGHT, ai, rng);
 }
 
@@ -774,11 +774,11 @@ fn flee_from_threats(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Option
     ai.debug_utility.clear();
     let (known, pos) = (&*entity.known, entity.pos);
     let check = |p: Point| known.get(p).status();
-    let map = FastDijkstraMap(pos, check, 1024, 64);
+    let map = FastDijkstraMap(pos, check, 1024, 64, 12);
     if map.is_empty() { return None; }
 
-    let threat_inv_l2s = flight.threats.iter().map(
-        |&x| (x, safe_inv_l2(pos - x))).collect::<Vec<_>>();
+    let threat_inv_l2s: Vec<_> = flight.threats.iter().map(
+        |&x| (x, safe_inv_l2(pos - x))).collect();
     let scale = FastDijkstraLength(Point(1, 0)) as f64;
 
     let score = |p: Point, source_distance: i32| -> f64 {
@@ -793,7 +793,7 @@ fn flee_from_threats(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Option
             let los = LOS(p, threat);
             (1..los.len() - 1).any(|i| !known.get(los[i]).unblocked())
         };
-        let frontier = dirs::ALL.iter().any(|x| known.get(p + *x).unknown());
+        let frontier = dirs::ALL.iter().any(|&x| known.get(p + x).unknown());
 
         let delta = p - pos;
         let inv_delta_l2 = safe_inv_l2(delta);
@@ -810,7 +810,7 @@ fn flee_from_threats(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Option
     };
 
     let scores: Vec<_> = map.iter().map(
-        |(p, distance)| (*p, score(*p, *distance))).collect();
+        |(&p, &distance)| (p, score(p, distance))).collect();
     sample_scored_points(entity, &scores, rng, &mut ai.debug_utility)
 }
 
@@ -825,9 +825,9 @@ fn update_ai_state(entity: &Entity, hints: &[Hint], ai: &mut AIState) {
     let mut seen = HashSet::default();
     for cell in &known.cells {
         if (ai.time - cell.last_seen) >= 0 { break; }
-        for (goal, tile) in hints {
+        for &(goal, tile) in hints {
             if cell.tile == tile && seen.insert(goal) {
-                ai.hints.insert(*goal, cell.point);
+                ai.hints.insert(goal, cell.point);
             }
         }
     }
@@ -847,8 +847,7 @@ fn update_ai_state(entity: &Entity, hints: &[Hint], ai: &mut AIState) {
     if entity.predator {
         let fight = std::mem::take(&mut ai.fight);
         let limit = ai.age_at_turn(MAX_SEARCH_TURNS);
-        let mut targets = known.entities.iter().filter(
-            |x| x.rival).collect::<Vec<_>>();
+        let mut targets: Vec<_> = known.entities.iter().filter(|x| x.rival).collect();
         if !targets.is_empty() {
             targets.sort_unstable_by_key(
                 |x| (x.age, (x.pos - pos).len_l2_squared()));
@@ -899,7 +898,7 @@ fn plan_cached(entity: &Entity, hints: &[Hint],
 
     // Check whether we can execute the next step in the plan.
     let (known, pos) = (&*entity.known, entity.pos);
-    let next = *ai.plan.iter().last().unwrap();
+    let next = *ai.plan.last().unwrap();
     let look = next.kind == StepKind::Look;
     let dir = next.target - pos;
     if !look && dir.len_l1() > 1 { return None; }
@@ -930,11 +929,11 @@ fn plan_cached(entity: &Entity, hints: &[Hint],
     if !goals.contains(&ai.goal) { return None; }
 
     // Check if we saw a shortcut that would also satisfy the goal.
-    if let Some(x) = ai.hints.get(&ai.goal) && known.get(*x).visible() {
+    if let Some(&x) = ai.hints.get(&ai.goal) && known.get(x).visible() {
         let target = ai.plan.iter().find_map(
             |x| if x.kind == StepKind::Move { Some(x.target) } else { None });
-        if let Some(y) = target && AStarLength(pos - *x) < AStarLength(pos - y) {
-            let los = LOS(pos, *x);
+        if let Some(y) = target && AStarLength(pos - x) < AStarLength(pos - y) {
+            let los = LOS(pos, x);
             let check = |p: Point| known.get(p).status();
             let free = (1..los.len() - 1).all(|i| check(los[i]) == Status::Free);
             if free { return None; }
@@ -960,7 +959,7 @@ fn plan_cached(entity: &Entity, hints: &[Hint],
             Status::Unknown  => true,
         }
     };
-    if !ai.plan.iter().all(|x| step_valid(*x)) { return None; }
+    if !ai.plan.iter().all(|&x| step_valid(x)) { return None; }
 
     // The plan is good! Execute the next step.
     ai.plan.pop();
@@ -983,7 +982,7 @@ fn plan_cached(entity: &Entity, hints: &[Hint],
             let mut target = next.target;
             for next in ai.plan.iter().rev().take(8) {
                 if next.kind == StepKind::Look { break; }
-                if LOS(pos, next.target).iter().all(|x| !known.get(*x).blocked()) {
+                if LOS(pos, next.target).iter().all(|&x| !known.get(x).blocked()) {
                     target = next.target;
                 }
             }
@@ -1078,7 +1077,7 @@ fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
 
     ai.debug_targets = result.targets.clone();
     let target = *result.targets.select_nth_unstable_by_key(
-        0, |x| (*x - pos).len_l2_squared()).1;
+        0, |&x| (x - pos).len_l2_squared()).1;
 
     if let Some(path) = AStar(pos, target, ASTAR_LIMIT_WANDER, check) {
         let kind = StepKind::Move;
@@ -1107,9 +1106,9 @@ fn has_line_of_sight(source: Point, target: Point, known: &Knowledge, range: i32
     if !known.get(target).visible() { return false; }
     let los = LOS(source, target);
     let last = los.len() - 1;
-    los.iter().enumerate().all(|(i, p)| {
+    los.iter().enumerate().all(|(i, &p)| {
         if i == 0 || i == last { return true; }
-        known.get(*p).status() == Status::Free
+        known.get(p).status() == Status::Free
     })
 }
 
@@ -1132,18 +1131,18 @@ fn path_to_target<F: Fn(Point) -> bool>(
 
         assert!(!dirs.is_empty());
         let scores: Vec<_> = dirs.iter().map(
-            |x| ((*x + source - target).len_nethack() - distance).abs()).collect();
+            |&x| ((x + source - target).len_nethack() - distance).abs()).collect();
         let best = *scores.iter().reduce(|acc, x| min(acc, x)).unwrap();
-        let opts: Vec<_> = (0..dirs.len()).filter(|i| scores[*i] == best).collect();
+        let opts: Vec<_> = (0..dirs.len()).filter(|&i| scores[i] == best).collect();
         step(dirs[*sample(&opts, rng)])
     };
 
     // If we could already attack the target, don't move out of view.
     if valid(source) {
         let mut dirs = vec![Point::default()];
-        for x in &dirs::ALL {
-            if check(source + *x) != Status::Free { continue; }
-            if valid(source + *x) { dirs.push(*x); }
+        for &x in &dirs::ALL {
+            if check(source + x) != Status::Free { continue; }
+            if valid(source + x) { dirs.push(x); }
         }
         return pick(&dirs, rng);
     }
@@ -1257,12 +1256,12 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                     // Noise generation, for quick moves.
                     let mut updated = vec![];
                     let max = if noisy { 4 } else { 1 };
-                    for oid in &state.board.entity_order {
-                        if *oid == eid { continue; }
-                        let other = &state.board.entities[*oid];
+                    for &oid in &state.board.entity_order {
+                        if oid == eid { continue; }
+                        let other = &state.board.entities[oid];
                         let sr = (other.pos - source).len_nethack() <= max;
                         let tr = (other.pos - target).len_nethack() <= max;
-                        if sr || tr { updated.push((*oid, tr)); }
+                        if sr || tr { updated.push((oid, tr)); }
                     }
                     state.board.move_entity(eid, target);
                     for (oid, heard) in updated {
@@ -1390,10 +1389,8 @@ fn get_direction(ch: char) -> Option<Point> {
 fn process_input(state: &mut State, input: Input) {
     if input == Input::Char('q') || input == Input::Char('w') {
         let board = &state.board;
-        let i = board.entity_order.iter().enumerate().find_map(|x| {
-            let okay = Some(board.entities[*x.1].eid) == state.pov;
-            if okay { Some(x.0) } else { None }
-        }).unwrap_or(0);
+        let i = board.entity_order.iter().position(
+            |&x| Some(x) == state.pov).unwrap_or(0);
         let l = board.entity_order.len();
         let j = (i + if input == Input::Char('q') { l - 1 } else { 1 }) % l;
         state.pov = if j == 0 { None } else { Some(board.entity_order[j]) };
@@ -1598,20 +1595,20 @@ impl State {
                 if glyph.ch() == Glyph::wide(' ').ch() { glyph = Glyph::wide('.'); }
                 slice.set(point, glyph.with_fg(0x400));
             }
-            for (point, score) in &entity.ai.debug_utility {
-                let Point(x, y) = *point - offset;
+            for (&point, &score) in &entity.ai.debug_utility {
+                let Point(x, y) = point - offset;
                 let point = Point(2 * x, y);
                 let glyph = slice.get(point);
-                slice.set(point, glyph.with_bg(Color::dark(*score)));
+                slice.set(point, glyph.with_bg(Color::dark(score)));
             }
-            for target in &entity.ai.debug_targets {
-                let Point(x, y) = *target - offset;
+            for &target in &entity.ai.debug_targets {
+                let Point(x, y) = target - offset;
                 let point = Point(2 * x, y);
                 let glyph = slice.get(point);
                 slice.set(point, glyph.with_fg(Color::black()).with_bg(0x400));
             }
-            for eid in &self.board.entity_order {
-                let other = &self.board.entities[*eid];
+            for &eid in &self.board.entity_order {
+                let other = &self.board.entities[eid];
                 let Point(x, y) = other.pos - offset;
                 slice.set(Point(2 * x, y), other.glyph);
             }
@@ -1629,8 +1626,8 @@ impl State {
             let base = Tile::get('~').glyph.fg();
             for drop in &rain.drops {
                 let index = drop.frame - self.frame;
-                let Some(delta) = rain.path.get(index) else { continue; };
-                let point = drop.point - *delta;
+                let Some(&delta) = rain.path.get(index) else { continue; };
+                let point = drop.point - delta;
                 let cell = if index == 0 { known.get(point) } else { known.default() };
                 if index == 0 && !cell.visible() { continue; }
 
@@ -1729,8 +1726,8 @@ impl State {
             slice.set(Point(2 * x, y), Glyph::wide('?'));
         }
         if entity.player {
-            for (k, v) in &self.moves {
-                let Point(x, y) = *k - offset;
+            for (&k, v) in &self.moves {
+                let Point(x, y) = k - offset;
                 let p = Point(2 * x, y);
                 if v.frame < 0 || !slice.contains(p) { continue; }
 
@@ -1742,10 +1739,10 @@ impl State {
 
         // Render any animation that's currently running.
         if let Some(frame) = frame {
-            for effect::Particle { point, glyph } in frame {
-                if player && !known.get(*point).visible() { continue; }
-                let Point(x, y) = *point - offset;
-                slice.set(Point(2 * x, y), *glyph);
+            for &effect::Particle { point, glyph } in frame {
+                if player && !known.get(point).visible() { continue; }
+                let Point(x, y) = point - offset;
+                slice.set(Point(2 * x, y), glyph);
             }
         }
 
@@ -1791,7 +1788,6 @@ mod tests {
         b.iter(|| {
             let done = |_: Point| { false };
             let check = |p: Point| { map.get(&p).copied().unwrap_or(Status::Free) };
-            //let check = |_: Point| { Status::Free };
             BFS(Point::default(), done, BFS_LIMIT, check);
         });
     }
@@ -1802,7 +1798,6 @@ mod tests {
         b.iter(|| {
             let done = |_: Point| { false };
             let check = |p: Point| { map.get(&p).copied().unwrap_or(Status::Free) };
-            //let check = |_: Point| { Status::Free };
             DijkstraSearch(Point::default(), done, DIJKSTRA_LIMIT, check);
         });
     }
@@ -1814,7 +1809,6 @@ mod tests {
             let mut result = HashMap::default();
             result.insert(Point::default(), 0);
             let check = |p: Point| { map.get(&p).copied().unwrap_or(Status::Free) };
-            //let check = |_: Point| { Status::Free };
             DijkstraMap(check, DIJKSTRA_LIMIT, &mut result);
         });
     }
@@ -1826,7 +1820,8 @@ mod tests {
             let mut result = HashMap::default();
             result.insert(Point::default(), 0);
             let check = |p: Point| { map.get(&p).copied().unwrap_or(Status::Free) };
-            FastDijkstraMap(Point::default(), check, DIJKSTRA_LIMIT, 2 * BFS_LIMIT);
+            FastDijkstraMap(Point::default(), check, DIJKSTRA_LIMIT,
+                            2 * BFS_LIMIT, FOV_RADIUS_NPC);
         });
     }
 

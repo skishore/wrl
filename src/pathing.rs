@@ -459,7 +459,7 @@ pub fn FastDijkstraLength(p: Point) -> i32 {
 
 #[allow(non_snake_case)]
 pub fn FastDijkstraMap<F: Fn(Point) -> Status>(
-        source: Point, check: F, cells: i32, limit: i32) -> HashMap<Point, i32> {
+        source: Point, check: F, cells: i32, limit: i32, radius: i32) -> HashMap<Point, i32> {
     let n = 2 * limit + 1;
     let initial = Point(limit, limit);
     let offset = source - initial;
@@ -525,7 +525,7 @@ pub fn FastDijkstraMap<F: Fn(Point) -> Status>(
     let index = state.map.index(initial);
     init(&mut state, index, initial, 0, Status::Free);
 
-    let mut fov = FOV::new(12);
+    let mut fov = FOV::new(radius);
     fov.apply(|n: &FOVNode| {
         if n.next == Point::default() { return false; }
 
