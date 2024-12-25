@@ -14,7 +14,7 @@ use crate::base::{HashMap, HashSet, LOS, Matrix, Point, dirs};
 use crate::base::{sample, weighted, RNG};
 use crate::effect::{Effect, Event, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
-use crate::knowledge::{EntityKnowledge, Knowledge, Timestamp, Vision, VisionArgs};
+use crate::knowledge::{CellResult, EntityKnowledge, Knowledge, Timestamp, Vision, VisionArgs};
 use crate::pathing::{AStar, AStarLength, BFS, BFSResult, Status};
 use crate::pathing::{DijkstraSearch, FastDijkstraLength, FastDijkstraMap};
 
@@ -61,7 +61,7 @@ const FOV_RADIUS_PC_: i32 = 21;
 const SPEED_PC_: f64 = 0.1;
 const SPEED_NPC: f64 = 0.1;
 
-const LIGHT: Light = Light::Sun(Point(0, 0));
+const LIGHT: Light = Light::Sun(Point(4, 1));
 const WEATHER: Weather = Weather::None;
 const WORLD_SIZE: i32 = 50;
 
@@ -529,6 +529,9 @@ fn mapgen(board: &mut Board, rng: &mut RNG) {
 
 // AI
 
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+enum FlightStage { Flee, Hide, Done }
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum Goal { Assess, Chase, Drink, Eat, Explore, Flee, Rest }
 
@@ -550,10 +553,16 @@ pub struct FightState {
 
 #[derive(Clone, Debug)]
 pub struct FlightState {
-    done: bool,
+    stage: FlightStage,
     threats: Vec<Point>,
     since_seen: i32,
     till_assess: i32,
+}
+
+impl FlightState {
+    pub fn done(&self) -> bool {
+        self.stage == FlightStage::Done
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -753,29 +762,26 @@ fn assess_nearby(entity: &Entity, ai: &mut AIState, rng: &mut RNG) {
     };
 
     let Some(flight) = &ai.flight else { return base(ai) };
-    if flight.done || flight.threats.is_empty() { return base(ai); }
+    if flight.done() || flight.threats.is_empty() { return base(ai); }
 
     let dirs: Vec<_> = flight.threats.iter().map(|&x| x - entity.pos).collect();
     assess_dirs(&dirs, ASSESS_TURNS_FLIGHT, ai, rng);
 }
 
-fn flee_from_threats(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Option<BFSResult> {
+fn is_hiding_place(entity: &Entity, point: Point, threats: &Vec<Point>) -> bool {
+    if threats.iter().any(|&x| (x - point).len_l1() <= 1) { return false; }
+    let cell = entity.known.get(point);
+    cell.shade() || matches!(cell.tile(), Some(x) if x.limits_vision())
+}
+
+fn run_away(entity: &Entity, map: Vec<(Point, i32)>,
+            ai: &mut AIState, rng: &mut RNG) -> Option<BFSResult> {
     let Some(flight) = &ai.flight else { return None };
-    if flight.done || flight.threats.is_empty() { return None; }
-    if flight.since_seen >= max(flight.till_assess, 1) { return None; }
+    if flight.done() || flight.threats.is_empty() { return None; }
 
-    // WARNING: FastDijkstraMap doesn't flag squares where we heard something,
-    // but those squares tend to be where nearby enemies are!
-    //
-    // This reasoning applies to all uses of FastDijkstraMap, but it's worse
-    // for fleeing entities because often the first step they try to make to
-    // flee is to move into cell where they heard a target.
-
-    ai.debug_utility.clear();
-    let (known, pos) = (&*entity.known, entity.pos);
-    let check = |p: Point| known.get(p).status();
-    let map = FastDijkstraMap(pos, check, 1024, 64, 12);
     if map.is_empty() { return None; }
+
+    let (known, pos) = (&*entity.known, entity.pos);
 
     let threat_inv_l2s: Vec<_> = flight.threats.iter().map(
         |&x| (x, safe_inv_l2(pos - x))).collect();
@@ -789,11 +795,14 @@ fn flee_from_threats(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Option
             let z = FastDijkstraLength(x - p);
             if z < threat_distance { (threat, inv_l2, threat_distance) = (x, y, z); }
         }
+
         let blocked = {
             let los = LOS(p, threat);
             (1..los.len() - 1).any(|i| !known.get(los[i]).unblocked())
         };
         let frontier = dirs::ALL.iter().any(|&x| known.get(p + x).unknown());
+        let hiding = flight.stage == FlightStage::Hide;
+        let hidden = !hiding && is_hiding_place(entity, p, &flight.threats);
 
         let delta = p - pos;
         let inv_delta_l2 = safe_inv_l2(delta);
@@ -805,13 +814,54 @@ fn flee_from_threats(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Option
         let base = 1.5 * (threat_distance as f64) +
                    -1. * (source_distance as f64) +
                    16. * scale * (blocked as i32 as f64) +
-                   16. * scale * (frontier as i32 as f64);
+                   16. * scale * (frontier as i32 as f64) +
+                   16. * scale * if hidden { 1. } else { 0. };
         (cos + 1.).pow(3) * base.pow(9)
     };
 
     let scores: Vec<_> = map.into_iter().map(
         |(p, distance)| (p, score(p, distance))).collect();
     sample_scored_points(entity, &scores, rng, &mut ai.debug_utility)
+}
+
+fn hide_from_threats(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Option<BFSResult> {
+    let Some(flight) = &mut ai.flight else { return None };
+    if flight.done() || flight.threats.is_empty() { return None; }
+    if flight.since_seen >= max(flight.till_assess, 1) { return None; }
+
+    let (known, pos) = (&*entity.known, entity.pos);
+    let check = |p: Point| {
+        if !is_hiding_place(entity, p, &flight.threats) { return Status::Blocked; }
+        known.get(p).status()
+    };
+    if check(entity.pos) == Status::Blocked { return None; }
+
+    ai.debug_utility.clear();
+    flight.stage = FlightStage::Hide;
+
+    let map = FastDijkstraMap(pos, check, 256, 32, 12);
+    run_away(entity, map, ai, rng)
+}
+
+fn flee_from_threats(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Option<BFSResult> {
+    let Some(flight) = &mut ai.flight else { return None };
+    if flight.done() || flight.threats.is_empty() { return None; }
+    if flight.since_seen >= max(flight.till_assess, 1) { return None; }
+
+    ai.debug_utility.clear();
+    flight.stage = FlightStage::Flee;
+
+    // WARNING: FastDijkstraMap doesn't flag squares where we heard something,
+    // but those squares tend to be where nearby enemies are!
+    //
+    // This reasoning applies to all uses of FastDijkstraMap, but it's worse
+    // for fleeing entities because often the first step they try to make to
+    // flee is to move into cell where they heard a target.
+
+    let (known, pos) = (&*entity.known, entity.pos);
+    let check = |p: Point| known.get(p).status();
+    let map = FastDijkstraMap(pos, check, 1024, 64, 12);
+    run_away(entity, map, ai, rng)
 }
 
 fn update_ai_state(entity: &Entity, hints: &[Hint], ai: &mut AIState) {
@@ -874,20 +924,23 @@ fn update_ai_state(entity: &Entity, hints: &[Hint], ai: &mut AIState) {
         |x| if x.age < limit && x.rival { Some(x.pos) } else { None }).collect();
     threats.sort_unstable_by_key(|x| (x.0, x.1));
 
+    let hidden = threats.is_empty() || is_hiding_place(entity, entity.pos, &threats);
+    let stage = if hidden { FlightStage::Hide } else { FlightStage::Flee };
+
     if let Some(x) = &mut ai.flight {
         if threats.is_empty() {
             ai.flight = None;
         } else {
             let assess = min(2 * x.till_assess, MAX_FLIGHT_TURNS);
             x.since_seen = if reset { 0 } else { x.since_seen + 1 };
-            if reset || (!x.done && x.threats != threats) { ai.plan.clear(); }
+            if reset || (!x.done() && x.threats != threats) { ai.plan.clear(); }
             if reset && ai.goal == Goal::Assess { x.till_assess = assess;  }
-            if reset { x.done = false; }
+            if reset { x.stage = min(x.stage, stage); }
             x.threats = threats;
         }
     } else if !threats.is_empty() {
-        let (done, since_seen, till_assess) = (false, 0, MIN_FLIGHT_TURNS);
-        ai.flight = Some(FlightState { done, threats, since_seen, till_assess });
+        let (since_seen, till_assess) = (0, MIN_FLIGHT_TURNS);
+        ai.flight = Some(FlightState { stage, threats, since_seen, till_assess });
         ai.plan.clear();
     }
 }
@@ -905,7 +958,7 @@ fn plan_cached(entity: &Entity, hints: &[Hint],
 
     // Check whether the plan's goal is still a top priority for us.
     let mut goals: Vec<Goal> = vec![];
-    if let Some(x) = &ai.flight && !x.done {
+    if let Some(x) = &ai.flight && !x.done() {
         if x.since_seen > 0 { goals.push(Goal::Assess); }
         if x.since_seen < max(x.till_assess, 1) { goals.push(Goal::Flee); }
     } else if ai.fight.is_some() {
@@ -973,7 +1026,7 @@ fn plan_cached(entity: &Entity, hints: &[Hint],
                 ai.till_assess = rng.gen::<i32>().rem_euclid(MAX_ASSESS);
                 if let Some(x) = &mut ai.flight {
                     x.till_assess = MIN_FLIGHT_TURNS;
-                    x.done = true;
+                    x.stage = FlightStage::Done;
                 }
             }
             Some(Action::Look(next.target))
@@ -990,9 +1043,13 @@ fn plan_cached(entity: &Entity, hints: &[Hint],
                 let running = ai.goal == Goal::Flee || ai.goal == Goal::Chase;
                 if !running { return WANDER_TURNS; }
                 if !move_ready(entity) { return SLOWED_TURNS; }
-                if ai.goal == Goal::Flee { return 1.; }
-                let Some(fight) = &ai.fight else { return WANDER_TURNS; };
-                if fight.search_turns < MIN_SEARCH_TURNS { 1. } else { WANDER_TURNS }
+                if ai.goal == Goal::Flee {
+                    let Some(x) = &ai.flight else { return WANDER_TURNS; };
+                    if x.stage == FlightStage::Hide { WANDER_TURNS } else { 1. }
+                } else {
+                    let Some(x) = &ai.fight else { return WANDER_TURNS; };
+                    if x.search_turns >= MIN_SEARCH_TURNS { WANDER_TURNS } else { 1. }
+                }
             })();
             let look = if target == pos { entity.dir } else { target - pos };
             Some(Action::Move(Move { look, step: dir, turns }))
@@ -1019,9 +1076,11 @@ fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
     let mut result = {
         let mut result = BFSResult::default();
 
-        if let Some(x) = flee_from_threats(entity, ai, rng) {
+        if let Some(x) = hide_from_threats(entity, ai, rng) {
             (ai.goal, result) = (Goal::Flee, x);
-        } else if let Some(x) = &ai.flight && !x.done {
+        } else if let Some(x) = flee_from_threats(entity, ai, rng) {
+            (ai.goal, result) = (Goal::Flee, x);
+        } else if let Some(x) = &ai.flight && !x.done() {
             (ai.goal, result) = (Goal::Assess, coerce(pos, &[]));
         } else if let Some(x) = &ai.fight {
             if x.age == 0 {
@@ -1078,6 +1137,7 @@ fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
     ai.debug_targets = result.targets.clone();
     let target = *result.targets.select_nth_unstable_by_key(
         0, |&x| (x - pos).len_l2_squared()).1;
+    if target == pos && ai.goal == Goal::Flee { ai.goal = Goal::Assess; }
 
     if let Some(path) = AStar(pos, target, ASTAR_LIMIT_WANDER, check) {
         let kind = StepKind::Move;
