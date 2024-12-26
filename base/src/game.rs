@@ -1114,7 +1114,10 @@ fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
             if option.is_none() || tile.is_none() { return; }
 
             let (option, tile) = (*option.unwrap(), tile.unwrap());
-            let target = |p: Point| known.get(p).tile() == Some(tile);
+            let target = |p: Point| {
+                let cell = known.get(p);
+                cell.tile() == Some(tile) && cell.status() != Status::Occupied
+            };
             if target(pos) {
                 (ai.goal, result) = (goal, coerce(pos, &[]));
             } else if let Some(x) = DijkstraSearch(pos, target, ASTAR_LIMIT_WANDER, check) {
