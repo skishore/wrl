@@ -13,6 +13,7 @@
  * ====================================================
  */
 
+/// The square root of `x` (f32).
 #[cfg_attr(all(test, assert_no_panic), no_panic::no_panic)]
 pub fn sqrtf(x: f32) -> f32 {
     // On wasm32 we know that LLVM's intrinsic will compile to an optimized
@@ -27,11 +28,11 @@ pub fn sqrtf(x: f32) -> f32 {
             }
         }
     }
-    #[cfg(target_feature = "sse")]
+    #[cfg(all(target_feature = "sse", not(feature = "force-soft-floats")))]
     {
         // Note: This path is unlikely since LLVM will usually have already
         // optimized sqrt calls into hardware instructions if sse is available,
-        // but if someone does end up here they'll apprected the speed increase.
+        // but if someone does end up here they'll appreciate the speed increase.
         #[cfg(target_arch = "x86")]
         use core::arch::x86::*;
         #[cfg(target_arch = "x86_64")]
@@ -42,7 +43,7 @@ pub fn sqrtf(x: f32) -> f32 {
             _mm_cvtss_f32(m_sqrt)
         }
     }
-    #[cfg(not(target_feature = "sse"))]
+    #[cfg(any(not(target_feature = "sse"), feature = "force-soft-floats"))]
     {
         const TINY: f32 = 1.0e-30;
 
@@ -132,8 +133,9 @@ pub fn sqrtf(x: f32) -> f32 {
 #[cfg(not(target_arch = "powerpc64"))]
 #[cfg(test)]
 mod tests {
-    use super::*;
     use core::f32::*;
+
+    use super::*;
 
     #[test]
     fn sanity_check() {
@@ -154,12 +156,7 @@ mod tests {
 
     #[test]
     fn conformance_tests() {
-        let values = [
-            3.14159265359f32,
-            10000.0f32,
-            f32::from_bits(0x0000000f),
-            INFINITY,
-        ];
+        let values = [3.14159265359f32, 10000.0f32, f32::from_bits(0x0000000f), INFINITY];
         let results = [1071833029u32, 1120403456u32, 456082799u32, 2139095040u32];
 
         for i in 0..values.len() {

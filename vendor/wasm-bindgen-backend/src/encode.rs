@@ -239,6 +239,7 @@ fn shared_function<'a>(func: &'a ast::Function, _intern: &'a Interner) -> Functi
 fn shared_enum<'a>(e: &'a ast::Enum, intern: &'a Interner) -> Enum<'a> {
     Enum {
         name: &e.js_name,
+        signed: e.signed,
         variants: e
             .variants
             .iter()
@@ -362,7 +363,9 @@ fn shared_import_type<'a>(i: &'a ast::ImportType, intern: &'a Interner) -> Impor
 fn shared_import_enum<'a>(i: &'a ast::StringEnum, _intern: &'a Interner) -> StringEnum<'a> {
     StringEnum {
         name: &i.js_name,
+        generate_typescript: i.generate_typescript,
         variant_values: i.variant_values.iter().map(|x| &**x).collect(),
+        comments: i.comments.iter().map(|s| &**s).collect(),
     }
 }
 
@@ -403,7 +406,7 @@ enum LitOrExpr<'a> {
     Lit(&'a str),
 }
 
-impl<'a> Encode for LitOrExpr<'a> {
+impl Encode for LitOrExpr<'_> {
     fn encode(&self, dst: &mut Encoder) {
         match self {
             LitOrExpr::Expr(expr) => {
@@ -465,14 +468,14 @@ impl Encode for usize {
     }
 }
 
-impl<'a> Encode for &'a [u8] {
+impl Encode for &[u8] {
     fn encode(&self, dst: &mut Encoder) {
         self.len().encode(dst);
         dst.extend_from_slice(self);
     }
 }
 
-impl<'a> Encode for &'a str {
+impl Encode for &str {
     fn encode(&self, dst: &mut Encoder) {
         self.as_bytes().encode(dst);
     }

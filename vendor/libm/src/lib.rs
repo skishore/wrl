@@ -1,24 +1,25 @@
 //! libm in pure Rust
-#![deny(warnings)]
 #![no_std]
-#![cfg_attr(all(feature = "unstable"), feature(core_intrinsics))]
-#![allow(clippy::unreadable_literal)]
-#![allow(clippy::many_single_char_names)]
-#![allow(clippy::needless_return)]
-#![allow(clippy::int_plus_one)]
-#![allow(clippy::deprecated_cfg_attr)]
-#![allow(clippy::mixed_case_hex_literals)]
-#![allow(clippy::float_cmp)]
-#![allow(clippy::eq_op)]
+#![cfg_attr(feature = "unstable", allow(internal_features))]
+#![cfg_attr(feature = "unstable", feature(core_intrinsics))]
 #![allow(clippy::assign_op_pattern)]
+#![allow(clippy::deprecated_cfg_attr)]
+#![allow(clippy::eq_op)]
+#![allow(clippy::float_cmp)]
+#![allow(clippy::int_plus_one)]
+#![allow(clippy::many_single_char_names)]
+#![allow(clippy::mixed_case_hex_literals)]
+#![allow(clippy::needless_return)]
+#![allow(clippy::unreadable_literal)]
 
 mod libm_helper;
 mod math;
 
 use core::{f32, f64};
 
-pub use self::math::*;
 pub use libm_helper::*;
+
+pub use self::math::*;
 
 /// Approximate equality with 1 ULP of tolerance
 #[doc(hidden)]
@@ -29,11 +30,7 @@ pub fn _eqf(a: f32, b: f32) -> Result<(), u32> {
     } else {
         let err = (a.to_bits() as i32).wrapping_sub(b.to_bits() as i32).abs();
 
-        if err <= 1 {
-            Ok(())
-        } else {
-            Err(err as u32)
-        }
+        if err <= 1 { Ok(()) } else { Err(err as u32) }
     }
 }
 
@@ -45,15 +42,6 @@ pub fn _eq(a: f64, b: f64) -> Result<(), u64> {
     } else {
         let err = (a.to_bits() as i64).wrapping_sub(b.to_bits() as i64).abs();
 
-        if err <= 1 {
-            Ok(())
-        } else {
-            Err(err as u64)
-        }
+        if err <= 1 { Ok(()) } else { Err(err as u64) }
     }
 }
-
-// PowerPC tests are failing on LLVM 13: https://github.com/rust-lang/rust/issues/88520
-#[cfg(not(target_arch = "powerpc64"))]
-#[cfg(all(test, feature = "musl-reference-tests"))]
-include!(concat!(env!("OUT_DIR"), "/musl-tests.rs"));

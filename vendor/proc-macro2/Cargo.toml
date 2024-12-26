@@ -13,12 +13,13 @@
 edition = "2021"
 rust-version = "1.56"
 name = "proc-macro2"
-version = "1.0.85"
+version = "1.0.92"
 authors = [
     "David Tolnay <dtolnay@gmail.com>",
     "Alex Crichton <alex@alexcrichton.com>",
 ]
 build = "build.rs"
+autolib = false
 autobins = false
 autoexamples = false
 autotests = false
@@ -59,10 +60,6 @@ name = "comments"
 path = "tests/comments.rs"
 
 [[test]]
-name = "test_fmt"
-path = "tests/test_fmt.rs"
-
-[[test]]
 name = "features"
 path = "tests/features.rs"
 
@@ -71,12 +68,16 @@ name = "marker"
 path = "tests/marker.rs"
 
 [[test]]
-name = "test_size"
-path = "tests/test_size.rs"
-
-[[test]]
 name = "test"
 path = "tests/test.rs"
+
+[[test]]
+name = "test_fmt"
+path = "tests/test_fmt.rs"
+
+[[test]]
+name = "test_size"
+path = "tests/test_size.rs"
 
 [dependencies.unicode-ident]
 version = "1.0"

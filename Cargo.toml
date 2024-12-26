@@ -2,6 +2,9 @@
 members = [ "base", "term", "wasm" ]
 resolver = "2"
 
+[net]
+offline = true
+
 [profile.release]
 incremental = true
 

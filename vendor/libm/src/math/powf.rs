@@ -43,6 +43,7 @@ const IVLN2: f32 = 1.4426950216e+00;
 const IVLN2_H: f32 = 1.4426879883e+00;
 const IVLN2_L: f32 = 7.0526075433e-06;
 
+/// Returns `x` to the power of `y` (f32).
 #[cfg_attr(all(test, assert_no_panic), no_panic::no_panic)]
 pub fn powf(x: f32, y: f32) -> f32 {
     let mut z: f32;
@@ -181,19 +182,11 @@ pub fn powf(x: f32, y: f32) -> f32 {
         /* if |y| > 2**27 */
         /* over/underflow if x is not close to one */
         if ix < 0x3f7ffff8 {
-            return if hy < 0 {
-                sn * HUGE * HUGE
-            } else {
-                sn * TINY * TINY
-            };
+            return if hy < 0 { sn * HUGE * HUGE } else { sn * TINY * TINY };
         }
 
         if ix > 0x3f800007 {
-            return if hy > 0 {
-                sn * HUGE * HUGE
-            } else {
-                sn * TINY * TINY
-            };
+            return if hy > 0 { sn * HUGE * HUGE } else { sn * TINY * TINY };
         }
 
         /* now |1-x| is TINY <= 2**-20, suffice to compute

@@ -10,14 +10,21 @@
 # See Cargo.toml.orig for the original contents.
 
 [package]
-edition = "2018"
+edition = "2021"
+rust-version = "1.63"
 name = "libm"
-version = "0.2.8"
+version = "0.2.11"
 authors = ["Jorge Aparicio <jorge@japaric.io>"]
+build = "build.rs"
 exclude = [
     "/ci/",
     "/.github/workflows/",
 ]
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
 description = "libm in pure Rust"
 documentation = "https://docs.rs/libm"
 readme = "README.md"
@@ -26,20 +33,20 @@ keywords = [
     "math",
 ]
 categories = ["no-std"]
-license = "MIT OR Apache-2.0"
+license = "MIT AND (MIT OR Apache-2.0)"
 repository = "https://github.com/rust-lang/libm"
 
 [profile.release]
 lto = "fat"
 
-[dev-dependencies.no-panic]
-version = "0.1.8"
+[lib]
+name = "libm"
+path = "src/lib.rs"
 
-[build-dependencies.rand]
-version = "0.6.5"
-optional = true
+[dev-dependencies.no-panic]
+version = "0.1.30"
 
 [features]
 default = []
-musl-reference-tests = ["rand"]
+force-soft-floats = []
 unstable = []
