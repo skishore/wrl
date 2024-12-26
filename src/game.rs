@@ -98,7 +98,7 @@ pub struct Tile {
     pub glyph: Glyph,
     pub description: &'static str,
 }
-static_assert_size!(Tile, 32);
+static_assert_size!(Tile, 24);
 
 impl Tile {
     fn get(ch: char) -> &'static Tile { TILES.get(&ch).unwrap() }
@@ -143,7 +143,7 @@ pub struct Cell {
     pub shadow: i32,
     pub tile: &'static Tile,
 }
-static_assert_size!(Cell, 24);
+static_assert_size!(Cell, 16);
 
 pub enum Light { None, Sun(Point) }
 

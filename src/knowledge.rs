@@ -150,7 +150,7 @@ pub struct CellKnowledge {
     pub tile: &'static Tile,
     visibility: i32,
 }
-static_assert_size!(CellKnowledge, 40);
+static_assert_size!(CellKnowledge, 32);
 
 pub struct EntityKnowledge {
     pub eid: EID,
