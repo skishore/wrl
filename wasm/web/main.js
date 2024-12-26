@@ -1,4 +1,4 @@
-import init, {keydown, tick} from './pkg/wrl.js';
+import init, {keydown, tick} from '../pkg/wrl_wasm.js';
 
 const loadImage = async (uri) => new Promise((resolve, reject) => {
   const img = new Image();
@@ -85,7 +85,7 @@ const normalizeFont = (image) => {
 };
 
 const main = async () => {
-  const base = await loadImage('images/aquarius_8x8.png');
+  const base = await loadImage('web/images/aquarius_8x8.png');
   const image = normalizeFont(base);
 
   const unit = 16;

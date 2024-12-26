@@ -1,26 +1,15 @@
-#![feature(let_chains)]
-#![feature(test)]
-
-mod base;
-mod game;
-mod list;
-mod effect;
-mod entity;
-mod knowledge;
-mod pathing;
-
 use std::cell::RefCell;
 
 use wasm_bindgen::prelude::*;
 
-use base::{Glyph, Matrix};
-use game::{Input, State};
+use wrl_base::base::{Glyph, Matrix};
+use wrl_base::game::{Input, State};
 
 thread_local! {
     static STATE: RefCell<State> = State::new(None).into();
 }
 
-#[wasm_bindgen(module = "/bindings.js")]
+#[wasm_bindgen(module = "/web/bindings.js")]
 extern "C" {
     fn render(ptr: *const Glyph, sx: i32, sy: i32) -> i32;
 }
@@ -44,6 +33,6 @@ pub fn tick() {
         let mut output = Matrix::default();
         let mut debug = String::default();
         game.render(&mut output, &mut debug);
-        unsafe { render(output.data.as_ptr(), output.size.0, output.size.1) }
+        render(output.data.as_ptr(), output.size.0, output.size.1)
     });
 }

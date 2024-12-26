@@ -1,0 +1,9 @@
+[package]
+name = "wrl-term"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+wrl-base = { path = "../base" }
+game-loop = "1.0.0"
+termion = "2.0.1"
