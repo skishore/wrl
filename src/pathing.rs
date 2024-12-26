@@ -365,85 +365,33 @@ pub fn Dijkstra<F: Fn(Point) -> bool, G: Fn(Point) -> Status, H: Fn(Point) -> i3
 
 // DijkstraMap
 
-#[allow(non_snake_case)]
-pub fn DijkstraMap<F: Fn(Point) -> Status>(
-        check: F, limit: i32, result: &mut HashMap<Point, i32>) {
-    let mut map = HashMap::default();
-    let mut heap = AStarHeap::default();
-
-    for (pos, val) in result.iter() {
-        let node = AStarNode::new(*pos, SOURCE_NODE, 0, *val);
-        map.insert(*pos, heap.push(node));
-    }
-
-    for _ in 0..limit {
-        if heap.is_empty() { break; }
-        let prev = heap.extract_min();
-        let prev_pos = heap.get_node(prev).pos;
-        let prev_val = heap.get_node(prev).score;
-        result.insert(prev_pos, prev_val);
-
-        for dir in &dirs::ALL {
-            let next = prev_pos + *dir;
-            let test = check(next);
-            if test == Status::Blocked { continue; }
-
-            let diagonal = dir.0 != 0 && dir.1 != 0;
-            let occipied = test == Status::Occupied;
-            let val = prev_val + ASTAR_UNIT_COST +
-                      if diagonal { ASTAR_DIAGONAL_PENALTY } else { 0 } +
-                      if occipied { ASTAR_OCCUPIED_PENALTY } else { 0 };
-
-            map.entry(next).and_modify(|x| {
-                // See AStar for comments about index != NOT_IN_HEAP.
-                let existing = heap.mut_node(*x);
-                if existing.index != NOT_IN_HEAP && existing.score > val {
-                    (existing.score, existing.parent) = (val, prev);
-                    heap.heapify(*x);
-                }
-            }).or_insert_with(|| {
-                heap.push(AStarNode::new(next, prev, 0, val))
-            });
-        }
-    }
-
-    for index in &heap.heap {
-        let node = heap.get_node(*index);
-        result.insert(node.pos, node.score);
-    }
-}
-
-//////////////////////////////////////////////////////////////////////////////
-
-// FastDijkstraMap
-
 const DIJKSTRA_COST: i32 = 5;
 const DIJKSTRA_DIAGONAL_PENALTY: i32 = 2;
 const DIJKSTRA_OCCUPIED_PENALTY: i32 = 20;
 
 #[repr(C)]
 #[derive(Clone, Default)]
-struct FastDijkstraLink {
+struct DijkstraLink {
     next: i32,
     prev: i32,
 }
 
 #[repr(C)]
 #[derive(Clone, Default)]
-struct FastDijkstraNode {
-    link: FastDijkstraLink,
+struct DijkstraNode {
+    link: DijkstraLink,
     point: Point,
     score: i32,
     status: Option<Status>,
 }
 
-struct FastDijkstraState {
-    lists: Vec<FastDijkstraLink>,
-    map: Matrix<FastDijkstraNode>,
+struct DijkstraState {
+    lists: Vec<DijkstraLink>,
+    map: Matrix<DijkstraNode>,
 }
 
-impl FastDijkstraState {
-    fn link(&mut self, base: i32, score: i32) -> &mut FastDijkstraLink {
+impl DijkstraState {
+    fn link(&mut self, base: i32, score: i32) -> &mut DijkstraLink {
         if base == 0 { return &mut self.lists[score as usize]; }
         &mut self.map.data[base as usize - 1].link
     }
@@ -451,28 +399,28 @@ impl FastDijkstraState {
 
 // Expose a distance function for use in other heuristics.
 #[allow(non_snake_case)]
-pub fn FastDijkstraLength(p: Point) -> i32 {
+pub fn DijkstraLength(p: Point) -> i32 {
     let (x, y) = (p.0.abs(), p.1.abs());
     DIJKSTRA_COST * max(x, y) + DIJKSTRA_DIAGONAL_PENALTY * min(x, y)
 }
 
 #[allow(non_snake_case)]
-pub fn FastDijkstraMap<F: Fn(Point) -> Status>(
+pub fn DijkstraMap<F: Fn(Point) -> Status>(
         source: Point, check: F, cells: i32, limit: i32, radius: i32) -> Vec<(Point, i32)> {
     let n = 2 * limit + 1;
     let initial = Point(limit, limit);
     let offset = source - initial;
 
     let mut current = 0;
-    let map = Matrix::new(Point(n, n), FastDijkstraNode::default());
-    let mut state = FastDijkstraState { lists: vec![], map };
+    let map = Matrix::new(Point(n, n), DijkstraNode::default());
+    let mut state = DijkstraState { lists: vec![], map };
     let mut result = vec![];
     result.reserve(cells as usize);
 
-    let init = |state: &mut FastDijkstraState,
+    let init = |state: &mut DijkstraState,
                 index: usize, point: Point, score: i32, status: Status| {
         while state.lists.len() <= score as usize {
-            state.lists.push(FastDijkstraLink::default())
+            state.lists.push(DijkstraLink::default())
         }
 
         // Add the entry to the tail of its selected list.
@@ -492,8 +440,8 @@ pub fn FastDijkstraMap<F: Fn(Point) -> Status>(
 
     // Returns true if the cell is blocked, so we can short-circuit populating
     // the initial FOV-based seed for the Dijkstra iteration.
-    let step = |state: &mut FastDijkstraState, dir: Point,
-                prev_point: Point, prev_score: i32| -> bool {
+    let step = |state: &mut DijkstraState,
+                dir: Point, prev_point: Point, prev_score: i32| -> bool {
         let point = prev_point + dir;
         if !state.map.contains(point) { return true; }
 
@@ -514,7 +462,7 @@ pub fn FastDijkstraMap<F: Fn(Point) -> Status>(
 
         if visited {
             let score = entry.score;
-            let FastDijkstraLink { next, prev } = entry.link;
+            let DijkstraLink { next, prev } = entry.link;
             state.link(next, score).prev = prev;
             state.link(prev, score).next = next;
         }

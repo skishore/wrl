@@ -16,7 +16,7 @@ use crate::effect::{Effect, Event, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
 use crate::knowledge::{EntityKnowledge, Knowledge, Timestamp, Vision, VisionArgs};
 use crate::pathing::{AStar, BFS, BFSResult, Status};
-use crate::pathing::{DijkstraSearch, FastDijkstraLength, FastDijkstraMap};
+use crate::pathing::{DijkstraSearch, DijkstraLength, DijkstraMap};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -659,7 +659,7 @@ fn explore(entity: &Entity, rng: &mut RNG,
     utility.clear();
     let (known, pos, dir) = (&*entity.known, entity.pos, entity.dir);
     let check = |p: Point| known.get(p).status();
-    let map = FastDijkstraMap(pos, check, SEARCH_CELLS, SEARCH_LIMIT, FOV_RADIUS_NPC);
+    let map = DijkstraMap(pos, check, SEARCH_CELLS, SEARCH_LIMIT, FOV_RADIUS_NPC);
     if map.is_empty() { return None; }
 
     let mut min_age = std::i32::MAX;
@@ -701,7 +701,7 @@ fn search_around(entity: &Entity, source: Point, age: i32, bias: Point,
     utility.clear();
     let (known, pos, dir) = (&*entity.known, entity.pos, entity.dir);
     let check = |p: Point| known.get(p).status();
-    let map = FastDijkstraMap(pos, check, SEARCH_CELLS, SEARCH_LIMIT, FOV_RADIUS_NPC);
+    let map = DijkstraMap(pos, check, SEARCH_CELLS, SEARCH_LIMIT, FOV_RADIUS_NPC);
     if map.is_empty() { return None; }
 
     let inv_dir_l2 = safe_inv_l2(dir);
@@ -789,14 +789,14 @@ fn run_away(entity: &Entity, map: Vec<(Point, i32)>,
 
     let threat_inv_l2s: Vec<_> = flight.threats.iter().map(
         |&x| (x, safe_inv_l2(pos - x))).collect();
-    let scale = FastDijkstraLength(Point(1, 0)) as f64;
+    let scale = DijkstraLength(Point(1, 0)) as f64;
 
     let score = |p: Point, source_distance: i32| -> f64 {
         let mut inv_l2 = 0.;
         let mut threat = Point::default();
         let mut threat_distance = std::i32::MAX;
         for &(x, y) in &threat_inv_l2s {
-            let z = FastDijkstraLength(x - p);
+            let z = DijkstraLength(x - p);
             if z < threat_distance { (threat, inv_l2, threat_distance) = (x, y, z); }
         }
 
@@ -843,7 +843,7 @@ fn hide_from_threats(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Option
     ai.debug_utility.clear();
     flight.stage = FlightStage::Hide;
 
-    let map = FastDijkstraMap(pos, check, HIDING_CELLS, HIDING_LIMIT, FOV_RADIUS_NPC);
+    let map = DijkstraMap(pos, check, HIDING_CELLS, HIDING_LIMIT, FOV_RADIUS_NPC);
     run_away(entity, map, ai, rng)
 }
 
@@ -855,16 +855,16 @@ fn flee_from_threats(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Option
     ai.debug_utility.clear();
     flight.stage = FlightStage::Flee;
 
-    // WARNING: FastDijkstraMap doesn't flag squares where we heard something,
+    // WARNING: DijkstraMap doesn't flag squares where we heard something,
     // but those squares tend to be where nearby enemies are!
     //
-    // This reasoning applies to all uses of FastDijkstraMap, but it's worse
+    // This reasoning applies to all uses of DijkstraMap, but it's worse
     // for fleeing entities because often the first step they try to make to
     // flee is to move into cell where they heard a target.
 
     let (known, pos) = (&*entity.known, entity.pos);
     let check = |p: Point| known.get(p).status();
-    let map = FastDijkstraMap(pos, check, SEARCH_CELLS, SEARCH_LIMIT, FOV_RADIUS_NPC);
+    let map = DijkstraMap(pos, check, SEARCH_CELLS, SEARCH_LIMIT, FOV_RADIUS_NPC);
     run_away(entity, map, ai, rng)
 }
 
@@ -1043,7 +1043,7 @@ fn plan_cached(entity: &Entity, hints: &[Hint],
                     target = next.target;
                 }
             }
-            let turns = (||{
+            let turns = (|| {
                 let running = ai.goal == Goal::Flee || ai.goal == Goal::Chase;
                 if !running { return WANDER_TURNS; }
                 if !move_ready(entity) { return SLOWED_TURNS; }
@@ -1841,10 +1841,10 @@ impl State {
 mod tests {
     use super::*;
     extern crate test;
-    use crate::pathing::DijkstraMap;
 
     const BFS_LIMIT: i32 = 32;
     const DIJKSTRA_CELLS: i32 = 4096;
+    const DIJKSTRA_LIMIT: i32 = 2 * BFS_LIMIT;
 
     #[bench]
     fn bench_bfs(b: &mut test::Bencher) {
@@ -1867,25 +1867,13 @@ mod tests {
     }
 
     #[bench]
-    fn bench_dijkstra_map(b: &mut test::Bencher) {
-        let map = generate_map(2 * BFS_LIMIT);
-        b.iter(|| {
-            let mut result = HashMap::default();
-            result.insert(Point::default(), 0);
-            let check = |p: Point| { map.get(&p).copied().unwrap_or(Status::Free) };
-            DijkstraMap(check, DIJKSTRA_CELLS, &mut result);
-        });
-    }
-
-    #[bench]
     fn bench_fast_dijkstra_map(b: &mut test::Bencher) {
         let map = generate_map(2 * BFS_LIMIT);
         b.iter(|| {
             let mut result = HashMap::default();
             result.insert(Point::default(), 0);
             let check = |p: Point| { map.get(&p).copied().unwrap_or(Status::Free) };
-            FastDijkstraMap(Point::default(), check, DIJKSTRA_CELLS,
-                            2 * BFS_LIMIT, FOV_RADIUS_NPC);
+            DijkstraMap(Point::default(), check, DIJKSTRA_CELLS, DIJKSTRA_LIMIT, FOV_RADIUS_NPC);
         });
     }
 
