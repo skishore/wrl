@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::cmp::{max, min};
 
 use crate::base::{HashMap, FOV, FOVNode, LOS, Matrix, Point, dirs};
@@ -386,6 +387,7 @@ struct DijkstraNode {
 }
 
 struct DijkstraState {
+    dirty: Vec<Point>,
     lists: Vec<DijkstraLink>,
     map: Matrix<DijkstraNode>,
 }
@@ -395,6 +397,13 @@ impl DijkstraState {
         if base == 0 { return &mut self.lists[score as usize]; }
         &mut self.map.data[base as usize - 1].link
     }
+}
+
+thread_local! {
+    static STATE: RefCell<DijkstraState> = {
+        let map = Matrix::new(Point::default(), DijkstraNode::default());
+        (DijkstraState { dirty: vec![], lists: vec![], map }).into()
+    };
 }
 
 // Expose a distance function for use in other heuristics.
@@ -407,15 +416,33 @@ pub fn DijkstraLength(p: Point) -> i32 {
 #[allow(non_snake_case)]
 pub fn DijkstraMap<F: Fn(Point) -> Status>(
         source: Point, check: F, cells: i32, limit: i32, radius: i32) -> Vec<(Point, i32)> {
-    let n = 2 * limit + 1;
-    let initial = Point(limit, limit);
-    let offset = source - initial;
+    STATE.with_borrow_mut(|state|{
+        let n = 2 * limit + 1;
+        if state.map.size.0 < n || state.map.size.1 < n {
+            state.map = Matrix::new(Point(n, n), DijkstraNode::default());
+        }
 
+        let result = CachedDijkstraMap(state, source, check, cells, limit, radius);
+
+        // Restore the cached state to a clean condition.
+        for &p in &state.dirty { state.map.set(p, DijkstraNode::default()); }
+        state.dirty.clear();
+        state.lists.clear();
+
+        result
+    })
+}
+
+#[allow(non_snake_case)]
+fn CachedDijkstraMap<F: Fn(Point) -> Status>(
+        state: &mut DijkstraState, source: Point, check: F,
+        cells: i32, limit: i32, radius: i32) -> Vec<(Point, i32)> {
     let mut current = 0;
-    let map = Matrix::new(Point(n, n), DijkstraNode::default());
-    let mut state = DijkstraState { lists: vec![], map };
     let mut result = vec![];
     result.reserve(cells as usize);
+
+    let initial = Point(limit, limit);
+    let offset = source - initial;
 
     let init = |state: &mut DijkstraState,
                 index: usize, point: Point, score: i32, status: Status| {
@@ -451,6 +478,7 @@ pub fn DijkstraMap<F: Fn(Point) -> Status>(
         let status = entry.status.unwrap_or_else(|| check(point + offset));
 
         entry.status = Some(status);
+        if !visited { state.dirty.push(point); }
         if status == Status::Blocked { return true; }
 
         let diagonal = dir.0 != 0 && dir.1 != 0;
@@ -471,7 +499,7 @@ pub fn DijkstraMap<F: Fn(Point) -> Status>(
     };
 
     let index = state.map.index(initial);
-    init(&mut state, index, initial, 0, Status::Free);
+    init(state, index, initial, 0, Status::Free);
 
     let mut fov = FOV::new(radius);
     fov.apply(|n: &FOVNode| {
@@ -479,7 +507,7 @@ pub fn DijkstraMap<F: Fn(Point) -> Status>(
 
         let node = &state.map.entry_ref(n.prev + initial);
         let (prev_point, prev_score) = (node.point, node.score);
-        step(&mut state, n.next - n.prev, prev_point, prev_score)
+        step(state, n.next - n.prev, prev_point, prev_score)
     });
 
     for _ in 0..cells {
@@ -501,7 +529,7 @@ pub fn DijkstraMap<F: Fn(Point) -> Status>(
         if node.status == Some(Status::Unknown) { continue; }
 
         for dir in &dirs::ALL {
-            step(&mut state, *dir, prev_point, prev_score);
+            step(state, *dir, prev_point, prev_score);
         }
     }
 
