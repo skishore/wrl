@@ -29,9 +29,9 @@ const SPEED_NPC: f64 = 0.1;
 
 const LIGHT: Light = Light::Sun(Point(4, 1));
 const WEATHER: Weather = Weather::None;
-const WORLD_SIZE: i32 = 50;
-const NUM_PREDATORS: i32 = 1;
-const NUM_PREY: i32 = 3;
+const WORLD_SIZE: i32 = 100;
+const NUM_PREDATORS: i32 = 2;
+const NUM_PREY: i32 = 18;
 
 const UI_DAMAGE_FLASH: i32 = 6;
 const UI_DAMAGE_TICKS: i32 = 6;
@@ -1120,10 +1120,20 @@ mod tests {
     use super::*;
     extern crate test;
 
+    const BASE_SEED: u64 = 17;
+    const NUM_SEEDS: u64 = 8;
+
     #[bench]
     fn bench_state_update(b: &mut test::Bencher) {
-        let mut state = State::new(Some(17));
+        let mut index = 0;
+        let mut states = vec![];
+        for i in 0..NUM_SEEDS { states.push(State::new(Some(BASE_SEED + i))); }
+
         b.iter(|| {
+            let i = index % states.len();
+            let state = &mut states[i];
+            index += 1;
+
             state.inputs.push(Input::Char('.'));
             state.update();
             while state.board.get_frame().is_some() { state.update(); }
