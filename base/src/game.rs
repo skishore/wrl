@@ -6,7 +6,7 @@ use lazy_static::lazy_static;
 use rand::{Rng, SeedableRng};
 
 use crate::static_assert_size;
-use crate::ai::{AIState, StepKind, plan_npc};
+use crate::ai::{AIState, plan_npc};
 use crate::base::{Buffer, Color, Glyph, Rect, Slice};
 use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs};
 use crate::effect::{Effect, Event, Frame, FT, self};
@@ -928,15 +928,10 @@ impl State {
         let known = &*entity.known;
 
         if entity.eid != self.player && frame.is_none() {
-            let mut ai = entity.ai.clone();
-            while ai.turn_times.len() > 2 { ai.turn_times.pop_back(); }
-            ai.debug_utility.clear();
-            ai.plan.clear();
-            *debug = format!("{:?}", ai);
+            *debug = entity.ai.debug_string();
 
-            for step in &entity.ai.plan {
-                if step.kind == StepKind::Look { continue; }
-                let Point(x, y) = step.target - offset;
+            for &p in &entity.ai.debug_plan() {
+                let Point(x, y) = p - offset;
                 let point = Point(2 * x, y);
                 let mut glyph = slice.get(point);
                 if glyph.ch() == Glyph::wide(' ').ch() { glyph = Glyph::wide('.'); }

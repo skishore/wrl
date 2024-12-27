@@ -66,15 +66,15 @@ enum FlightStage { Flee, Hide, Done }
 enum Goal { Assess, Chase, Drink, Eat, Explore, Flee, Rest }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum StepKind { Drink, Eat, Move, Look, Rest }
+enum StepKind { Drink, Eat, Move, Look, Rest }
 
 #[derive(Clone, Copy, Debug)]
-pub struct Step { pub kind: StepKind, pub target: Point }
+struct Step { kind: StepKind, target: Point }
 
 type Hint = (Goal, &'static Tile);
 
 #[derive(Clone, Debug)]
-pub struct FightState {
+struct FightState {
     age: i32,
     bias: Point,
     target: Point,
@@ -82,7 +82,7 @@ pub struct FightState {
 }
 
 #[derive(Clone, Debug)]
-pub struct FlightState {
+struct FlightState {
     stage: FlightStage,
     threats: Vec<Point>,
     since_seen: i32,
@@ -90,7 +90,7 @@ pub struct FlightState {
 }
 
 impl FlightState {
-    pub fn done(&self) -> bool {
+    fn done(&self) -> bool {
         self.stage == FlightStage::Done
     }
 }
@@ -98,12 +98,12 @@ impl FlightState {
 #[derive(Clone, Debug)]
 pub struct AIState {
     goal: Goal,
-    pub plan: Vec<Step>,
+    plan: Vec<Step>,
     time: Timestamp,
     hints: HashMap<Goal, Point>,
     fight: Option<FightState>,
     flight: Option<FlightState>,
-    pub turn_times: VecDeque<Timestamp>,
+    turn_times: VecDeque<Timestamp>,
     till_assess: i32,
     till_hunger: i32,
     till_thirst: i32,
@@ -140,6 +140,19 @@ impl AIState {
         if self.turn_times.len() == TURN_TIMES_LIMIT { self.turn_times.pop_back(); }
         self.turn_times.push_front(self.time);
         self.time = time;
+    }
+
+    pub fn debug_plan(&self) -> Vec<Point> {
+        self.plan.iter().filter_map(
+            |x| if x.kind == StepKind::Look { None } else { Some(x.target) }).collect()
+    }
+
+    pub fn debug_string(&self) -> String {
+        let mut copy = self.clone();
+        while copy.turn_times.len() > 2 { copy.turn_times.pop_back(); }
+        copy.debug_utility.clear();
+        copy.plan.clear();
+        format!("{:?}", copy)
     }
 }
 
