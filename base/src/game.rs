@@ -355,11 +355,11 @@ impl Board {
         }
         let total = rain.drops.capacity();
         let denom = max(rain.diff.1, 1);
-        let delta = max(rain.diff.1, 1) as usize;
+        let delta = denom as usize;
         let extra = (frame + 1) * total / delta - (frame * total) / delta;
         for _ in 0..min(extra, total - rain.drops.len()) {
-            let x = rng.gen::<i32>().rem_euclid(denom);
-            let y = rng.gen::<i32>().rem_euclid(denom);
+            let x = rng.gen_range(0..denom);
+            let y = rng.gen_range(0..denom);
             let target_frame = frame + rain.path.len() - 1;
             let target_point = Point(x - denom / 2, y - denom / 2) + pos;
             rain.drops.push_back(Drop { frame: target_frame, point: target_point });
@@ -420,7 +420,6 @@ fn mapgen(board: &mut Board, rng: &mut RNG) {
     let size = board.get_size();
 
     let automata = |rng: &mut RNG, init: u32| -> Matrix<bool> {
-        let mut d100 = || rng.gen::<u32>() % 100;
         let mut result = Matrix::new(size, false);
         for x in 0..size.0 {
             result.set(Point(x, 0), true);
@@ -433,7 +432,8 @@ fn mapgen(board: &mut Board, rng: &mut RNG) {
 
         for y in 0..size.1 {
             for x in 0..size.0 {
-                if d100() < init { result.set(Point(x, y),  true); }
+                let block = rng.gen_range(0..100) < init;
+                if block { result.set(Point(x, y),  true); }
             }
         }
 
@@ -476,11 +476,10 @@ fn mapgen(board: &mut Board, rng: &mut RNG) {
         }
     }
 
-    let die = |n: i32, rng: &mut RNG| rng.gen::<i32>().rem_euclid(n);
     let mut river = vec![Point::default()];
     for i in 1..size.1 {
         let last = river.last().unwrap().0;
-        let next = last + die(3, rng) - 1;
+        let next = last + rng.gen_range(-1..=1);
         river.push(Point(next, i));
     }
     let target = river[0] + *river.last().unwrap();
@@ -489,7 +488,7 @@ fn mapgen(board: &mut Board, rng: &mut RNG) {
 
     let pos = |board: &Board, rng: &mut RNG| {
         for _ in 0..100 {
-            let p = Point(die(size.0, rng), die(size.1, rng));
+            let p = Point(rng.gen_range(0..size.0), rng.gen_range(0..size.1));
             if let Status::Free = board.get_status(p) { return Some(p); }
         }
         None
@@ -868,10 +867,9 @@ impl State {
         let args = EntityArgs { glyph, player, predator: false, pos, speed };
         let player = board.add_entity(&args, &mut rng);
 
-        let die = |n: i32, rng: &mut RNG| rng.gen::<i32>().rem_euclid(n);
         let pos = |board: &Board, rng: &mut RNG| {
             for _ in 0..100 {
-                let p = Point(die(size.0, rng), die(size.1, rng));
+                let p = Point(rng.gen_range(0..size.0), rng.gen_range(0..size.1));
                 if let Status::Free = board.get_status(p) { return Some(p); }
             }
             None

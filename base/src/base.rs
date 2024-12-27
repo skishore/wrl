@@ -22,13 +22,13 @@ pub type HashMap<K, V> = fxhash::FxHashMap<K, V>;
 
 pub fn sample<'a, T>(xs: &'a [T], rng: &mut RNG) -> &'a T {
     assert!(!xs.is_empty());
-    &xs[rng.gen::<usize>() % xs.len()]
+    &xs[rng.gen_range(0..xs.len())]
 }
 
 pub fn weighted<'a, T: Debug>(xs: &'a [(i32, T)], rng: &mut RNG) -> &'a T {
     let total = xs.iter().fold(0, |acc, x| acc + x.0);
     assert!(total > 0, "Total: {}; values: {:?}", total, xs);
-    let mut value = (rng.gen::<usize>() % total as usize) as i32;
+    let mut value = rng.gen_range(0..total);
     for (weight, choice) in xs {
         value -= weight;
         if value <= 0 { return choice; }

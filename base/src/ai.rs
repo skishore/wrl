@@ -122,9 +122,9 @@ impl AIState {
             fight: None,
             flight: None,
             turn_times: Default::default(),
-            till_assess: rng.gen::<i32>().rem_euclid(MAX_ASSESS),
-            till_hunger: rng.gen::<i32>().rem_euclid(MAX_HUNGER),
-            till_thirst: rng.gen::<i32>().rem_euclid(MAX_THIRST),
+            till_assess: rng.gen_range(0..MAX_ASSESS),
+            till_hunger: rng.gen_range(0..MAX_HUNGER),
+            till_thirst: rng.gen_range(0..MAX_THIRST),
             till_rested: MAX_RESTED,
             debug_targets: vec![],
             debug_utility: Default::default(),
@@ -340,7 +340,7 @@ fn assess_dirs(dirs: &[Point], turns: i32, ai: &mut AIState, rng: &mut RNG) {
 
     for i in 0..ASSESS_STEPS {
         let scale = 1000;
-        let steps = rng.gen::<i32>().rem_euclid(turns) + 1;
+        let steps = rng.gen_range(0..turns) + 1;
         let angle = Normal::new(0., ASSESS_ANGLE).unwrap().sample(rng);
         let (sin, cos) = (angle.sin(), angle.cos());
 
@@ -623,7 +623,7 @@ fn plan_cached(entity: &Entity, hints: &[Hint],
         StepKind::Eat => { ai.till_hunger = MAX_HUNGER; wait }
         StepKind::Look => {
             if ai.plan.is_empty() && ai.goal == Goal::Assess {
-                ai.till_assess = rng.gen::<i32>().rem_euclid(MAX_ASSESS);
+                ai.till_assess = rng.gen_range(0..MAX_ASSESS);
                 if let Some(x) = &mut ai.flight {
                     x.till_assess = MIN_FLIGHT_TURNS;
                     x.stage = FlightStage::Done;
