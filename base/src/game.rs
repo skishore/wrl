@@ -6,7 +6,7 @@ use lazy_static::lazy_static;
 use rand::{Rng, SeedableRng};
 
 use crate::static_assert_size;
-use crate::ai::{AIState, plan_npc};
+use crate::ai::{AIEnv, AIState, plan_npc};
 use crate::base::{Buffer, Color, Glyph, Rect, Slice};
 use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs};
 use crate::effect::{Effect, Event, Frame, FT, self};
@@ -558,14 +558,20 @@ fn plan(state: &mut State, eid: EID) -> Action {
     let player = eid == state.player;
     if player { return replace(&mut state.input, Action::WaitForInput); }
 
+    let entity = &mut state.board.entities[eid];
+    let mut debug = None;
     let mut ai = state.ai.take().unwrap_or_else(
         || Box::new(AIState::new(&mut state.rng)));
-    swap(&mut ai, &mut state.board.entities[eid].ai);
+    swap(&mut debug, &mut entity.debug);
+    swap(&mut ai, &mut entity.ai);
 
+    let mut env = AIEnv { rng: &mut state.rng, debug };
     let entity = &state.board.entities[eid];
-    let action = plan_npc(entity, &mut ai, &mut state.rng);
+    let action = plan_npc(entity, &mut ai, &mut env);
 
-    swap(&mut ai, &mut state.board.entities[eid].ai);
+    let entity = &mut state.board.entities[eid];
+    swap(&mut env.debug, &mut entity.debug);
+    swap(&mut ai, &mut entity.ai);
     state.ai = Some(ai);
     action
 }
@@ -927,6 +933,7 @@ impl State {
 
         if entity.eid != self.player && frame.is_none() {
             *debug = entity.ai.debug_string();
+            let debug = entity.debug.as_ref();
 
             for &p in &entity.ai.debug_plan() {
                 let Point(x, y) = p - offset;
@@ -935,13 +942,13 @@ impl State {
                 if glyph.ch() == Glyph::wide(' ').ch() { glyph = Glyph::wide('.'); }
                 slice.set(point, glyph.with_fg(0x400));
             }
-            for (&point, &score) in &entity.ai.debug_utility {
+            for &(point, score) in debug.map(|x| x.utility.as_slice()).unwrap_or_default() {
                 let Point(x, y) = point - offset;
                 let point = Point(2 * x, y);
                 let glyph = slice.get(point);
                 slice.set(point, glyph.with_bg(Color::dark(score)));
             }
-            for &target in &entity.ai.debug_targets {
+            for &target in debug.map(|x| x.targets.as_slice()).unwrap_or_default() {
                 let Point(x, y) = target - offset;
                 let point = Point(2 * x, y);
                 let glyph = slice.get(point);

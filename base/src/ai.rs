@@ -57,6 +57,21 @@ fn wander(dir: Point) -> Action { step(dir, WANDER_TURNS) }
 
 //////////////////////////////////////////////////////////////////////////////
 
+// Interface
+
+#[derive(Default)]
+pub struct AIDebug {
+    pub targets: Vec<Point>,
+    pub utility: Vec<(Point, u8)>,
+}
+
+pub struct AIEnv<'a> {
+    pub rng: &'a mut RNG,
+    pub debug: Option<Box<AIDebug>>,
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 // AI
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -108,8 +123,6 @@ pub struct AIState {
     till_hunger: i32,
     till_thirst: i32,
     till_rested: i32,
-    pub debug_targets: Vec<Point>,
-    pub debug_utility: HashMap<Point, u8>,
 }
 
 impl AIState {
@@ -126,8 +139,6 @@ impl AIState {
             till_hunger: rng.gen_range(0..MAX_HUNGER),
             till_thirst: rng.gen_range(0..MAX_THIRST),
             till_rested: MAX_RESTED,
-            debug_targets: vec![],
-            debug_utility: Default::default(),
         }
     }
 
@@ -150,7 +161,6 @@ impl AIState {
     pub fn debug_string(&self) -> String {
         let mut copy = self.clone();
         while copy.turn_times.len() > 2 { copy.turn_times.pop_back(); }
-        copy.debug_utility.clear();
         copy.plan.clear();
         format!("{:?}", copy)
     }
@@ -169,8 +179,7 @@ fn safe_inv_l2(point: Point) -> f64 {
     (point.len_l2_squared() as f64).sqrt().recip()
 }
 
-fn sample_scored_points(entity: &Entity, scores: &Vec<(Point, f64)>,
-                        rng: &mut RNG, utility: &mut HashMap<Point, u8>) -> Option<BFSResult> {
+fn sample_scored(entity: &Entity, scores: &[(Point, f64)], env: &mut AIEnv) -> Option<BFSResult> {
     let max = scores.iter().fold(
         0., |acc, x| if acc > x.1 { acc } else { x.1 });
     if max == 0. { return None; }
@@ -183,20 +192,20 @@ fn sample_scored_points(entity: &Entity, scores: &Vec<(Point, f64)>,
     }).collect();
     if values.is_empty() { return None; }
 
-    for &(score, point) in &values {
-        utility.insert(point, (score >> 8) as u8);
+    if let Some(x) = &mut env.debug {
+        for &(score, point) in &values {
+            x.utility.push((point, (score >> 8) as u8));
+        }
     }
 
-    let target = *weighted(&values, rng);
+    let target = *weighted(&values, env.rng);
     let (known, pos) = (&*entity.known, entity.pos);
     let check = |p: Point| known.get(p).status();
     let path = AStar(pos, target, ASTAR_LIMIT_WANDER, check)?;
     Some(coerce(pos, &path))
 }
 
-fn explore(entity: &Entity, rng: &mut RNG,
-           utility: &mut HashMap<Point, u8>) -> Option<BFSResult> {
-    utility.clear();
+fn explore(entity: &Entity, env: &mut AIEnv) -> Option<BFSResult> {
     let (known, pos, dir) = (&*entity.known, entity.pos, entity.dir);
     let check = |p: Point| known.get(p).status();
     let map = DijkstraMap(pos, check, SEARCH_CELLS, SEARCH_LIMIT, FOV_RADIUS);
@@ -233,12 +242,11 @@ fn explore(entity: &Entity, rng: &mut RNG,
 
     let scores: Vec<_> = map.into_iter().map(
         |(p, distance)| (p, score(p, distance))).collect();
-    sample_scored_points(entity, &scores, rng, utility)
+    sample_scored(entity, &scores, env)
 }
 
 fn search_around(entity: &Entity, source: Point, age: i32, bias: Point,
-                 rng: &mut RNG, utility: &mut HashMap<Point, u8>) -> Option<BFSResult> {
-    utility.clear();
+                 env: &mut AIEnv) -> Option<BFSResult> {
     let (known, pos, dir) = (&*entity.known, entity.pos, entity.dir);
     let check = |p: Point| known.get(p).status();
     let map = DijkstraMap(pos, check, SEARCH_CELLS, SEARCH_LIMIT, FOV_RADIUS);
@@ -264,7 +272,7 @@ fn search_around(entity: &Entity, source: Point, age: i32, bias: Point,
 
     let scores: Vec<_> = map.into_iter().map(
         |(p, distance)| (p, score(p, distance))).collect();
-    sample_scored_points(entity, &scores, rng, utility)
+    sample_scored(entity, &scores, env)
 }
 
 fn has_line_of_sight(source: Point, target: Point, known: &Knowledge, range: i32) -> bool {
@@ -375,7 +383,7 @@ fn is_hiding_place(entity: &Entity, point: Point, threats: &Vec<Point>) -> bool 
 }
 
 fn run_away(entity: &Entity, map: Vec<(Point, i32)>,
-            ai: &mut AIState, rng: &mut RNG) -> Option<BFSResult> {
+            ai: &mut AIState, env: &mut AIEnv) -> Option<BFSResult> {
     let Some(flight) = &ai.flight else { return None };
     if flight.done() || flight.threats.is_empty() { return None; }
 
@@ -421,10 +429,10 @@ fn run_away(entity: &Entity, map: Vec<(Point, i32)>,
 
     let scores: Vec<_> = map.into_iter().map(
         |(p, distance)| (p, score(p, distance))).collect();
-    sample_scored_points(entity, &scores, rng, &mut ai.debug_utility)
+    sample_scored(entity, &scores, env)
 }
 
-fn hide_from_threats(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Option<BFSResult> {
+fn hide_from_threats(entity: &Entity, ai: &mut AIState, env: &mut AIEnv) -> Option<BFSResult> {
     let Some(flight) = &mut ai.flight else { return None };
     if flight.done() || flight.threats.is_empty() { return None; }
     if flight.since_seen >= max(flight.till_assess, 1) { return None; }
@@ -436,19 +444,17 @@ fn hide_from_threats(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Option
     };
     if check(entity.pos) == Status::Blocked { return None; }
 
-    ai.debug_utility.clear();
     flight.stage = FlightStage::Hide;
 
     let map = DijkstraMap(pos, check, HIDING_CELLS, HIDING_LIMIT, FOV_RADIUS);
-    run_away(entity, map, ai, rng)
+    run_away(entity, map, ai, env)
 }
 
-fn flee_from_threats(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Option<BFSResult> {
+fn flee_from_threats(entity: &Entity, ai: &mut AIState, env: &mut AIEnv) -> Option<BFSResult> {
     let Some(flight) = &mut ai.flight else { return None };
     if flight.done() || flight.threats.is_empty() { return None; }
     if flight.since_seen >= max(flight.till_assess, 1) { return None; }
 
-    ai.debug_utility.clear();
     flight.stage = FlightStage::Flee;
 
     // WARNING: DijkstraMap doesn't flag squares where we heard something,
@@ -461,7 +467,7 @@ fn flee_from_threats(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Option
     let (known, pos) = (&*entity.known, entity.pos);
     let check = |p: Point| known.get(p).status();
     let map = DijkstraMap(pos, check, SEARCH_CELLS, SEARCH_LIMIT, FOV_RADIUS);
-    run_away(entity, map, ai, rng)
+    run_away(entity, map, ai, env)
 }
 
 fn update_ai_state(entity: &Entity, hints: &[Hint], ai: &mut AIState) {
@@ -657,18 +663,22 @@ fn plan_cached(entity: &Entity, hints: &[Hint],
     }
 }
 
-pub fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
+pub fn plan_npc(entity: &Entity, ai: &mut AIState, env: &mut AIEnv) -> Action {
     let hints = [
         (Goal::Drink, Tile::get('~')),
         (Goal::Eat,   Tile::get('%')),
         (Goal::Rest,  Tile::get('"')),
     ];
     update_ai_state(entity, &hints, ai);
-    if let Some(x) = plan_cached(entity, &hints, ai, rng) { return x; }
+    if let Some(x) = plan_cached(entity, &hints, ai, env.rng) { return x; }
 
     ai.plan.clear();
     ai.goal = Goal::Explore;
-    ai.debug_targets.clear();
+
+    if let Some(x) = &mut env.debug {
+        x.targets.clear();
+        x.utility.clear();
+    }
 
     let (known, pos) = (&*entity.known, entity.pos);
     let check = |p: Point| known.get(p).status();
@@ -676,21 +686,20 @@ pub fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
     let mut result = {
         let mut result = BFSResult::default();
 
-        if let Some(x) = hide_from_threats(entity, ai, rng) {
+        if let Some(x) = hide_from_threats(entity, ai, env) {
             (ai.goal, result) = (Goal::Flee, x);
-        } else if let Some(x) = flee_from_threats(entity, ai, rng) {
+        } else if let Some(x) = flee_from_threats(entity, ai, env) {
             (ai.goal, result) = (Goal::Flee, x);
         } else if let Some(x) = &ai.flight && !x.done() {
             (ai.goal, result) = (Goal::Assess, coerce(pos, &[]));
         } else if let Some(x) = &ai.fight {
             if x.age == 0 {
                 ai.goal = Goal::Chase;
-                return attack_target(entity, x.target, rng);
+                return attack_target(entity, x.target, env.rng);
             }
-            let utility = &mut ai.debug_utility;
             let search_nearby = x.search_turns > x.bias.len_l1();
             let source = if search_nearby { entity.pos } else { x.target };
-            if let Some(y) = search_around(entity, source, x.age, x.bias, rng, utility) {
+            if let Some(y) = search_around(entity, source, x.age, x.bias, env) {
                 (ai.goal, result) = (Goal::Chase, y);
             }
         }
@@ -722,8 +731,7 @@ pub fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
 
         if result.dirs.is_empty() && ai.till_assess == 0 {
             (ai.goal, result) = (Goal::Assess, coerce(pos, &[]));
-        } else if result.dirs.is_empty() &&
-               let Some(x) = explore(entity, rng, &mut ai.debug_utility) {
+        } else if result.dirs.is_empty() && let Some(x) = explore(entity, env) {
             (ai.goal, result) = (Goal::Explore, x);
         }
         result
@@ -735,9 +743,9 @@ pub fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
         wander(*sample(dirs, rng))
     };
 
-    if result.targets.is_empty() { return fallback(result, rng); }
+    if result.targets.is_empty() { return fallback(result, env.rng); }
 
-    ai.debug_targets = result.targets.clone();
+    if let Some(x) = &mut env.debug { x.targets = result.targets.clone(); }
     let target = *result.targets.select_nth_unstable_by_key(
         0, |&x| (x - pos).len_l2_squared()).1;
     if target == pos && ai.goal == Goal::Flee { ai.goal = Goal::Assess; }
@@ -746,7 +754,7 @@ pub fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
         let kind = StepKind::Move;
         ai.plan = path.into_iter().map(|x| Step { kind, target: x }).collect();
         match ai.goal {
-            Goal::Assess => assess_nearby(entity, ai, rng),
+            Goal::Assess => assess_nearby(entity, ai, env.rng),
             Goal::Chase => {}
             Goal::Drink => ai.plan.push(Step { kind: StepKind::Drink, target }),
             Goal::Eat => ai.plan.push(Step { kind: StepKind::Eat, target }),
@@ -758,8 +766,8 @@ pub fn plan_npc(entity: &Entity, ai: &mut AIState, rng: &mut RNG) -> Action {
             }
         }
         ai.plan.reverse();
-        if let Some(x) = plan_cached(entity, &hints, ai, rng) { return x; }
+        if let Some(x) = plan_cached(entity, &hints, ai, env.rng) { return x; }
         ai.plan.clear();
     }
-    fallback(result, rng)
+    fallback(result, env.rng)
 }
