@@ -1,6 +1,7 @@
 #![feature(let_chains)]
 #![feature(test)]
 
+mod ai;
 mod effect;
 mod entity;
 mod knowledge;

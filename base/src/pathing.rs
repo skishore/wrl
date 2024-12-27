@@ -537,3 +537,63 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
 
     result
 }
+
+//////////////////////////////////////////////////////////////////////////////
+
+#[allow(soft_unstable)]
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::{Rng, SeedableRng};
+    use crate::base::RNG;
+    extern crate test;
+
+    const BFS_LIMIT: i32 = 32;
+    const DIJKSTRA_CELLS: i32 = 1024;
+    const DIJKSTRA_LIMIT: i32 = 64;
+    const FOV: i32 = 12;
+
+    #[bench]
+    fn bench_bfs(b: &mut test::Bencher) {
+        let map = generate_map(2 * BFS_LIMIT);
+        b.iter(|| {
+            let done = |_: Point| { false };
+            let check = |p: Point| { map.get(&p).copied().unwrap_or(Status::Free) };
+            BFS(Point::default(), done, BFS_LIMIT, check);
+        });
+    }
+
+    #[bench]
+    fn bench_dijkstra(b: &mut test::Bencher) {
+        let map = generate_map(2 * BFS_LIMIT);
+        b.iter(|| {
+            let done = |_: Point| { false };
+            let check = |p: Point| { map.get(&p).copied().unwrap_or(Status::Free) };
+            DijkstraSearch(Point::default(), done, DIJKSTRA_CELLS, check);
+        });
+    }
+
+    #[bench]
+    fn bench_fast_dijkstra_map(b: &mut test::Bencher) {
+        let map = generate_map(2 * BFS_LIMIT);
+        b.iter(|| {
+            let mut result = HashMap::default();
+            result.insert(Point::default(), 0);
+            let check = |p: Point| { map.get(&p).copied().unwrap_or(Status::Free) };
+            DijkstraMap(Point::default(), check, DIJKSTRA_CELLS, DIJKSTRA_LIMIT, FOV);
+        });
+    }
+
+    fn generate_map(n: i32) -> HashMap<Point, Status> {
+        let mut result = HashMap::default();
+        let mut rng = RNG::seed_from_u64(17);
+        for x in -n..n + 1 {
+            for y in -n..n + 1 {
+                let f = rng.gen::<i32>().rem_euclid(100);
+                let s = if f < 20 { Status::Blocked } else { Status::Free };
+                result.insert(Point(x, y), s);
+            }
+        }
+        result
+    }
+}

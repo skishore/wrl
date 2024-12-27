@@ -179,72 +179,6 @@ pub struct Knowledge {
     pub time: Timestamp,
 }
 
-pub struct CellResult<'a> {
-    root: &'a Knowledge,
-    cell: Option<&'a CellKnowledge>,
-}
-
-impl<'a> CellResult<'a> {
-    // Field lookups
-
-    pub fn time_since_seen(&self) -> i32 {
-        let time = self.cell.map(|x| x.last_seen).unwrap_or_default();
-        if time == Default::default() { std::i32::MAX } else { self.root.time - time }
-    }
-
-    pub fn time_since_entity_visible(&self) -> i32 {
-        let time = self.cell.map(|x| x.last_see_entity_at).unwrap_or_default();
-        if time == Default::default() { std::i32::MAX } else { self.root.time - time }
-    }
-
-    pub fn shade(&self) -> bool {
-        self.cell.map(|x| x.shade).unwrap_or(false)
-    }
-
-    pub fn tile(&self) -> Option<&'static Tile> {
-        self.cell.map(|x| x.tile)
-    }
-
-    pub fn visibility(&self) -> i32 {
-        let Some(x) = self.cell else { return -1 };
-        if x.last_seen == self.root.time { x.visibility } else { -1 }
-    }
-
-    // Derived fields
-
-    pub fn entity(&self) -> Option<&'a EntityKnowledge> {
-        self.cell.and_then(|x| x.handle.map(|y| &self.root.entities[y]))
-    }
-
-    pub fn status(&self) -> Status {
-        let Some(x) = self.cell else { return Status::Unknown; };
-        if x.handle.is_some() { return Status::Occupied; }
-        if x.tile.blocks_movement() { Status::Blocked } else { Status::Free }
-    }
-
-    // Predicates
-
-    pub fn blocked(&self) -> bool {
-        self.cell.map(|x| x.tile.blocks_movement()).unwrap_or(false)
-    }
-
-    pub fn unblocked(&self) -> bool {
-        self.cell.map(|x| !x.tile.blocks_movement()).unwrap_or(false)
-    }
-
-    pub fn unknown(&self) -> bool {
-        self.cell.is_none()
-    }
-
-    pub fn visible(&self) -> bool {
-        self.cell.map(|x| x.last_seen == self.root.time).unwrap_or(false)
-    }
-
-    pub fn can_see_entity_at(&self) -> bool {
-        self.cell.map(|x| x.last_see_entity_at == self.root.time).unwrap_or(false)
-    }
-}
-
 impl CellKnowledge {
     fn new(point: Point, tile: &'static Tile) -> Self {
         let (handle, shade, visibility) = (None, false, -1);
@@ -425,5 +359,75 @@ impl Knowledge {
         assert!(entity.pos == pos);
         assert!(!entity.moved);
         entity.moved = true;
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// Result of querying knowledge about a cell
+
+pub struct CellResult<'a> {
+    root: &'a Knowledge,
+    cell: Option<&'a CellKnowledge>,
+}
+
+impl<'a> CellResult<'a> {
+    // Field lookups
+
+    pub fn time_since_seen(&self) -> i32 {
+        let time = self.cell.map(|x| x.last_seen).unwrap_or_default();
+        if time == Default::default() { std::i32::MAX } else { self.root.time - time }
+    }
+
+    pub fn time_since_entity_visible(&self) -> i32 {
+        let time = self.cell.map(|x| x.last_see_entity_at).unwrap_or_default();
+        if time == Default::default() { std::i32::MAX } else { self.root.time - time }
+    }
+
+    pub fn shade(&self) -> bool {
+        self.cell.map(|x| x.shade).unwrap_or(false)
+    }
+
+    pub fn tile(&self) -> Option<&'static Tile> {
+        self.cell.map(|x| x.tile)
+    }
+
+    pub fn visibility(&self) -> i32 {
+        let Some(x) = self.cell else { return -1 };
+        if x.last_seen == self.root.time { x.visibility } else { -1 }
+    }
+
+    // Derived fields
+
+    pub fn entity(&self) -> Option<&'a EntityKnowledge> {
+        self.cell.and_then(|x| x.handle.map(|y| &self.root.entities[y]))
+    }
+
+    pub fn status(&self) -> Status {
+        let Some(x) = self.cell else { return Status::Unknown; };
+        if x.handle.is_some() { return Status::Occupied; }
+        if x.tile.blocks_movement() { Status::Blocked } else { Status::Free }
+    }
+
+    // Predicates
+
+    pub fn blocked(&self) -> bool {
+        self.cell.map(|x| x.tile.blocks_movement()).unwrap_or(false)
+    }
+
+    pub fn unblocked(&self) -> bool {
+        self.cell.map(|x| !x.tile.blocks_movement()).unwrap_or(false)
+    }
+
+    pub fn unknown(&self) -> bool {
+        self.cell.is_none()
+    }
+
+    pub fn visible(&self) -> bool {
+        self.cell.map(|x| x.last_seen == self.root.time).unwrap_or(false)
+    }
+
+    pub fn can_see_entity_at(&self) -> bool {
+        self.cell.map(|x| x.last_see_entity_at == self.root.time).unwrap_or(false)
     }
 }

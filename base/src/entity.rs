@@ -4,12 +4,13 @@ use std::ops::{Index, IndexMut};
 use slotmap::{DefaultKey, Key, KeyData, SlotMap};
 
 use crate::static_assert_size;
+use crate::ai::AIState;
 use crate::base::{dirs, sample, Glyph, Point, RNG};
-use crate::game::AIState;
 use crate::knowledge::Knowledge;
 
 //////////////////////////////////////////////////////////////////////////////
 
+const ATTACK_RANGE: i32 = 8;
 const MAX_HP: i32 = 8;
 
 //////////////////////////////////////////////////////////////////////////////
@@ -35,6 +36,7 @@ pub struct Entity {
     pub max_hp: i32,
     pub move_timer: i32,
     pub turn_timer: i32,
+    pub range: i32,
     pub speed: f64,
     pub pos: Point,
     pub dir: Point,
@@ -86,7 +88,8 @@ impl EntityMap {
             max_hp: MAX_HP,
             move_timer: 0,
             turn_timer: 0,
-            speed: args.speed * if args.player || args.predator { 1. } else { 1. },
+            range: ATTACK_RANGE,
+            speed: args.speed,
             pos: args.pos,
             dir,
         });
