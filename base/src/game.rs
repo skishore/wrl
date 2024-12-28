@@ -1,12 +1,13 @@
 use std::cmp::{max, min};
 use std::collections::VecDeque;
+use std::fmt::Debug;
 use std::mem::{replace, swap};
 
 use lazy_static::lazy_static;
 use rand::{Rng, SeedableRng};
 
 use crate::static_assert_size;
-use crate::ai::{AIEnv, AIState, plan_npc};
+use crate::ai::{AIEnv, NewAIState as AIState};
 use crate::base::{Buffer, Color, Glyph, Rect, Slice};
 use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs};
 use crate::effect::{Effect, Event, Frame, FT, self};
@@ -76,13 +77,19 @@ impl Tile {
     pub fn blocks_movement(&self) -> bool { self.flags & FLAG_BLOCKS_MOVEMENT != 0 }
 }
 
+impl Debug for Tile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", (self.glyph.ch().0 - 0xff00 + 0x20) as u8 as char)
+    }
+}
+
+impl Eq for &'static Tile {}
+
 impl PartialEq for &'static Tile {
     fn eq(&self, next: &&'static Tile) -> bool {
         *self as *const Tile == *next as *const Tile
     }
 }
-
-impl Eq for &'static Tile {}
 
 lazy_static! {
     static ref TILES: HashMap<char, Tile> = {
@@ -567,7 +574,7 @@ fn plan(state: &mut State, eid: EID) -> Action {
 
     let mut env = AIEnv { rng: &mut state.rng, debug };
     let entity = &state.board.entities[eid];
-    let action = plan_npc(entity, &mut ai, &mut env);
+    let action = ai.plan(entity, &mut env);
 
     let entity = &mut state.board.entities[eid];
     swap(&mut env.debug, &mut entity.debug);
@@ -933,10 +940,12 @@ impl State {
         let known = &*entity.known;
 
         if entity.eid != self.player && frame.is_none() {
-            *debug = entity.ai.debug_string();
+            *debug = format!("{:?}", entity.ai);
             let debug = entity.debug.as_ref();
+            let path = entity.ai.get_path();
+            let target = path.first();
 
-            for &p in &entity.ai.debug_plan() {
+            for &p in path.iter().skip(1) {
                 let Point(x, y) = p - offset;
                 let point = Point(2 * x, y);
                 let mut glyph = slice.get(point);
@@ -949,7 +958,7 @@ impl State {
                 let glyph = slice.get(point);
                 slice.set(point, glyph.with_bg(Color::dark(score)));
             }
-            for &target in debug.map(|x| x.targets.as_slice()).unwrap_or_default() {
+            if let Some(&target) = target {
                 let Point(x, y) = target - offset;
                 let point = Point(2 * x, y);
                 let glyph = slice.get(point);

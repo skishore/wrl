@@ -4,7 +4,7 @@ use std::ops::{Index, IndexMut};
 use slotmap::{DefaultKey, Key, KeyData, SlotMap};
 
 use crate::static_assert_size;
-use crate::ai::{AIDebug, AIState};
+use crate::ai::{AIDebug, NewAIState as AIState};
 use crate::base::{dirs, sample, Glyph, Point, RNG};
 use crate::knowledge::Knowledge;
 

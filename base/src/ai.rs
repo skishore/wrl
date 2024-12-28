@@ -1,6 +1,7 @@
 use std::cmp::{max, min};
 use std::collections::VecDeque;
 use std::f64::consts::TAU;
+use std::fmt::Debug;
 
 use rand::Rng;
 use rand_distr::{Distribution, Normal};
@@ -9,7 +10,7 @@ use rand_distr::num_traits::Pow;
 use crate::base::{HashMap, HashSet, LOS, Point, RNG, dirs, sample, weighted};
 use crate::entity::Entity;
 use crate::game::{Action, Move, Tile, move_ready};
-use crate::knowledge::{EntityKnowledge, Knowledge, Timestamp};
+use crate::knowledge::{CellKnowledge, EntityKnowledge, Knowledge, Timestamp};
 use crate::pathing::{AStar, BFS, BFSResult, Status};
 use crate::pathing::{DijkstraSearch, DijkstraLength, DijkstraMap};
 
@@ -33,7 +34,7 @@ const ASSESS_TURNS_FLIGHT: i32 = 1;
 
 const MAX_ASSESS: i32 = 32;
 const MAX_HUNGER: i32 = 1024;
-const MAX_THIRST: i32 = 256;
+const MAX_THIRST: i32 = 32;
 
 const MIN_RESTED: i32 = 2048;
 const MAX_RESTED: i32 = 4096;
@@ -68,6 +69,323 @@ pub struct AIDebug {
 pub struct AIEnv<'a> {
     pub rng: &'a mut RNG,
     pub debug: Option<Box<AIDebug>>,
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// Strategy-based planning
+
+#[derive(Clone, Copy, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
+enum Priority { Survive, SatisfyNeeds, Hunt, Explore, Skip }
+
+#[derive(Default)]
+struct CachedPath {
+    steps: Vec<Point>,
+    pos: Point,
+}
+
+#[derive(Default)]
+enum Result {
+    Act(Action),
+    SetPath(Vec<Point>),
+    ContinueOnPath,
+    #[default] Failure,
+}
+
+struct Context<'a, 'b> {
+    // Derived from the entity.
+    entity: &'a Entity,
+    known: &'a Knowledge,
+    pos: Point,
+    dir: Point,
+    // Computed by the executor during this turn.
+    observations: Vec<&'a CellKnowledge>,
+    neighborhood: Vec<(Point, i32)>,
+    // Mutable access to the RNG.
+    env: &'a mut AIEnv<'b>,
+}
+
+trait Strategy : Debug {
+    fn prioritize(&mut self, ctx: &mut Context) -> (Priority, i32);
+    fn run(&mut self, ctx: &mut Context, path: Option<&CachedPath>) -> Result;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// BasicNeedsStrategy
+
+#[derive(Debug)]
+struct BasicNeedsStrategy {
+    last_seen: Option<Point>,
+    tile: &'static Tile,
+    turn_timeout: i32,
+    turns_left: i32,
+}
+
+impl BasicNeedsStrategy {
+    fn eat(rng: &mut RNG) -> Self {
+        Self::new(rng, Tile::get('%'), 2 * MAX_HUNGER)
+    }
+
+    fn drink(rng: &mut RNG) -> Self {
+        Self::new(rng, Tile::get('~'), 2 * MAX_THIRST)
+    }
+
+    fn new(rng: &mut RNG, tile: &'static Tile, turn_timeout: i32) -> Self {
+        let turns_left = rng.gen_range(0..turn_timeout);
+        Self { last_seen: None, tile, turn_timeout, turns_left }
+    }
+}
+
+impl Strategy for BasicNeedsStrategy {
+    fn prioritize(&mut self, ctx: &mut Context) -> (Priority, i32) {
+        // Update our state, which stores up to one tile that meets this need.
+        self.turns_left = max(self.turns_left - 1, 0);
+        for cell in &ctx.observations {
+            if cell.tile != self.tile { continue; }
+            self.last_seen = Some(cell.point);
+            break;
+        }
+
+        // Compute a priority for satisfying this need.
+        let cutoff = self.turn_timeout / 2;
+        assert!(cutoff > 0);
+        if self.turns_left >= cutoff { return (Priority::Skip, 0); }
+        (Priority::SatisfyNeeds, 100 * self.turns_left / cutoff)
+    }
+
+    fn run(&mut self, ctx: &mut Context, path: Option<&CachedPath>) -> Result {
+        let Context { known, pos, .. } = *ctx;
+        let valid = |p: Point| known.get(p).tile() == Some(self.tile);
+
+        if let Some(x) = path && check_path(ctx, x) && valid(x.steps[0]) {
+            return Result::ContinueOnPath;
+        }
+
+        if valid(pos) {
+            self.turns_left = self.turn_timeout;
+            return Result::Act(Action::Idle);
+        }
+
+        ensure_neighborhood(ctx);
+        for &(point, _) in &ctx.neighborhood {
+            let cell = known.get(point);
+            if cell.tile() != Some(self.tile) { continue; }
+            if cell.status() != Status::Free { continue; }
+            return begin_path(ctx, Some(point));
+        }
+        Result::Failure
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// ExploreStrategy
+
+#[derive(Debug, Default)]
+struct ExploreStrategy {}
+
+impl Strategy for ExploreStrategy {
+    fn prioritize(&mut self, _: &mut Context) -> (Priority, i32) {
+        (Priority::Explore, 0)
+    }
+
+    fn run(&mut self, ctx: &mut Context, path: Option<&CachedPath>) -> Result {
+        if let Some(x) = path && check_path(ctx, x) { return Result::ContinueOnPath; }
+
+        let Context { known, pos, dir, .. } = *ctx;
+
+        ensure_neighborhood(ctx);
+
+        let mut min_age = std::i32::MAX;
+        for &(point, _) in &ctx.neighborhood {
+            let age = known.get(point).time_since_seen();
+            if age > 0 { min_age = min(min_age, age); }
+        }
+        if min_age == std::i32::MAX { min_age = 1; }
+
+        let inv_dir_l2 = safe_inv_l2(dir);
+
+        let score = |p: Point, distance: i32| -> f64 {
+            if distance == 0 { return 0.; }
+            let age = known.get(p).time_since_seen();
+
+            let delta = p - pos;
+            let inv_delta_l2 = safe_inv_l2(delta);
+            let cos = delta.dot(dir) as f64 * inv_delta_l2 * inv_dir_l2;
+            let unblocked_neighbors = dirs::ALL.iter().filter(
+                    |&&x| !known.get(p + x).blocked()).count();
+
+            let bonus0 = 1. / 65536. * ((age as f64 / min_age as f64) + 1. / 16.);
+            let bonus1 = unblocked_neighbors == dirs::ALL.len();
+            let bonus2 = unblocked_neighbors > 0;
+
+            let base = (if bonus0 > 1. { 1. } else { bonus0 }) *
+                       (if bonus1 {  8.0 } else { 1.0 }) *
+                       (if bonus2 { 64.0 } else { 1.0 });
+            base * (cos + 1.).pow(4) / (distance as f64).pow(2)
+        };
+
+        let scores: Vec<_> = ctx.neighborhood.iter().map(
+            |&(p, distance)| (p, score(p, distance))).collect();
+        let target = select_target(&scores, ctx.env);
+        begin_path(ctx, target)
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// Helpers used to implement strategies
+
+fn begin_path(ctx: &Context, target: Option<Point>) -> Result {
+    let Some(target) = target else { return Result::Failure; };
+
+    let (known, pos) = (&*ctx.known, ctx.pos);
+    let check = |p: Point| known.get(p).status();
+    let path = AStar(pos, target, ASTAR_LIMIT_WANDER, check);
+    let Some(path) = path else { return Result::Failure; };
+
+    Result::SetPath(path)
+}
+
+fn check_path(ctx: &Context, path: &CachedPath) -> bool {
+    let Some(&next) = path.steps.last() else { return false; };
+
+    let (known, pos) = (&*ctx.known, ctx.pos);
+    if pos != path.pos { return false; }
+
+    let valid = |p: Point| match known.get(p).status() {
+        Status::Occupied => p != next,
+        Status::Blocked  => false,
+        Status::Free     => true,
+        Status::Unknown  => true,
+    };
+    path.steps.iter().all(|&x| valid(x))
+}
+
+fn ensure_neighborhood(ctx: &mut Context) {
+    if !ctx.neighborhood.is_empty() { return; }
+    let known = ctx.known;
+    let check = |p: Point| known.get(p).status();
+    ctx.neighborhood = DijkstraMap(ctx.pos, check, SEARCH_CELLS, SEARCH_LIMIT, FOV_RADIUS);
+}
+
+fn select_target(scores: &[(Point, f64)], env: &mut AIEnv) -> Option<Point> {
+    let max = scores.iter().fold(
+        0., |acc, x| if acc > x.1 { acc } else { x.1 });
+    if max == 0. { return None; }
+
+    let limit = (1 << 16) - 1;
+    let inverse = (limit as f64) / max;
+    let values: Vec<_> = scores.iter().filter_map(|&(p, score)| {
+        let score = min((inverse * score).floor() as i32, limit);
+        if score > 0 { Some((score, p)) } else { None }
+    }).collect();
+    if values.is_empty() { return None; }
+
+    if let Some(x) = &mut env.debug {
+        x.utility.clear();
+        for &(score, point) in &values {
+            x.utility.push((point, (score >> 8) as u8));
+        }
+    }
+    Some(*weighted(&values, env.rng))
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// Execution
+
+pub struct NewAIState {
+    strategies: Vec<Box<dyn Strategy>>,
+    path: CachedPath,
+    time: Timestamp,
+    last: usize,
+}
+
+impl NewAIState {
+    pub fn new(rng: &mut RNG) -> Self {
+        let strategies: Vec<Box<dyn Strategy>> = vec![
+            Box::new(ExploreStrategy::default()),
+            Box::new(BasicNeedsStrategy::eat(rng)),
+            Box::new(BasicNeedsStrategy::drink(rng)),
+        ];
+        Self { strategies, path: Default::default(), time: Default::default(), last: 0 }
+    }
+
+    pub fn get_path(&self) -> &[Point] { &self.path.steps }
+
+    pub fn plan(&mut self, entity: &Entity, env: &mut AIEnv) -> Action {
+        let known = &*entity.known;
+        let mut ctx = Context {
+            entity,
+            known,
+            pos: entity.pos,
+            dir: entity.dir,
+            observations: vec![],
+            neighborhood: vec![],
+            env,
+        };
+        for cell in &known.cells {
+            if (self.time - cell.last_seen) >= 0 { break; }
+            ctx.observations.push(cell);
+        }
+        self.time = known.time;
+
+        // Step 1: update each strategy's state and compute priorities.
+        let mut priorities = vec![];
+        priorities.reserve(self.strategies.len());
+        for (i, strategy) in self.strategies.iter_mut().enumerate() {
+            let (priority, tiebreaker) = strategy.prioritize(&mut ctx);
+            if priority == Priority::Skip { continue; }
+            priorities.push((priority, 0, tiebreaker, i));
+        }
+        priorities.sort_unstable();
+
+        // Step 2: execute strategies by priority order.
+        for &(_, _, _, i) in &priorities {
+            let cached = if i == self.last { Some(&self.path) } else { None };
+            let result = self.strategies[i].run(&mut ctx, cached);
+            if !matches!(result, Result::Failure) { self.last = i; }
+
+            match result {
+                Result::Act(x) => return x,
+                Result::SetPath(x) => {
+                    self.path = CachedPath { steps: x, pos: ctx.pos };
+                    self.path.steps.reverse();
+                    return self.follow_cached_path(entity);
+                }
+                Result::ContinueOnPath => return self.follow_cached_path(entity),
+                Result::Failure => continue,
+            }
+        }
+
+        Action::Idle
+    }
+
+    fn follow_cached_path(&mut self, entity: &Entity) -> Action {
+        let (known, pos) = (&*entity.known, entity.pos);
+        let next = self.path.steps.pop().unwrap();
+        self.path.pos = next;
+
+        let mut target = next;
+        for &point in self.path.steps.iter().rev().take(8) {
+            if LOS(pos, point).iter().all(|&x| !known.get(x).blocked()) {
+                target = point;
+            }
+        }
+        let look = if target == pos { entity.dir } else { target - pos };
+        Action::Move(Move { look, step: next - pos, turns: WANDER_TURNS })
+    }
+}
+
+impl Debug for NewAIState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AIState")
+         .field("strategies", &self.strategies)
+         .field("time", &self.time)
+         .finish()
+    }
 }
 
 //////////////////////////////////////////////////////////////////////////////
