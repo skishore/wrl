@@ -231,6 +231,7 @@ pub struct Matrix<T> {
     pub default: T,
 }
 
+// SAFETY: Non-none index() results are always valid indices into data.
 impl<T: Clone> Matrix<T> {
     pub fn new(size: Point, value: T) -> Self {
         assert!(0 <= size.0);
@@ -241,13 +242,13 @@ impl<T: Clone> Matrix<T> {
     }
 
     pub fn get(&self, point: Point) -> T {
-        let Some(index) = self.index(point) else { return self.default.clone(); };
-        self.data[index].clone()
+        let Some(x) = self.index(point) else { return self.default.clone(); };
+        unsafe { self.data.get_unchecked(x).clone() }
     }
 
     pub fn set(&mut self, point: Point, value: T) {
-        let Some(index) = self.index(point) else { return; };
-        self.data[index] = value;
+        let Some(x) = self.index(point) else { return; };
+        unsafe { *self.data.get_unchecked_mut(x) = value; }
     }
 
     pub fn fill(&mut self, value: T) {
@@ -255,13 +256,13 @@ impl<T: Clone> Matrix<T> {
     }
 
     pub fn entry_ref(&self, point: Point) -> &T {
-        let Some(index) = self.index(point) else { return &self.default; };
-        &self.data[index]
+        let Some(x) = self.index(point) else { return &self.default; };
+        unsafe { self.data.get_unchecked(x) }
     }
 
     pub fn entry_mut(&mut self, point: Point) -> Option<&mut T> {
-        let index = self.index(point)?;
-        Some(&mut self.data[index])
+        let Some(x) = self.index(point) else { return None; };
+        unsafe { Some(self.data.get_unchecked_mut(x)) }
     }
 
     #[inline(always)]
@@ -462,8 +463,10 @@ impl FOV {
         let mut index = 0;
         self.cache.push(0);
         while index < self.cache.len() {
-            let node = &self.nodes[self.cache[index] as usize];
-            if blocked(&node) { index += 1; continue; }
+            // SAFETY: We ensure cache indices are valid when we push below.
+            let next = unsafe { *self.cache.get_unchecked(index) as usize };
+            let node = unsafe { self.nodes.get_unchecked(next) };
+            if blocked(node) { index += 1; continue; }
             for x in &node.children { self.cache.push(*x); }
             index += 1;
         }
