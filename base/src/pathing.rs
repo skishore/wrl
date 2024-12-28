@@ -400,9 +400,9 @@ impl DijkstraState {
 }
 
 thread_local! {
-    static STATE: RefCell<DijkstraState> = {
+    static CACHE: RefCell<(DijkstraState, Vec<Option<FOV>>)> = {
         let map = Matrix::new(Point::default(), DijkstraNode::default());
-        (DijkstraState { dirty: vec![], lists: vec![], map }).into()
+        (DijkstraState { dirty: vec![], lists: vec![], map }, vec![]).into()
     };
 }
 
@@ -416,15 +416,25 @@ pub fn DijkstraLength(p: Point) -> i32 {
 #[allow(non_snake_case)]
 pub fn DijkstraMap<F: Fn(Point) -> Status>(
         source: Point, check: F, cells: i32, limit: i32, radius: i32) -> Vec<(Point, i32)> {
-    STATE.with_borrow_mut(|state|{
+    CACHE.with_borrow_mut(|cache|{
+        // Make sure the Matrix has enough space for the search.
         let n = 2 * limit + 1;
+        let state = &mut cache.0;
         if state.map.size.0 < n || state.map.size.1 < n {
             state.map = Matrix::new(Point(n, n), DijkstraNode::default());
         }
 
-        let result = CachedDijkstraMap(state, source, check, cells, limit, radius);
+        // Get a precomputed FOV of the right size.
+        let r = radius as usize;
+        while cache.1.len() <= r { cache.1.push(None); }
+        let cached_fov = &mut cache.1[r];
+        if cached_fov.is_none() { *cached_fov = Some(FOV::new(radius)); }
+        let fov = cached_fov.as_mut().unwrap();
+
+        let result = CachedDijkstraMap(state, fov, source, check, cells, limit);
 
         // Restore the cached state to a clean condition.
+        let state = &mut cache.0;
         for &p in &state.dirty { state.map.set(p, DijkstraNode::default()); }
         state.dirty.clear();
         state.lists.clear();
@@ -435,8 +445,8 @@ pub fn DijkstraMap<F: Fn(Point) -> Status>(
 
 #[allow(non_snake_case)]
 fn CachedDijkstraMap<F: Fn(Point) -> Status>(
-        state: &mut DijkstraState, source: Point, check: F,
-        cells: i32, limit: i32, radius: i32) -> Vec<(Point, i32)> {
+        state: &mut DijkstraState, fov: &mut FOV,
+        source: Point, check: F, cells: i32, limit: i32) -> Vec<(Point, i32)> {
     let mut current = 0;
     let mut result = vec![];
     result.reserve(cells as usize);
@@ -501,7 +511,6 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
     let index = state.map.index(initial);
     init(state, index, initial, 0, Status::Free);
 
-    let mut fov = FOV::new(radius);
     fov.apply(|n: &FOVNode| {
         if n.next == Point::default() { return false; }
 
