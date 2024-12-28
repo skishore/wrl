@@ -241,13 +241,12 @@ impl<T: Clone> Matrix<T> {
     }
 
     pub fn get(&self, point: Point) -> T {
-        if !self.contains(point) { return self.default.clone(); }
-        self.data[self.index(point)].clone()
+        let Some(index) = self.index(point) else { return self.default.clone(); };
+        self.data[index].clone()
     }
 
     pub fn set(&mut self, point: Point, value: T) {
-        if !self.contains(point) { return; }
-        let index = self.index(point);
+        let Some(index) = self.index(point) else { return; };
         self.data[index] = value;
     }
 
@@ -256,13 +255,12 @@ impl<T: Clone> Matrix<T> {
     }
 
     pub fn entry_ref(&self, point: Point) -> &T {
-        if !self.contains(point) { return &self.default; }
-        &self.data[self.index(point)]
+        let Some(index) = self.index(point) else { return &self.default; };
+        &self.data[index]
     }
 
     pub fn entry_mut(&mut self, point: Point) -> Option<&mut T> {
-        if !self.contains(point) { return None; }
-        let index = self.index(point);
+        let index = self.index(point)?;
         Some(&mut self.data[index])
     }
 
@@ -274,8 +272,9 @@ impl<T: Clone> Matrix<T> {
     }
 
     #[inline(always)]
-    pub fn index(&self, point: Point) -> usize {
-        (point.0 + point.1 * self.size.0) as usize
+    pub fn index(&self, point: Point) -> Option<usize> {
+        if !self.contains(point) { return None; }
+        Some((point.0 + point.1 * self.size.0) as usize)
     }
 }
 

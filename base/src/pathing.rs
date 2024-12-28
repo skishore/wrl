@@ -480,9 +480,8 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
     let step = |state: &mut DijkstraState,
                 dir: Point, prev_point: Point, prev_score: i32| -> bool {
         let point = prev_point + dir;
-        if !state.map.contains(point) { return true; }
+        let Some(index) = state.map.index(point) else { return true; };
 
-        let index = state.map.index(point);
         let entry = &mut state.map.data[index];
         let visited = entry.status.is_some();
         let status = entry.status.unwrap_or_else(|| check(point + offset));
@@ -508,7 +507,7 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
         false
     };
 
-    let index = state.map.index(initial);
+    let index = state.map.index(initial).unwrap();
     init(state, index, initial, 0, Status::Free);
 
     fov.apply(|n: &FOVNode| {
