@@ -34,7 +34,7 @@ const ASSESS_TURNS_FLIGHT: i32 = 1;
 
 const MAX_ASSESS: i32 = 32;
 const MAX_HUNGER: i32 = 1024;
-const MAX_THIRST: i32 = 32;
+const MAX_THIRST: i32 = 256;
 
 const MIN_RESTED: i32 = 2048;
 const MAX_RESTED: i32 = 4096;
@@ -180,15 +180,64 @@ impl Strategy for BasicNeedsStrategy {
 
 //////////////////////////////////////////////////////////////////////////////
 
+// AssessStrategy
+
+struct AssessStrategy { active: bool, plan: Vec<Point>, turns_left: i32 }
+
+impl AssessStrategy {
+    fn new(rng: &mut RNG) -> Self {
+        Self { active: false, plan: vec![], turns_left: rng.gen_range(0..MAX_ASSESS) }
+    }
+}
+
+impl Debug for AssessStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AssessStrategy")
+         .field("active", &self.active)
+         .field("length", &self.plan.len())
+         .field("turns_left", &self.turns_left)
+         .finish()
+    }
+}
+
+impl Strategy for AssessStrategy {
+    fn prioritize(&mut self, _: &mut Context) -> (Priority, i32) {
+        self.turns_left = max(self.turns_left - 1, 0);
+        if !self.active { self.plan.clear(); }
+        self.active = false;
+
+        if self.turns_left > 0 { return (Priority::Skip, 0); }
+        (Priority::Explore, 0)
+    }
+
+    fn run(&mut self, ctx: &mut Context, _: Option<&CachedPath>) -> Result {
+        let rng = &mut ctx.env.rng;
+
+        if self.plan.is_empty() {
+            self.plan = assess_directions(&[ctx.dir], ASSESS_TURNS_EXPLORE, rng);
+            self.plan.reverse();
+        }
+
+        let target = self.plan.pop();
+        if self.plan.is_empty() {
+            self.turns_left = rng.gen_range(0..MAX_ASSESS);
+        }
+        let Some(target) = target else { return Result::Failure; };
+
+        self.active = true;
+        Result::Act(Action::Look(target))
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 // ExploreStrategy
 
 #[derive(Debug, Default)]
 struct ExploreStrategy {}
 
 impl Strategy for ExploreStrategy {
-    fn prioritize(&mut self, _: &mut Context) -> (Priority, i32) {
-        (Priority::Explore, 0)
-    }
+    fn prioritize(&mut self, _: &mut Context) -> (Priority, i32) { (Priority::Explore, 1) }
 
     fn run(&mut self, ctx: &mut Context, path: Option<&CachedPath>) -> Result {
         if let Some(x) = path && check_path(ctx, x) { return Result::ContinueOnPath; }
@@ -236,6 +285,27 @@ impl Strategy for ExploreStrategy {
 //////////////////////////////////////////////////////////////////////////////
 
 // Helpers used to implement strategies
+
+fn assess_directions(dirs: &[Point], turns: i32, rng: &mut RNG) -> Vec<Point> {
+    if dirs.is_empty() { return vec![]; }
+
+    let mut result = vec![];
+    result.reserve((ASSESS_STEPS * turns) as usize);
+
+    for i in 0..ASSESS_STEPS {
+        let scale = 1000;
+        let steps = rng.gen_range(0..turns) + 1;
+        let angle = Normal::new(0., ASSESS_ANGLE).unwrap().sample(rng);
+        let (sin, cos) = (angle.sin(), angle.cos());
+
+        let Point(dx, dy) = dirs[i as usize % dirs.len()];
+        let rx = (cos * (scale * dx) as f64) + (sin * (scale * dy) as f64);
+        let ry = (cos * (scale * dy) as f64) - (sin * (scale * dx) as f64);
+        let target = Point(rx as i32, ry as i32);
+        for _ in 0..steps { result.push(target); }
+    }
+    result
+}
 
 fn begin_path(ctx: &Context, target: Option<Point>) -> Result {
     let Some(target) = target else { return Result::Failure; };
@@ -303,14 +373,26 @@ pub struct NewAIState {
     last: usize,
 }
 
+impl Debug for NewAIState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AIState")
+         .field("last", &self.last)
+         .field("time", &self.time)
+         .field("strategies", &self.strategies)
+         .finish()
+    }
+}
+
 impl NewAIState {
     pub fn new(rng: &mut RNG) -> Self {
         let strategies: Vec<Box<dyn Strategy>> = vec![
-            Box::new(ExploreStrategy::default()),
             Box::new(BasicNeedsStrategy::eat(rng)),
             Box::new(BasicNeedsStrategy::drink(rng)),
+            Box::new(AssessStrategy::new(rng)),
+            Box::new(ExploreStrategy::default()),
         ];
-        Self { strategies, path: Default::default(), time: Default::default(), last: 0 }
+        let last = strategies.len() - 1;
+        Self { strategies, path: Default::default(), time: Default::default(), last }
     }
 
     pub fn get_path(&self) -> &[Point] { &self.path.steps }
@@ -338,7 +420,7 @@ impl NewAIState {
         for (i, strategy) in self.strategies.iter_mut().enumerate() {
             let (priority, tiebreaker) = strategy.prioritize(&mut ctx);
             if priority == Priority::Skip { continue; }
-            priorities.push((priority, 0, tiebreaker, i));
+            priorities.push((priority, i != self.last, tiebreaker, i));
         }
         priorities.sort_unstable();
 
@@ -349,7 +431,10 @@ impl NewAIState {
             if !matches!(result, Result::Failure) { self.last = i; }
 
             match result {
-                Result::Act(x) => return x,
+                Result::Act(x) => {
+                    self.path.steps.clear();
+                    return x;
+                }
                 Result::SetPath(x) => {
                     self.path = CachedPath { steps: x, pos: ctx.pos };
                     self.path.steps.reverse();
@@ -376,15 +461,6 @@ impl NewAIState {
         }
         let look = if target == pos { entity.dir } else { target - pos };
         Action::Move(Move { look, step: next - pos, turns: WANDER_TURNS })
-    }
-}
-
-impl Debug for NewAIState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AIState")
-         .field("strategies", &self.strategies)
-         .field("time", &self.time)
-         .finish()
     }
 }
 
