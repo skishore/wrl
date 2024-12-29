@@ -73,10 +73,7 @@ pub struct AIEnv<'a> {
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Strategy-based planning
-
-#[derive(Clone, Copy, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
-enum Priority { Survive, SatisfyNeeds, Hunt, Explore, Skip }
+// Path caching
 
 #[derive(Default)]
 struct CachedPath {
@@ -84,13 +81,69 @@ struct CachedPath {
     pos: Point,
 }
 
-#[derive(Default)]
-enum Result {
-    Act(Action),
-    SetPath(Vec<Point>),
-    ContinueOnPath,
-    #[default] Failure,
+impl Debug for CachedPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CachedPath").field("len", &self.steps.len()).finish()
+    }
 }
+
+impl CachedPath {
+    fn reset(&mut self) { self.steps.clear(); }
+
+    fn check(&self, ctx: &Context) -> bool {
+        let Some(&next) = self.steps.last() else { return false; };
+
+        let Context { known, pos, .. } = *ctx;
+        if pos != self.pos { return false; }
+
+        let valid = |p: Point| match known.get(p).status() {
+            Status::Occupied => p != next,
+            Status::Blocked  => false,
+            Status::Free     => true,
+            Status::Unknown  => true,
+        };
+        self.steps.iter().all(|&x| valid(x))
+    }
+
+    fn start(&mut self, ctx: &Context, target: Point) -> Option<Action> {
+        let Context { known, pos, .. } = *ctx;
+        let check = |p: Point| known.get(p).status();
+        let path = AStar(pos, target, ASTAR_LIMIT_WANDER, check);
+        let Some(path) = path else { return None; };
+
+        // TODO: AStar could be strict about neighbor statuses instead.
+        let next = *path.first()?;
+        let status = known.get(next).status();
+        if status != Status::Free && status != Status::Unknown { return None; }
+
+        self.pos = pos;
+        self.steps = path;
+        self.steps.reverse();
+        self.follow(ctx)
+    }
+
+    fn follow(&mut self, ctx: &Context) -> Option<Action> {
+        let Context { known, pos, dir, .. } = *ctx;
+        let next = self.steps.pop()?;
+        self.pos = next;
+
+        let mut target = next;
+        for &point in self.steps.iter().rev().take(8) {
+            if LOS(pos, point).iter().all(|&x| !known.get(x).blocked()) {
+                target = point;
+            }
+        }
+        let look = if target == pos { dir } else { target - pos };
+        Some(Action::Move(Move { look, step: next - pos, turns: WANDER_TURNS }))
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// Strategy-based planning
+
+#[derive(Clone, Copy, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
+enum Priority { Survive, SatisfyNeeds, Hunt, Explore, Skip }
 
 struct Context<'a, 'b> {
     // Derived from the entity.
@@ -106,8 +159,10 @@ struct Context<'a, 'b> {
 }
 
 trait Strategy : Debug {
-    fn prioritize(&mut self, ctx: &mut Context) -> (Priority, i32);
-    fn run(&mut self, ctx: &mut Context, path: Option<&CachedPath>) -> Result;
+    fn get_path(&self) -> &[Point];
+    fn bid(&mut self, ctx: &mut Context, last: bool) -> (Priority, i32);
+    fn accept(&mut self, ctx: &mut Context) -> Option<Action>;
+    fn reject(&mut self);
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -116,6 +171,7 @@ trait Strategy : Debug {
 
 #[derive(Debug)]
 struct BasicNeedsStrategy {
+    path: CachedPath,
     last_seen: Option<Point>,
     tile: &'static Tile,
     turn_timeout: i32,
@@ -133,12 +189,14 @@ impl BasicNeedsStrategy {
 
     fn new(rng: &mut RNG, tile: &'static Tile, turn_timeout: i32) -> Self {
         let turns_left = rng.gen_range(0..turn_timeout);
-        Self { last_seen: None, tile, turn_timeout, turns_left }
+        Self { path: Default::default(), last_seen: None, tile, turn_timeout, turns_left }
     }
 }
 
 impl Strategy for BasicNeedsStrategy {
-    fn prioritize(&mut self, ctx: &mut Context) -> (Priority, i32) {
+    fn get_path(&self) -> &[Point] { &self.path.steps }
+
+    fn bid(&mut self, ctx: &mut Context, last: bool) -> (Priority, i32) {
         // Update our state, which stores up to one tile that meets this need.
         self.turns_left = max(self.turns_left - 1, 0);
         for cell in &ctx.observations {
@@ -147,86 +205,99 @@ impl Strategy for BasicNeedsStrategy {
             break;
         }
 
+        // Clear the cached path, if it's no longer good.
+        let known = ctx.known;
+        let valid = |p: Point| known.get(p).tile() == Some(self.tile);
+        if !(self.path.check(ctx) && valid(self.path.steps[0])) { self.path.reset(); }
+
         // Compute a priority for satisfying this need.
-        let cutoff = self.turn_timeout / 2;
-        assert!(cutoff > 0);
+        let cutoff = max(self.turn_timeout / 2, 1);
         if self.turns_left >= cutoff { return (Priority::Skip, 0); }
-        (Priority::SatisfyNeeds, 100 * self.turns_left / cutoff)
+        let tiebreaker = if last { -1 } else { 100 * self.turns_left / cutoff };
+        (Priority::SatisfyNeeds, tiebreaker)
     }
 
-    fn run(&mut self, ctx: &mut Context, path: Option<&CachedPath>) -> Result {
+    fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
+        if let Some(x) = self.path.follow(ctx) { return Some(x); }
+
         let Context { known, pos, .. } = *ctx;
         let valid = |p: Point| known.get(p).tile() == Some(self.tile);
-
-        if let Some(x) = path && check_path(ctx, x) && valid(x.steps[0]) {
-            return Result::ContinueOnPath;
-        }
-
         if valid(pos) {
             self.turns_left = self.turn_timeout;
-            return Result::Act(Action::Idle);
+            return Some(Action::Idle);
         }
 
         ensure_neighborhood(ctx);
+
         for &(point, _) in &ctx.neighborhood {
             let cell = known.get(point);
             if cell.tile() != Some(self.tile) { continue; }
             if cell.status() != Status::Free { continue; }
-            return begin_path(ctx, Some(point));
+
+            // Compute at most one path to a point in the neighborhood.
+            let action = self.path.start(ctx, point);
+            if action.is_some() { return action; }
+            break;
         }
-        Result::Failure
+
+        // Else, fall back to the last-seen satisfying cell.
+        let action = self.path.start(ctx, self.last_seen?);
+        if action.is_none() { self.last_seen = None; }
+        action
     }
+
+    fn reject(&mut self) { self.path.reset(); }
 }
 
 //////////////////////////////////////////////////////////////////////////////
 
 // AssessStrategy
 
-struct AssessStrategy { active: bool, plan: Vec<Point>, turns_left: i32 }
+struct AssessStrategy { steps: Vec<Point>, turns_left: i32 }
 
 impl AssessStrategy {
     fn new(rng: &mut RNG) -> Self {
-        Self { active: false, plan: vec![], turns_left: rng.gen_range(0..MAX_ASSESS) }
+        Self { steps: vec![], turns_left: rng.gen_range(0..MAX_ASSESS) }
     }
 }
 
 impl Debug for AssessStrategy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AssessStrategy")
-         .field("active", &self.active)
-         .field("length", &self.plan.len())
+         .field("len", &self.steps.len())
          .field("turns_left", &self.turns_left)
          .finish()
     }
 }
 
 impl Strategy for AssessStrategy {
-    fn prioritize(&mut self, _: &mut Context) -> (Priority, i32) {
+    fn get_path(&self) -> &[Point] { &[] }
+
+    fn bid(&mut self, _: &mut Context, last: bool) -> (Priority, i32) {
         self.turns_left = max(self.turns_left - 1, 0);
-        if !self.active { self.plan.clear(); }
-        self.active = false;
 
         if self.turns_left > 0 { return (Priority::Skip, 0); }
-        (Priority::Explore, 0)
+        let priority = if last { Priority::SatisfyNeeds } else { Priority::Explore };
+        let tiebreaker = if last { -1 } else { 0 };
+        (priority, tiebreaker)
     }
 
-    fn run(&mut self, ctx: &mut Context, _: Option<&CachedPath>) -> Result {
+    fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
         let rng = &mut ctx.env.rng;
 
-        if self.plan.is_empty() {
-            self.plan = assess_directions(&[ctx.dir], ASSESS_TURNS_EXPLORE, rng);
-            self.plan.reverse();
+        if self.steps.is_empty() {
+            self.steps = assess_directions(&[ctx.dir], ASSESS_TURNS_EXPLORE, rng);
+            self.steps.reverse();
         }
 
-        let target = self.plan.pop();
-        if self.plan.is_empty() {
+        let target = self.steps.pop();
+        if self.steps.is_empty() {
             self.turns_left = rng.gen_range(0..MAX_ASSESS);
         }
-        let Some(target) = target else { return Result::Failure; };
-
-        self.active = true;
-        Result::Act(Action::Look(target))
+        target.map(|x| Action::Look(x))
     }
+
+    fn reject(&mut self) { self.steps.clear(); }
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -234,15 +305,24 @@ impl Strategy for AssessStrategy {
 // ExploreStrategy
 
 #[derive(Debug, Default)]
-struct ExploreStrategy {}
+struct ExploreStrategy { path: CachedPath }
 
 impl Strategy for ExploreStrategy {
-    fn prioritize(&mut self, _: &mut Context) -> (Priority, i32) { (Priority::Explore, 1) }
+    fn get_path(&self) -> &[Point] { &self.path.steps }
 
-    fn run(&mut self, ctx: &mut Context, path: Option<&CachedPath>) -> Result {
-        if let Some(x) = path && check_path(ctx, x) { return Result::ContinueOnPath; }
+    fn bid(&mut self, ctx: &mut Context, last: bool) -> (Priority, i32) {
+        if !self.path.check(ctx) { self.path.reset(); }
+
+        let persist = last && !self.path.steps.is_empty();
+        let tiebreaker = if persist { -1 } else { 1 };
+        (Priority::Explore, tiebreaker)
+    }
+
+    fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
+        if let Some(x) = self.path.follow(ctx) { return Some(x); }
 
         let Context { known, pos, dir, .. } = *ctx;
+        let inv_dir_l2 = safe_inv_l2(dir);
 
         ensure_neighborhood(ctx);
 
@@ -252,8 +332,6 @@ impl Strategy for ExploreStrategy {
             if age > 0 { min_age = min(min_age, age); }
         }
         if min_age == std::i32::MAX { min_age = 1; }
-
-        let inv_dir_l2 = safe_inv_l2(dir);
 
         let score = |p: Point, distance: i32| -> f64 {
             if distance == 0 { return 0.; }
@@ -277,9 +355,12 @@ impl Strategy for ExploreStrategy {
 
         let scores: Vec<_> = ctx.neighborhood.iter().map(
             |&(p, distance)| (p, score(p, distance))).collect();
-        let target = select_target(&scores, ctx.env);
-        begin_path(ctx, target)
+        let target = select_target(&scores, ctx.env)?;
+        self.path.start(ctx, target);
+        self.path.follow(ctx)
     }
+
+    fn reject(&mut self) { self.path.reset(); }
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -305,32 +386,6 @@ fn assess_directions(dirs: &[Point], turns: i32, rng: &mut RNG) -> Vec<Point> {
         for _ in 0..steps { result.push(target); }
     }
     result
-}
-
-fn begin_path(ctx: &Context, target: Option<Point>) -> Result {
-    let Some(target) = target else { return Result::Failure; };
-
-    let (known, pos) = (&*ctx.known, ctx.pos);
-    let check = |p: Point| known.get(p).status();
-    let path = AStar(pos, target, ASTAR_LIMIT_WANDER, check);
-    let Some(path) = path else { return Result::Failure; };
-
-    Result::SetPath(path)
-}
-
-fn check_path(ctx: &Context, path: &CachedPath) -> bool {
-    let Some(&next) = path.steps.last() else { return false; };
-
-    let (known, pos) = (&*ctx.known, ctx.pos);
-    if pos != path.pos { return false; }
-
-    let valid = |p: Point| match known.get(p).status() {
-        Status::Occupied => p != next,
-        Status::Blocked  => false,
-        Status::Free     => true,
-        Status::Unknown  => true,
-    };
-    path.steps.iter().all(|&x| valid(x))
 }
 
 fn ensure_neighborhood(ctx: &mut Context) {
@@ -366,21 +421,12 @@ fn select_target(scores: &[(Point, f64)], env: &mut AIEnv) -> Option<Point> {
 
 // Execution
 
+#[derive(Debug)]
 pub struct NewAIState {
+    bids: Vec<(Priority, i32, usize)>,
     strategies: Vec<Box<dyn Strategy>>,
-    path: CachedPath,
     time: Timestamp,
-    last: usize,
-}
-
-impl Debug for NewAIState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AIState")
-         .field("last", &self.last)
-         .field("time", &self.time)
-         .field("strategies", &self.strategies)
-         .finish()
-    }
+    last: i32,
 }
 
 impl NewAIState {
@@ -391,11 +437,13 @@ impl NewAIState {
             Box::new(AssessStrategy::new(rng)),
             Box::new(ExploreStrategy::default()),
         ];
-        let last = strategies.len() - 1;
-        Self { strategies, path: Default::default(), time: Default::default(), last }
+        Self { bids: vec![], strategies, time: Default::default(), last: -1 }
     }
 
-    pub fn get_path(&self) -> &[Point] { &self.path.steps }
+    pub fn get_path(&self) -> &[Point] {
+        if self.last == -1 { return &[]; }
+        self.strategies[self.last as usize].get_path()
+    }
 
     pub fn plan(&mut self, entity: &Entity, env: &mut AIEnv) -> Action {
         let known = &*entity.known;
@@ -408,6 +456,8 @@ impl NewAIState {
             neighborhood: vec![],
             env,
         };
+
+        // Step 0: Compute some initial, deterministic shared state.
         for cell in &known.cells {
             if (self.time - cell.last_seen) >= 0 { break; }
             ctx.observations.push(cell);
@@ -415,52 +465,31 @@ impl NewAIState {
         self.time = known.time;
 
         // Step 1: update each strategy's state and compute priorities.
-        let mut priorities = vec![];
-        priorities.reserve(self.strategies.len());
+        self.bids.clear();
         for (i, strategy) in self.strategies.iter_mut().enumerate() {
-            let (priority, tiebreaker) = strategy.prioritize(&mut ctx);
+            let last = i == self.last as usize;
+            let (priority, tiebreaker) = strategy.bid(&mut ctx, last);
             if priority == Priority::Skip { continue; }
-            priorities.push((priority, i != self.last, tiebreaker, i));
+            self.bids.push((priority, tiebreaker, i));
         }
-        priorities.sort_unstable();
+        self.bids.sort_unstable();
 
         // Step 2: execute strategies by priority order.
-        for &(_, _, _, i) in &priorities {
-            let cached = if i == self.last { Some(&self.path) } else { None };
-            let result = self.strategies[i].run(&mut ctx, cached);
-            if !matches!(result, Result::Failure) { self.last = i; }
-
-            match result {
-                Result::Act(x) => {
-                    self.path.steps.clear();
-                    return x;
-                }
-                Result::SetPath(x) => {
-                    self.path = CachedPath { steps: x, pos: ctx.pos };
-                    self.path.steps.reverse();
-                    return self.follow_cached_path(entity);
-                }
-                Result::ContinueOnPath => return self.follow_cached_path(entity),
-                Result::Failure => continue,
-            }
+        self.last = -1;
+        let mut action = None;
+        for &(_, _, i) in &self.bids {
+            action = self.strategies[i].accept(&mut ctx);
+            if action.is_none() { continue; }
+            self.last = i as i32;
+            break;
         }
 
-        Action::Idle
-    }
-
-    fn follow_cached_path(&mut self, entity: &Entity) -> Action {
-        let (known, pos) = (&*entity.known, entity.pos);
-        let next = self.path.steps.pop().unwrap();
-        self.path.pos = next;
-
-        let mut target = next;
-        for &point in self.path.steps.iter().rev().take(8) {
-            if LOS(pos, point).iter().all(|&x| !known.get(x).blocked()) {
-                target = point;
-            }
+        // Step 3: clear any staged state in unused strategies.
+        for (i, strategy) in self.strategies.iter_mut().enumerate() {
+            let last = i == self.last as usize;
+            if !last { strategy.reject(); }
         }
-        let look = if target == pos { entity.dir } else { target - pos };
-        Action::Move(Move { look, step: next - pos, turns: WANDER_TURNS })
+        action.unwrap_or(Action::Idle)
     }
 }
 
