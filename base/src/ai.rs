@@ -140,6 +140,52 @@ impl CachedPath {
 
 //////////////////////////////////////////////////////////////////////////////
 
+// Shared state
+
+struct SharedAIState {
+    till_assess: i32,
+    till_hunger: i32,
+    till_thirst: i32,
+    time: Timestamp,
+    turn_times: VecDeque<Timestamp>,
+}
+
+impl Debug for SharedAIState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SharedAIState")
+         .field("till_assess", &self.till_assess)
+         .field("till_hunger", &self.till_hunger)
+         .field("till_thirst", &self.till_thirst)
+         .field("time", &self.time)
+         .finish()
+    }
+}
+
+impl SharedAIState {
+    pub fn new(rng: &mut RNG) -> Self {
+        Self {
+            till_assess: rng.gen_range(0..MAX_ASSESS),
+            till_hunger: rng.gen_range(0..MAX_HUNGER),
+            till_thirst: rng.gen_range(0..MAX_THIRST),
+            time: Default::default(),
+            turn_times: Default::default(),
+        }
+    }
+
+    fn age_at_turn(&self, turn: i32) -> i32 {
+        if self.turn_times.is_empty() { return 0; }
+        self.time - self.turn_times[min(self.turn_times.len() - 1, turn as usize)]
+    }
+
+    fn update(&mut self, known: &Knowledge) {
+        if self.turn_times.len() == TURN_TIMES_LIMIT { self.turn_times.pop_back(); }
+        self.turn_times.push_front(self.time);
+        self.time = known.time;
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 // Strategy-based planning
 
 #[derive(Clone, Copy, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
@@ -154,6 +200,7 @@ struct Context<'a, 'b> {
     // Computed by the executor during this turn.
     observations: Vec<&'a CellKnowledge>,
     neighborhood: Vec<(Point, i32)>,
+    shared: &'a mut SharedAIState,
     // Mutable access to the RNG.
     env: &'a mut AIEnv<'b>,
 }
@@ -169,27 +216,38 @@ trait Strategy : Debug {
 
 // BasicNeedsStrategy
 
+#[derive(Debug, Eq, PartialEq)]
+enum BasicNeed { Eat, Drink }
+
 #[derive(Debug)]
 struct BasicNeedsStrategy {
+    last: Option<Point>,
+    need: BasicNeed,
     path: CachedPath,
-    last_seen: Option<Point>,
     tile: &'static Tile,
-    turn_timeout: i32,
-    turns_left: i32,
 }
 
 impl BasicNeedsStrategy {
-    fn eat(rng: &mut RNG) -> Self {
-        Self::new(rng, Tile::get('%'), 2 * MAX_HUNGER)
+    fn new(need: BasicNeed) -> Self {
+        let tile = match need {
+            BasicNeed::Eat => Tile::get('%'),
+            BasicNeed::Drink => Tile::get('~'),
+        };
+        Self { last: None, need, path: Default::default(), tile }
     }
 
-    fn drink(rng: &mut RNG) -> Self {
-        Self::new(rng, Tile::get('~'), 2 * MAX_THIRST)
+    fn timeout(&self) -> i32 {
+        match self.need {
+            BasicNeed::Eat => MAX_HUNGER,
+            BasicNeed::Drink => MAX_THIRST,
+        }
     }
 
-    fn new(rng: &mut RNG, tile: &'static Tile, turn_timeout: i32) -> Self {
-        let turns_left = rng.gen_range(0..turn_timeout);
-        Self { path: Default::default(), last_seen: None, tile, turn_timeout, turns_left }
+    fn turns_left<'a>(&self, ctx: &'a mut Context) -> &'a mut i32 {
+        match self.need {
+            BasicNeed::Eat => &mut ctx.shared.till_hunger,
+            BasicNeed::Drink => &mut ctx.shared.till_thirst,
+        }
     }
 }
 
@@ -198,10 +256,10 @@ impl Strategy for BasicNeedsStrategy {
 
     fn bid(&mut self, ctx: &mut Context, last: bool) -> (Priority, i32) {
         // Update our state, which stores up to one tile that meets this need.
-        self.turns_left = max(self.turns_left - 1, 0);
+        *self.turns_left(ctx) = max(*self.turns_left(ctx) - 1, 0);
         for cell in &ctx.observations {
             if cell.tile != self.tile { continue; }
-            self.last_seen = Some(cell.point);
+            self.last = Some(cell.point);
             break;
         }
 
@@ -211,9 +269,11 @@ impl Strategy for BasicNeedsStrategy {
         if !(self.path.check(ctx) && valid(self.path.steps[0])) { self.path.reset(); }
 
         // Compute a priority for satisfying this need.
-        let cutoff = max(self.turn_timeout / 2, 1);
-        if self.turns_left >= cutoff { return (Priority::Skip, 0); }
-        let tiebreaker = if last { -1 } else { 100 * self.turns_left / cutoff };
+        if self.last.is_none() { return (Priority::Skip, 0); }
+        let (turns_left, timeout) = (*self.turns_left(ctx), self.timeout());
+        let cutoff = max(timeout / 2, 1);
+        if turns_left >= cutoff { return (Priority::Skip, 0); }
+        let tiebreaker = if last { -1 } else { 100 * turns_left / cutoff };
         (Priority::SatisfyNeeds, tiebreaker)
     }
 
@@ -223,7 +283,7 @@ impl Strategy for BasicNeedsStrategy {
         let Context { known, pos, .. } = *ctx;
         let valid = |p: Point| known.get(p).tile() == Some(self.tile);
         if valid(pos) {
-            self.turns_left = self.turn_timeout;
+            *self.turns_left(ctx) = self.timeout();
             return Some(Action::Idle);
         }
 
@@ -241,8 +301,8 @@ impl Strategy for BasicNeedsStrategy {
         }
 
         // Else, fall back to the last-seen satisfying cell.
-        let action = self.path.start(ctx, self.last_seen?);
-        if action.is_none() { self.last_seen = None; }
+        let action = self.path.start(ctx, self.last?);
+        if action.is_none() { self.last = None; }
         action
     }
 
@@ -253,19 +313,13 @@ impl Strategy for BasicNeedsStrategy {
 
 // AssessStrategy
 
-struct AssessStrategy { steps: Vec<Point>, turns_left: i32 }
-
-impl AssessStrategy {
-    fn new(rng: &mut RNG) -> Self {
-        Self { steps: vec![], turns_left: rng.gen_range(0..MAX_ASSESS) }
-    }
-}
+#[derive(Default)]
+struct AssessStrategy { steps: Vec<Point> }
 
 impl Debug for AssessStrategy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AssessStrategy")
          .field("len", &self.steps.len())
-         .field("turns_left", &self.turns_left)
          .finish()
     }
 }
@@ -273,10 +327,10 @@ impl Debug for AssessStrategy {
 impl Strategy for AssessStrategy {
     fn get_path(&self) -> &[Point] { &[] }
 
-    fn bid(&mut self, _: &mut Context, last: bool) -> (Priority, i32) {
-        self.turns_left = max(self.turns_left - 1, 0);
+    fn bid(&mut self, ctx: &mut Context, last: bool) -> (Priority, i32) {
+        ctx.shared.till_assess = max(ctx.shared.till_assess - 1, 0);
 
-        if self.turns_left > 0 { return (Priority::Skip, 0); }
+        if ctx.shared.till_assess > 0 { return (Priority::Skip, 0); }
         let priority = if last { Priority::SatisfyNeeds } else { Priority::Explore };
         let tiebreaker = if last { -1 } else { 0 };
         (priority, tiebreaker)
@@ -292,7 +346,7 @@ impl Strategy for AssessStrategy {
 
         let target = self.steps.pop();
         if self.steps.is_empty() {
-            self.turns_left = rng.gen_range(0..MAX_ASSESS);
+            ctx.shared.till_assess = rng.gen_range(0..MAX_ASSESS);
         }
         target.map(|x| Action::Look(x))
     }
@@ -425,19 +479,19 @@ fn select_target(scores: &[(Point, f64)], env: &mut AIEnv) -> Option<Point> {
 pub struct NewAIState {
     bids: Vec<(Priority, i32, usize)>,
     strategies: Vec<Box<dyn Strategy>>,
-    time: Timestamp,
+    shared: SharedAIState,
     last: i32,
 }
 
 impl NewAIState {
     pub fn new(rng: &mut RNG) -> Self {
         let strategies: Vec<Box<dyn Strategy>> = vec![
-            Box::new(BasicNeedsStrategy::eat(rng)),
-            Box::new(BasicNeedsStrategy::drink(rng)),
-            Box::new(AssessStrategy::new(rng)),
+            Box::new(BasicNeedsStrategy::new(BasicNeed::Eat)),
+            Box::new(BasicNeedsStrategy::new(BasicNeed::Drink)),
+            Box::new(AssessStrategy::default()),
             Box::new(ExploreStrategy::default()),
         ];
-        Self { bids: vec![], strategies, time: Default::default(), last: -1 }
+        Self { bids: vec![], strategies, shared: SharedAIState::new(rng), last: -1 }
     }
 
     pub fn get_path(&self) -> &[Point] {
@@ -446,25 +500,29 @@ impl NewAIState {
     }
 
     pub fn plan(&mut self, entity: &Entity, env: &mut AIEnv) -> Action {
+        // Step 0: update some initial, deterministic shared state.
         let known = &*entity.known;
+        let mut observations = vec![];
+        for cell in &known.cells {
+            if (self.shared.time - cell.last_seen) >= 0 { break; }
+            observations.push(cell);
+        }
+        self.shared.update(known);
+
+        // Step 1: build a context object with all strategies' mutable state.
+        let shared = &mut self.shared;
         let mut ctx = Context {
             entity,
             known,
             pos: entity.pos,
             dir: entity.dir,
-            observations: vec![],
+            observations,
             neighborhood: vec![],
+            shared,
             env,
         };
 
-        // Step 0: Compute some initial, deterministic shared state.
-        for cell in &known.cells {
-            if (self.time - cell.last_seen) >= 0 { break; }
-            ctx.observations.push(cell);
-        }
-        self.time = known.time;
-
-        // Step 1: update each strategy's state and compute priorities.
+        // Step 2: update each strategy's state and compute priorities.
         self.bids.clear();
         for (i, strategy) in self.strategies.iter_mut().enumerate() {
             let last = i == self.last as usize;
@@ -474,7 +532,7 @@ impl NewAIState {
         }
         self.bids.sort_unstable();
 
-        // Step 2: execute strategies by priority order.
+        // Step 3: execute strategies by priority order.
         self.last = -1;
         let mut action = None;
         for &(_, _, i) in &self.bids {
@@ -484,7 +542,7 @@ impl NewAIState {
             break;
         }
 
-        // Step 3: clear any staged state in unused strategies.
+        // Step 4: clear any staged state in unused strategies.
         for (i, strategy) in self.strategies.iter_mut().enumerate() {
             let last = i == self.last as usize;
             if !last { strategy.reject(); }
