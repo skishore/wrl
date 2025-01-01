@@ -7,7 +7,7 @@ use lazy_static::lazy_static;
 use rand::{Rng, SeedableRng};
 
 use crate::static_assert_size;
-use crate::ai::{AIEnv, NewAIState as AIState};
+use crate::ai::{AIEnv, AIState};
 use crate::base::{Buffer, Color, Glyph, Rect, Slice};
 use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs};
 use crate::effect::{Effect, Event, Frame, FT, self};
