@@ -588,6 +588,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let entity = &mut state.board.entities[eid];
             if look != dirs::NONE { entity.dir = look; }
             if step == dirs::NONE { return ActionResult::success_turns(turns); }
+            if step.len_l1() > 1 { return ActionResult::failure(); }
 
             // Moving diagonally is slower. Moving quickly is noisier.
             let noisy = !(entity.player || turns > 1.);
