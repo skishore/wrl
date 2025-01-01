@@ -52,9 +52,16 @@ const WANDER_TURNS: f64 = 2.;
 
 // Basic actions
 
-fn step(dir: Point, turns: f64) -> Action { Action::Move(Move { look: dir, step: dir, turns }) }
-
 fn wander(dir: Point) -> Action { step(dir, WANDER_TURNS) }
+
+fn step(dir: Point, turns: f64) -> Action {
+    Action::Move(Move { look: dir, step: dir, turns })
+}
+
+fn safe_inv_l2(point: Point) -> f64 {
+    if point == Point::default() { return 0. }
+    (point.len_l2_squared() as f64).sqrt().recip()
+}
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -105,7 +112,7 @@ impl CachedPath {
         self.steps.iter().all(|&x| valid(x))
     }
 
-    fn start(&mut self, ctx: &Context, target: Point) -> Option<Action> {
+    fn start(&mut self, ctx: &Context, target: Point, turns: f64) -> Option<Action> {
         let Context { known, pos, .. } = *ctx;
         let check = |p: Point| known.get(p).status();
         let path = AStar(pos, target, ASTAR_LIMIT_WANDER, check);
@@ -119,10 +126,10 @@ impl CachedPath {
         self.pos = pos;
         self.steps = path;
         self.steps.reverse();
-        self.follow(ctx)
+        self.follow(ctx, turns)
     }
 
-    fn follow(&mut self, ctx: &Context) -> Option<Action> {
+    fn follow(&mut self, ctx: &Context, turns: f64) -> Option<Action> {
         let Context { known, pos, dir, .. } = *ctx;
         let next = self.steps.pop()?;
         self.pos = next;
@@ -134,7 +141,7 @@ impl CachedPath {
             }
         }
         let look = if target == pos { dir } else { target - pos };
-        Some(Action::Move(Move { look, step: next - pos, turns: WANDER_TURNS }))
+        Some(Action::Move(Move { look, step: next - pos, turns }))
     }
 }
 
@@ -189,7 +196,7 @@ impl SharedAIState {
 // Strategy-based planning
 
 #[derive(Clone, Copy, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
-enum Priority { Survive, SatisfyNeeds, Hunt, Explore, Skip }
+enum Priority { Survive, Hunt, SatisfyNeeds, Explore, Skip }
 
 struct Context<'a, 'b> {
     // Derived from the entity.
@@ -278,7 +285,8 @@ impl Strategy for BasicNeedsStrategy {
     }
 
     fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
-        if let Some(x) = self.path.follow(ctx) { return Some(x); }
+        let turns = WANDER_TURNS;
+        if let Some(x) = self.path.follow(ctx, turns) { return Some(x); }
 
         let Context { known, pos, .. } = *ctx;
         let valid = |p: Point| known.get(p).tile() == Some(self.tile);
@@ -295,13 +303,13 @@ impl Strategy for BasicNeedsStrategy {
             if cell.status() != Status::Free { continue; }
 
             // Compute at most one path to a point in the neighborhood.
-            let action = self.path.start(ctx, point);
+            let action = self.path.start(ctx, point, turns);
             if action.is_some() { return action; }
             break;
         }
 
         // Else, fall back to the last-seen satisfying cell.
-        let action = self.path.start(ctx, self.last?);
+        let action = self.path.start(ctx, self.last?, turns);
         if action.is_none() { self.last = None; }
         action
     }
@@ -373,7 +381,8 @@ impl Strategy for ExploreStrategy {
     }
 
     fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
-        if let Some(x) = self.path.follow(ctx) { return Some(x); }
+        let turns = WANDER_TURNS;
+        if let Some(x) = self.path.follow(ctx, turns) { return Some(x); }
 
         let Context { known, pos, dir, .. } = *ctx;
         let inv_dir_l2 = safe_inv_l2(dir);
@@ -410,11 +419,165 @@ impl Strategy for ExploreStrategy {
         let scores: Vec<_> = ctx.neighborhood.iter().map(
             |&(p, distance)| (p, score(p, distance))).collect();
         let target = select_target(&scores, ctx.env)?;
-        self.path.start(ctx, target);
-        self.path.follow(ctx)
+        self.path.start(ctx, target, turns)
     }
 
     fn reject(&mut self) { self.path.reset(); }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+#[derive(Debug)]
+struct ChaseTarget {
+    age: i32,
+    bias: Point,
+    last: Point,
+    turns: i32,
+}
+
+#[derive(Debug, Default)]
+struct ChaseStrategy {
+    path: CachedPath,
+    target: Option<ChaseTarget>,
+}
+
+impl Strategy for ChaseStrategy {
+    fn get_path(&self) -> &[Point] { &self.path.steps }
+
+    fn bid(&mut self, ctx: &mut Context, _: bool) -> (Priority, i32) {
+        if !self.path.check(ctx) { self.path.reset(); }
+
+        if !ctx.entity.predator { return (Priority::Skip, 0); }
+
+        let pos = ctx.pos;
+        let prev = self.target.take();
+        let mut targets: Vec<_> =
+                ctx.known.entities.iter().filter(|x| x.rival).collect();
+        if targets.is_empty() { return (Priority::Skip, 0); }
+
+        let target = *targets.select_nth_unstable_by_key(
+                0, |x| (x.age, (x.pos - pos).len_l2_squared())).1;
+        let cur_turn_age = ctx.shared.age_at_turn(1);
+        let max_turn_age = ctx.shared.age_at_turn(MAX_SEARCH_TURNS);
+        if target.age >= max_turn_age { return (Priority::Skip, 0); }
+
+        let reset = target.age < cur_turn_age;
+        if reset { self.path.reset(); }
+
+        let (age, last) = (target.age, target.pos);
+        let (bias, turns) = if !reset && let Some(x) = prev {
+            (x.bias, x.turns + 1)
+        } else {
+            (target.pos - pos, 0)
+        };
+        self.target = Some(ChaseTarget { age, bias, last, turns });
+        (Priority::Hunt, 0)
+    }
+
+    fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
+        let target = self.target.as_ref()?;
+        if target.age == 0 { return Some(attack_target(ctx, target.last)); }
+
+        let turns = if move_ready(ctx.entity) { 1. } else { SLOWED_TURNS };
+        if let Some(x) = self.path.follow(ctx, turns) { return Some(x); }
+
+        let search_nearby = target.turns > target.bias.len_l1();
+        let center = if search_nearby { ctx.pos } else { target.last };
+        search_around(ctx, &mut self.path, target.age, target.bias, center, turns)
+    }
+
+    fn reject(&mut self) { self.path.reset(); }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// Helpers for ChaseStrategy
+
+fn attack_target(ctx: &mut Context, target: Point) -> Action {
+    let Context { entity, known, pos: source, .. } = *ctx;
+    if source == target { return Action::Idle; }
+
+    let range = entity.range;
+    let valid = |x| has_line_of_sight(x, target, known, range);
+    if move_ready(entity) && valid(source) { return Action::Attack(target); }
+
+    path_to_target(ctx, target, range, valid)
+}
+
+fn path_to_target<F: Fn(Point) -> bool>(
+        ctx: &mut Context, target: Point, range: i32, valid: F) -> Action {
+    let Context { known, pos: source, .. } = *ctx;
+    let rng = &mut ctx.env.rng;
+    let check = |p: Point| known.get(p).status();
+    let step = |dir: Point| {
+        let look = target - source - dir;
+        Action::Move(Move { step: dir, look, turns: 1. })
+    };
+
+    // Given a non-empty list of "good" directions (each of which brings us
+    // close to attacking the target), choose one closest to our attack range.
+    let pick = |dirs: &Vec<Point>, rng: &mut RNG| {
+        let cell = known.get(target);
+        let (shade, tile) = (cell.shade(), cell.tile());
+        let obscured = shade || matches!(tile, Some(x) if x.limits_vision());
+        let distance = if obscured { 1 } else { range };
+
+        assert!(!dirs.is_empty());
+        let scores: Vec<_> = dirs.iter().map(
+            |&x| ((x + source - target).len_nethack() - distance).abs()).collect();
+        let best = *scores.iter().reduce(|acc, x| min(acc, x)).unwrap();
+        let opts: Vec<_> = (0..dirs.len()).filter(|&i| scores[i] == best).collect();
+        step(dirs[*sample(&opts, rng)])
+    };
+
+    // If we could already attack the target, don't move out of view.
+    if valid(source) {
+        let mut dirs = vec![Point::default()];
+        for &x in &dirs::ALL {
+            if check(source + x) != Status::Free { continue; }
+            if valid(source + x) { dirs.push(x); }
+        }
+        return pick(&dirs, rng);
+    }
+
+    // Else, pick a direction which brings us in view.
+    let result = BFS(source, &valid, BFS_LIMIT_ATTACK, check);
+    if let Some(x) = result && !x.dirs.is_empty() { return pick(&x.dirs, rng); }
+
+    // Else, move towards the target.
+    let path = AStar(source, target, ASTAR_LIMIT_ATTACK, check);
+    let dir = path.and_then(
+        |x| if x.is_empty() { None } else { Some(x[0] - source) });
+    step(dir.unwrap_or_else(|| *sample(&dirs::ALL, rng)))
+}
+
+fn search_around(ctx: &mut Context, path: &mut CachedPath,
+                 age: i32, bias: Point, center: Point, turns: f64) -> Option<Action> {
+    let Context { known, pos, dir, .. } = *ctx;
+    let inv_dir_l2 = safe_inv_l2(dir);
+    let inv_bias_l2 = safe_inv_l2(bias);
+
+    ensure_neighborhood(ctx);
+
+    let score = |p: Point, distance: i32| -> f64 {
+        if distance == 0 { return 0.; }
+        let cell = known.get(p);
+        if cell.time_since_entity_visible() < age || cell.blocked() { return 0. }
+
+        let delta = p - pos;
+        let inv_delta_l2 = safe_inv_l2(delta);
+        let cos0 = delta.dot(dir) as f64 * inv_delta_l2 * inv_dir_l2;
+        let cos1 = delta.dot(bias) as f64 * inv_delta_l2 * inv_bias_l2;
+        let angle = ((cos0 + 1.) * (cos1 + 1.)).pow(4);
+        let bonus = if p == center && center != pos { 64. } else { 1. };
+
+        angle * bonus / (((p - center).len_l2_squared() + 1) as f64).pow(2)
+    };
+
+    let scores: Vec<_> = ctx.neighborhood.iter().map(
+        |&(p, distance)| (p, score(p, distance))).collect();
+    let target = select_target(&scores, ctx.env)?;
+    path.start(ctx, target, turns)
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -486,6 +649,7 @@ pub struct NewAIState {
 impl NewAIState {
     pub fn new(rng: &mut RNG) -> Self {
         let strategies: Vec<Box<dyn Strategy>> = vec![
+            Box::new(ChaseStrategy::default()),
             Box::new(BasicNeedsStrategy::new(BasicNeed::Eat)),
             Box::new(BasicNeedsStrategy::new(BasicNeed::Drink)),
             Box::new(AssessStrategy::default()),
@@ -624,8 +788,8 @@ impl AIState {
     }
 
     fn age_at_turn(&self, turn: i32) -> i32 {
-        if self.turn_times.is_empty() { return 0; }
-        self.time - self.turn_times[min(self.turn_times.len() - 1, turn as usize)]
+        if turn <= 0 || self.turn_times.is_empty() { return 0; }
+        self.time - self.turn_times[min(self.turn_times.len(), turn as usize) - 1]
     }
 
     fn record_turn(&mut self, time: Timestamp) {
@@ -726,36 +890,6 @@ fn explore(entity: &Entity, env: &mut AIEnv) -> Option<BFSResult> {
     sample_scored(entity, &scores, env)
 }
 
-fn search_around(entity: &Entity, source: Point, age: i32, bias: Point,
-                 env: &mut AIEnv) -> Option<BFSResult> {
-    let (known, pos, dir) = (&*entity.known, entity.pos, entity.dir);
-    let check = |p: Point| known.get(p).status();
-    let map = DijkstraMap(pos, check, SEARCH_CELLS, SEARCH_LIMIT, FOV_RADIUS);
-    if map.is_empty() { return None; }
-
-    let inv_dir_l2 = safe_inv_l2(dir);
-    let inv_bias_l2 = safe_inv_l2(bias);
-
-    let score = |p: Point, distance: i32| -> f64 {
-        if distance == 0 { return 0.; }
-        let cell = known.get(p);
-        if cell.time_since_entity_visible() < age || cell.blocked() { return 0. }
-
-        let delta = p - pos;
-        let inv_delta_l2 = safe_inv_l2(delta);
-        let cos0 = delta.dot(dir) as f64 * inv_delta_l2 * inv_dir_l2;
-        let cos1 = delta.dot(bias) as f64 * inv_delta_l2 * inv_bias_l2;
-        let angle = ((cos0 + 1.) * (cos1 + 1.)).pow(4);
-        let bonus = if p == source && source != pos { 64. } else { 1. };
-
-        angle * bonus / (((p - source).len_l2_squared() + 1) as f64).pow(2)
-    };
-
-    let scores: Vec<_> = map.into_iter().map(
-        |(p, distance)| (p, score(p, distance))).collect();
-    sample_scored(entity, &scores, env)
-}
-
 fn has_line_of_sight(source: Point, target: Point, known: &Knowledge, range: i32) -> bool {
     if (source - target).len_nethack() > range { return false; }
     if !known.get(target).visible() { return false; }
@@ -765,63 +899,6 @@ fn has_line_of_sight(source: Point, target: Point, known: &Knowledge, range: i32
         if i == 0 || i == last { return true; }
         known.get(p).status() == Status::Free
     })
-}
-
-fn path_to_target<F: Fn(Point) -> bool>(
-        entity: &Entity, target: Point, known: &Knowledge,
-        range: i32, valid: F, rng: &mut RNG) -> Action {
-    let source = entity.pos;
-    let check = |p: Point| known.get(p).status();
-    let step = |dir: Point| {
-        let look = target - source - dir;
-        Action::Move(Move { step: dir, look, turns: 1. })
-    };
-
-    // Given a non-empty list of "good" directions (each of which brings us
-    // close to attacking the target), choose one closest to our attack range.
-    let pick = |dirs: &Vec<Point>, rng: &mut RNG| {
-        let cell = known.get(target);
-        let obscured = cell.shade() || matches!(cell.tile(), Some(x) if x.limits_vision());
-        let distance = if obscured { 1 } else { range };
-
-        assert!(!dirs.is_empty());
-        let scores: Vec<_> = dirs.iter().map(
-            |&x| ((x + source - target).len_nethack() - distance).abs()).collect();
-        let best = *scores.iter().reduce(|acc, x| min(acc, x)).unwrap();
-        let opts: Vec<_> = (0..dirs.len()).filter(|&i| scores[i] == best).collect();
-        step(dirs[*sample(&opts, rng)])
-    };
-
-    // If we could already attack the target, don't move out of view.
-    if valid(source) {
-        let mut dirs = vec![Point::default()];
-        for &x in &dirs::ALL {
-            if check(source + x) != Status::Free { continue; }
-            if valid(source + x) { dirs.push(x); }
-        }
-        return pick(&dirs, rng);
-    }
-
-    // Else, pick a direction which brings us in view.
-    let result = BFS(source, &valid, BFS_LIMIT_ATTACK, check);
-    if let Some(x) = result && !x.dirs.is_empty() { return pick(&x.dirs, rng); }
-
-    // Else, move towards the target.
-    let path = AStar(source, target, ASTAR_LIMIT_ATTACK, check);
-    let dir = path.and_then(|x| if x.is_empty() { None } else { Some(x[0] - source) });
-    step(dir.unwrap_or_else(|| *sample(&dirs::ALL, rng)))
-}
-
-fn attack_target(entity: &Entity, target: Point, rng: &mut RNG) -> Action {
-    let (known, source) = (&*entity.known, entity.pos);
-    if source == target { return Action::Idle; }
-
-    let range = entity.range;
-    let valid = |x| has_line_of_sight(x, target, known, range);
-    if move_ready(entity) && valid(source) {
-        return Action::Attack(target);
-    }
-    path_to_target(entity, target, known, range, valid, rng)
 }
 
 fn assess_dirs(dirs: &[Point], turns: i32, ai: &mut AIState, rng: &mut RNG) {
@@ -1173,16 +1250,6 @@ pub fn plan_npc(entity: &Entity, ai: &mut AIState, env: &mut AIEnv) -> Action {
             (ai.goal, result) = (Goal::Flee, x);
         } else if let Some(x) = &ai.flight && !x.done() {
             (ai.goal, result) = (Goal::Assess, coerce(pos, &[]));
-        } else if let Some(x) = &ai.fight {
-            if x.age == 0 {
-                ai.goal = Goal::Chase;
-                return attack_target(entity, x.target, env.rng);
-            }
-            let search_nearby = x.search_turns > x.bias.len_l1();
-            let source = if search_nearby { entity.pos } else { x.target };
-            if let Some(y) = search_around(entity, source, x.age, x.bias, env) {
-                (ai.goal, result) = (Goal::Chase, y);
-            }
         }
 
         let mut add_candidates = |ai: &mut AIState, goal: Goal| {
