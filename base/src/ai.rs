@@ -9,7 +9,7 @@ use rand_distr::num_traits::Pow;
 
 use crate::base::{LOS, Point, RNG, dirs, sample, weighted};
 use crate::entity::Entity;
-use crate::game::{Action, Move, Tile, move_ready};
+use crate::game::{NOISY_RADIUS, Action, Move, Tile, move_ready};
 use crate::knowledge::{CellKnowledge, Knowledge, Timestamp};
 use crate::pathing::{AStar, BFS, DijkstraLength, DijkstraMap, Status};
 
@@ -672,7 +672,7 @@ fn path_to_target<F: Fn(Point) -> bool>(
         let cell = known.get(target);
         let (shade, tile) = (cell.shade(), cell.tile());
         let obscured = shade || matches!(tile, Some(x) if x.limits_vision());
-        let distance = if obscured { 1 } else { range };
+        let distance = if obscured { 1 } else { min(range, NOISY_RADIUS) };
 
         assert!(!dirs.is_empty());
         let scores: Vec<_> = dirs.iter().map(

@@ -44,6 +44,8 @@ const UI_MAP_SIZE_Y: i32 = WORLD_SIZE;
 const UI_MOVE_ALPHA: f64 = 0.75;
 const UI_MOVE_FRAMES: i32 = 12;
 
+pub const NOISY_RADIUS: i32 = 4;
+
 #[derive(Eq, PartialEq)]
 pub enum Input { Escape, BackTab, Char(char) }
 
@@ -616,7 +618,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 Status::Free => {
                     // Noise generation, for quick moves.
                     let mut updated = vec![];
-                    let max = if noisy { 4 } else { 1 };
+                    let max = if noisy { NOISY_RADIUS } else { 1 };
                     for &oid in &state.board.entity_order {
                         if oid == eid { continue; }
                         let other = &state.board.entities[oid];
