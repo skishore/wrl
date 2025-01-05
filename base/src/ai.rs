@@ -566,10 +566,11 @@ impl Strategy for FlightStrategy {
         if self.done() && !reset { return (Priority::Skip, 0); }
 
         let looking = !self.dirs.is_empty();
+        let changed = !threats.is_empty() && threats != self.threats;
         let hiding = is_hiding_place(entity, pos, &threats);
         let stage = if hiding { FlightStage::Hide } else { FlightStage::Flee };
 
-        if reset || threats != self.threats {
+        if reset || changed {
             self.reject();
         } else if !self.path.check(ctx) {
             self.path.reset();
@@ -582,7 +583,7 @@ impl Strategy for FlightStrategy {
         } else {
             self.turn_limit
         };
-        if !threats.is_empty() { self.threats = threats; }
+        if changed { self.threats = threats; }
 
         (Priority::Survive, 0)
     }
