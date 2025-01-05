@@ -73,6 +73,15 @@ impl Vision {
         self.visibility.get(p + self.offset)
     }
 
+    pub fn clear(&mut self, pos: Point) {
+        self.offset = self.center - pos;
+        self.visibility.fill(-1);
+        self.points_seen.clear();
+
+        self.visibility.set(self.center, 0);
+        self.points_seen.push(pos);
+    }
+
     pub fn compute<F: Fn(Point) -> &'static Tile>(&mut self, args: &VisionArgs, f: F) {
         let VisionArgs { player, pos, dir } = *args;
         let inv_l2 = if !player && dir != Point::default() {

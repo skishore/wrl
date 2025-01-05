@@ -33,6 +33,7 @@ const ASSESS_TURNS_FLIGHT: i32 = 1;
 
 const MAX_ASSESS: i32 = 32;
 const MAX_HUNGER: i32 = 1024;
+const MAX_RESTED: i32 = 4096;
 const MAX_THIRST: i32 = 256;
 
 const MIN_FLIGHT_TURNS: i32 = 16;
@@ -164,6 +165,7 @@ struct SharedAIState {
     till_assess: i32,
     till_hunger: i32,
     till_thirst: i32,
+    till_rested: i32,
     time: Timestamp,
     turn_times: VecDeque<Timestamp>,
 }
@@ -173,6 +175,7 @@ impl Debug for SharedAIState {
         f.debug_struct("SharedAIState")
          .field("till_assess", &self.till_assess)
          .field("till_hunger", &self.till_hunger)
+         .field("till_rested", &self.till_rested)
          .field("till_thirst", &self.till_thirst)
          .field("time", &self.time)
          .finish()
@@ -184,6 +187,7 @@ impl SharedAIState {
         Self {
             till_assess: rng.gen_range(0..MAX_ASSESS),
             till_hunger: rng.gen_range(0..MAX_HUNGER),
+            till_rested: rng.gen_range(0..MAX_RESTED),
             till_thirst: rng.gen_range(0..MAX_THIRST),
             time: Default::default(),
             turn_times: Default::default(),
@@ -275,7 +279,8 @@ impl Strategy for BasicNeedsStrategy {
 
     fn bid(&mut self, ctx: &mut Context, last: bool) -> (Priority, i32) {
         // Update our state, which stores up to one tile that meets this need.
-        *self.turns_left(ctx) = max(*self.turns_left(ctx) - 1, 0);
+        let asleep = ctx.entity.asleep;
+        if !asleep { *self.turns_left(ctx) = max(*self.turns_left(ctx) - 1, 0); }
         for cell in &ctx.observations {
             if cell.tile != self.tile { continue; }
             self.last = Some(cell.point);
@@ -324,6 +329,59 @@ impl Strategy for BasicNeedsStrategy {
         let action = self.path.start(ctx, self.last?, turns);
         if action.is_none() { self.last = None; }
         action
+    }
+
+    fn reject(&mut self) { self.path.reset(); }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// RestStrategy
+
+#[derive(Debug, Default)]
+struct RestStrategy { path: CachedPath }
+
+impl Strategy for RestStrategy {
+    fn get_path(&self) -> &[Point] { &self.path.steps }
+
+    fn bid(&mut self, ctx: &mut Context, last: bool) -> (Priority, i32) {
+        let asleep = ctx.entity.asleep;
+        if !asleep { ctx.shared.till_rested = max(ctx.shared.till_rested - 1, 0); }
+
+        if !self.path.check(ctx) { self.path.reset(); }
+
+        // Compute a priority for satisfying this need.
+        let cutoff = max(MAX_RESTED / 2, 1);
+        let turns_left = ctx.shared.till_rested;
+        if !last && turns_left >= cutoff { return (Priority::Skip, 0); }
+        let tiebreaker = if last { -1 } else { 100 * turns_left / cutoff };
+        (Priority::SatisfyNeeds, tiebreaker)
+    }
+
+    fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
+        let turns = WANDER_TURNS;
+        if let Some(x) = self.path.follow(ctx, turns) { return Some(x); }
+
+        let Context { entity, known, pos, .. } = *ctx;
+        let valid = |p: Point| is_hiding_place(entity, p, &[]);
+        if valid(pos) {
+            ctx.shared.till_rested += 1;
+            return Some(Action::Rest);
+        }
+
+        ensure_neighborhood(ctx);
+
+        for &(point, _) in &ctx.neighborhood {
+            if !valid(point) { continue; }
+            if known.get(point).status() != Status::Free { continue; }
+
+            // Compute at most one path to a point in the neighborhood.
+            let action = self.path.start(ctx, point, turns);
+            if action.is_some() { return action; }
+            break;
+        }
+
+        None
     }
 
     fn reject(&mut self) { self.path.reset(); }
@@ -861,6 +919,7 @@ impl AIState {
         let strategies: Vec<Box<dyn Strategy>> = vec![
             Box::new(ChaseStrategy::default()),
             Box::new(FlightStrategy::default()),
+            Box::new(RestStrategy::default()),
             Box::new(BasicNeedsStrategy::new(BasicNeed::Eat)),
             Box::new(BasicNeedsStrategy::new(BasicNeed::Drink)),
             Box::new(AssessStrategy::default()),

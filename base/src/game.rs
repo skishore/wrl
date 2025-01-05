@@ -59,7 +59,6 @@ const FLAG_BLOCKS_MOVEMENT: u32 = 1 << 2;
 
 const FLAGS_NONE: u32 = 0;
 const FLAGS_BLOCKED: u32 = FLAG_BLOCKS_MOVEMENT | FLAG_BLOCKS_VISION;
-const FLAGS_PARTLY_BLOCKED: u32 = FLAG_BLOCKS_MOVEMENT | FLAG_LIMITS_VISION;
 
 pub struct Tile {
     pub flags: u32,
@@ -331,10 +330,14 @@ impl Board {
         swap(&mut known, &mut self.entities[eid].known);
 
         let me = &self.entities[eid];
-        let player = me.player;
-        let args = VisionArgs { player, pos: me.pos, dir: me.dir };
+        let Entity { pos, dir, asleep, player, .. } = *me;
         let vision = if player { &mut self._pc_vision } else { &mut self.npc_vision };
-        vision.compute(&args, |x| self.map.get(x).tile);
+        if asleep {
+            vision.clear(pos);
+        } else {
+            let args = VisionArgs { player, pos, dir };
+            vision.compute(&args, |x| self.map.get(x).tile);
+        }
         let vision = if player { &self._pc_vision } else { &self.npc_vision };
         known.update(me, &self, vision);
 
@@ -515,6 +518,7 @@ pub struct Move { pub look: Point, pub step: Point, pub turns: f64 }
 
 pub enum Action {
     Idle,
+    Rest,
     WaitForInput,
     Look(Point),
     Move(Move),
@@ -586,8 +590,12 @@ fn plan(state: &mut State, eid: EID) -> Action {
 }
 
 fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
+    let entity = &mut state.board.entities[eid];
+    entity.asleep = matches!(action, Action::Rest);
+
     match action {
         Action::Idle => ActionResult::success(),
+        Action::Rest => ActionResult::success(),
         Action::WaitForInput => ActionResult::failure(),
         Action::Look(dir) => {
             state.board.entities[eid].dir = dir;
