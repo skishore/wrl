@@ -54,8 +54,8 @@ fn safe_inv_l2(point: Point) -> f64 {
     (point.len_l2_squared() as f64).sqrt().recip()
 }
 
-fn is_hiding_place(entity: &Entity, point: Point, threats: &[Point]) -> bool {
-    if threats.iter().any(|&x| (x - point).len_l1() <= 1) { return false; }
+fn is_hiding_place(entity: &Entity, point: Point, threats: &[Threat]) -> bool {
+    if threats.iter().any(|&x| (x.pos - point).len_l1() <= 1) { return false; }
     let cell = entity.known.get(point);
     cell.shade() || matches!(cell.tile(), Some(x) if x.limits_vision())
 }
@@ -110,7 +110,7 @@ impl CachedPath {
     }
 
     fn sneak(&mut self, ctx: &Context, target: Point,
-             turns: f64, threats: &[Point]) -> Option<Action> {
+             turns: f64, threats: &[Threat]) -> Option<Action> {
         let Context { entity, known, pos, .. } = *ctx;
         let check = |p: Point| {
             if !is_hiding_place(entity, p, threats) { return Status::Blocked; }
@@ -210,7 +210,7 @@ impl SharedAIState {
 
 // Strategy-based planning
 
-#[derive(Clone, Copy, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Priority { Survive, Hunt, SatisfyNeeds, Explore, Skip }
 
 struct Context<'a, 'b> {
@@ -562,7 +562,13 @@ impl Strategy for ChaseStrategy {
 
 //////////////////////////////////////////////////////////////////////////////
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Threat {
+    asleep: bool,
+    pos: Point,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum FlightStage { Flee, Hide, Done }
 
 #[derive(Debug)]
@@ -572,7 +578,7 @@ struct FlightStrategy {
     stage: FlightStage,
     since_seen: i32,
     turn_limit: i32,
-    threats: Vec<Point>,
+    threats: Vec<Threat>,
 }
 
 impl FlightStrategy {
@@ -583,7 +589,7 @@ impl FlightStrategy {
         self.path.reset();
 
         if self.dirs.is_empty() {
-            let dirs: Vec<_> = self.threats.iter().map(|&x| x - pos).collect();
+            let dirs: Vec<_> = self.threats.iter().map(|&x| x.pos - pos).collect();
             self.dirs = assess_directions(&dirs, ASSESS_TURNS_FLIGHT, rng);
             self.dirs.reverse();
         }
@@ -617,9 +623,11 @@ impl Strategy for FlightStrategy {
         let limit = ctx.shared.age_at_turn(MAX_FLIGHT_TURNS);
 
         let reset = known.entities.iter().any(|x| x.age < last_turn_age && x.rival);
-        let mut threats: Vec<_> = known.entities.iter().filter_map(
-            |x| if x.age < limit && x.rival { Some(x.pos) } else { None }).collect();
-        threats.sort_unstable_by_key(|x| (x.0, x.1));
+        let mut threats: Vec<_> = known.entities.iter().filter_map(|x| {
+            if x.age >= limit || !x.rival { return None; }
+            Some(Threat { asleep: x.asleep, pos: x.pos })
+        }).collect();
+        threats.sort_unstable_by_key(|x| (x.pos.0, x.pos.1));
 
         if self.done() && !reset { return (Priority::Skip, 0); }
 
@@ -652,15 +660,19 @@ impl Strategy for FlightStrategy {
             return self.look(ctx);
         }
 
-        let turns = {
-            if !move_ready(ctx.entity) { SLOWED_TURNS }
-            else if self.stage == FlightStage::Hide { WANDER_TURNS } else { 1. }
+        let all_asleep = self.threats.iter().all(|x| x.asleep);
+        let pick_turns = |stage: FlightStage| {
+            if !move_ready(ctx.entity) { return SLOWED_TURNS }
+            let sneak = all_asleep || stage == FlightStage::Hide;
+            if sneak { WANDER_TURNS } else { 1. }
         };
+
+        let turns = pick_turns(self.stage);
         if let Some(x) = self.path.follow(ctx, turns) { return Some(x); }
 
         let Context { entity, pos, .. } = *ctx;
 
-        if is_hiding_place(entity, pos, &self.threats) {
+        if !all_asleep && is_hiding_place(entity, pos, &self.threats) {
             ensure_sneakable(ctx, &self.threats);
 
             if let Some(target) = flight_cell(ctx, &self.threats, true) {
@@ -675,7 +687,7 @@ impl Strategy for FlightStrategy {
         if let Some(target) = flight_cell(ctx, &self.threats, false) {
             self.stage = FlightStage::Flee;
             if target == pos { return self.look(ctx); }
-            return self.path.start(ctx, target, 1.);
+            return self.path.start(ctx, target, pick_turns(self.stage));
         }
 
         self.stage = FlightStage::Flee;
@@ -794,11 +806,11 @@ fn search_around(ctx: &mut Context, path: &mut CachedPath,
 
 // Helpers for FlightStrategy
 
-fn flight_cell(ctx: &mut Context, threats: &[Point], hiding: bool) -> Option<Point> {
+fn flight_cell(ctx: &mut Context, threats: &[Threat], hiding: bool) -> Option<Point> {
     let Context { entity, known, pos, .. } = *ctx;
 
     let threat_inv_l2s: Vec<_> = threats.iter().map(
-        |&x| (x, safe_inv_l2(pos - x))).collect();
+        |&x| (x.pos, safe_inv_l2(pos - x.pos))).collect();
     let scale = DijkstraLength(Point(1, 0)) as f64;
 
     let score = |p: Point, source_distance: i32| -> f64 {
@@ -870,7 +882,7 @@ fn ensure_neighborhood(ctx: &mut Context) {
     ctx.neighborhood = DijkstraMap(ctx.pos, check, SEARCH_CELLS, SEARCH_LIMIT, FOV_RADIUS);
 }
 
-fn ensure_sneakable(ctx: &mut Context, threats: &[Point]) {
+fn ensure_sneakable(ctx: &mut Context, threats: &[Threat]) {
     if !ctx.sneakable.is_empty() { return; }
     let Context { entity, known, .. } = *ctx;
     let check = |p: Point| {

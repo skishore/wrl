@@ -175,6 +175,7 @@ pub struct EntityKnowledge {
     pub moved: bool,
     pub rival: bool,
     pub friend: bool,
+    pub asleep: bool,
 }
 static_assert_size!(EntityKnowledge, 48);
 
@@ -288,6 +289,7 @@ impl Knowledge {
                 moved: Default::default(),
                 rival: Default::default(),
                 friend: Default::default(),
+                asleep: Default::default(),
             })
         });
 
@@ -309,6 +311,7 @@ impl Knowledge {
         entry.moved = !seen;
         entry.rival = rival;
         entry.friend = same;
+        entry.asleep = other.asleep;
 
         handle
     }

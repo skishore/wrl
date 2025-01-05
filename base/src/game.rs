@@ -630,6 +630,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                     for &oid in &state.board.entity_order {
                         if oid == eid { continue; }
                         let other = &state.board.entities[oid];
+                        if other.asleep && !noisy { continue; }
                         let sr = (other.pos - source).len_nethack() <= max;
                         let tr = (other.pos - target).len_nethack() <= max;
                         if sr || tr { updated.push((oid, tr)); }
