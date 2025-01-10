@@ -43,7 +43,7 @@ class CaveMap:
     def __init__(self, width: int, height: int):
         self.width = width
         self.height = height
-        self.cells = [[False for _ in range(height)] for _ in range(width)]
+        self.cells = [[True for _ in range(height)] for _ in range(width)]
 
     def count_neighbors(self, x: int, y: int, distance: int = 1) -> int:
         count = 0
@@ -99,39 +99,40 @@ def try_place_rooms(width: int, height: int, config: MapgenConfig) -> list[Room]
 
     return rooms if room_area / total_area >= config.min_coverage else None
 
-def fill_caves(cave: CaveMap, rooms: list[Room], config: MapgenConfig):
-    # First block everything outside rooms
-    for x in range(cave.width):
-        for y in range(cave.height):
-            cave.cells[x][y] = True
 
-    # Run cellular automaton within each room
-    for room in rooms:
-        # Initialize room interior with random walls
-        for x in range(room.x + 1, room.x + room.width - 1):
-            for y in range(room.y + 1, room.y + room.height - 1):
-                cave.cells[x][y] = random.random() < config.wall_chance
+def fill_cave(width: int, height: int, config: MapgenConfig) -> CaveMap:
+    cave = CaveMap(width, height)
 
-        # Ensure room borders are walls
-        for x in range(room.x, room.x + room.width):
-            cave.cells[x][room.y] = True
-            cave.cells[x][room.y + room.height - 1] = True
-        for y in range(room.y, room.y + room.height):
-            cave.cells[room.x][y] = True
-            cave.cells[room.x + room.width - 1][y] = True
+    # Initialize the room's interior with uniform random noise
+    for x in range(1, width - 1):
+        for y in range(1, height - 1):
+            cave.cells[x][y] = random.random() < config.wall_chance
 
-    # Run CA steps only within room interiors
+    # Run CA steps only within the map's interior
     for _ in range(config.cave_steps):
         new_cells = [[cell for cell in row] for row in cave.cells]
-        for room in rooms:
-            for x in range(room.x + 1, room.x + room.width - 1):
-                for y in range(room.y + 1, room.y + room.height - 1):
-                    neighbors = cave.count_neighbors(x, y)
-                    if cave.cells[x][y]:
-                        new_cells[x][y] = neighbors >= config.death_limit
-                    else:
-                        new_cells[x][y] = neighbors >= config.birth_limit
+        for x in range(1, width - 1):
+            for y in range(1, height - 1):
+                neighbors = cave.count_neighbors(x, y)
+                if cave.cells[x][y]:
+                    new_cells[x][y] = neighbors >= config.death_limit
+                else:
+                    new_cells[x][y] = neighbors >= config.birth_limit
         cave.cells = new_cells
+
+    return cave
+
+
+def fill_caves(cave: CaveMap, rooms: list[Room], config: MapgenConfig):
+    for room in rooms:
+        while True:
+            room_cave = fill_cave(room.width, room.height, config)
+            if len(find_cave_sections(room_cave)) == 1:
+                break
+        for x in range(room.width):
+            for y in range(room.height):
+                cave.cells[room.x + x][room.y + y] = room_cave.cells[x][y]
+
 
 def find_cave_sections(cave: CaveMap) -> list[set[Point]]:
     """Find connected components of unblocked cells"""
