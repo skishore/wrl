@@ -252,6 +252,56 @@ def connect_caves(cave: CaveMap, rooms: list[Room], config: MapgenConfig):
                     if 0 <= nx < cave.width and 0 <= ny < cave.height:
                         cave.cells[nx][ny] = False
 
+def generate_perlin_noise(width: int, height: int, scale: float = 10.0, octaves: int = 4, falloff = 0.5) -> list[list[float]]:
+    """Generate Perlin noise in range [0,1]"""
+
+    def interpolate(a0: float, a1: float, w: float) -> float:
+        # Smoothstep interpolation
+        return (a1 - a0) * (3.0 - w * 2.0) * w * w + a0
+
+    noise = [[0.0 for _ in range(height)] for _ in range(width)]
+
+    for octave in range(octaves):
+        period = scale / (2 ** octave)
+        frequency = 1.0 / period
+
+        # Generate grid of random values for this octave
+        grid_width = int(width * frequency) + 2
+        grid_height = int(height * frequency) + 2
+        grid = [[random.random() for _ in range(grid_height)] for _ in range(grid_width)]
+
+        for y in range(height):
+            y0 = int(y * frequency)
+            y1 = y0 + 1
+            yfrac = (y * frequency) - y0
+
+            for x in range(width):
+                x0 = int(x * frequency)
+                x1 = x0 + 1
+                xfrac = (x * frequency) - x0
+
+                # Use consistent grid values for interpolation
+                v00 = grid[x0][y0]
+                v10 = grid[x1][y0]
+                v01 = grid[x0][y1]
+                v11 = grid[x1][y1]
+
+                # Interpolate
+                x_interp1 = interpolate(v00, v10, xfrac)
+                x_interp2 = interpolate(v01, v11, xfrac)
+                value = interpolate(x_interp1, x_interp2, yfrac)
+
+                noise[x][y] += value * falloff ** octave
+
+    # Normalize to [0,1]
+    max_val = max(max(row) for row in noise)
+    min_val = min(min(row) for row in noise)
+    for x in range(width):
+        for y in range(height):
+            noise[x][y] = (noise[x][y] - min_val) / (max_val - min_val)
+
+    return noise
+
 def generate_cave(width: int, height: int, config: MapgenConfig = None,
                  seed: int = None) -> CaveMap:
     if seed is not None:
@@ -260,6 +310,12 @@ def generate_cave(width: int, height: int, config: MapgenConfig = None,
         config = MapgenConfig()
 
     cave = CaveMap(width, height)
+    noise = generate_perlin_noise(width, height, scale=4.0, octaves=2, falloff=0.65)
+    for x in range(width):
+        for y in range(height):
+            (p, l) = (0.25, 1.0)
+            cave.cells[x][y] = (p * random.random() + (1 - p) * 0.5) > l * noise[x][y]
+    return cave
 
     # Try to place rooms until we get good coverage
     while True:
