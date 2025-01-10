@@ -1,5 +1,12 @@
 from dataclasses import dataclass
+import math
 import random
+
+COLORS: dict[str, tuple[int, int, int]] = {
+    "#": (0, 84, 0),
+    ".": (168, 168, 168),
+    '"': (84, 168, 0),
+}
 
 @dataclass(frozen=True)
 class Point:
@@ -8,9 +15,13 @@ class Point:
 
 @dataclass
 class MapgenConfig:
+    # Overall size
+    width: int = 100
+    height: int = 100
+
     # Room placement
     min_room_size: int = 10
-    max_room_size: int = 50
+    max_room_size: int = 60
     room_attempts: int = 100000
     min_coverage: float = 0.80
     start_with_center: bool = True
@@ -19,7 +30,7 @@ class MapgenConfig:
     wall_chance: float = 0.45
     birth_limit: int = 5
     death_limit: int = 4
-    cave_steps: int = 2
+    cave_steps: int = 3
 
     # Connections
     corridor_width: int = 1
@@ -59,11 +70,18 @@ class CaveMap:
 
     def print(self):
         for y in range(self.height):
-            chars = []
+            line = []
+            last_color = None
             for x in range(self.width):
-                c = '#' if self.cells[x][y] else '.'
-                chars.append(chr(ord(c) - 0x20 + 0xFF00))
-            print(''.join(chars))
+                c = self.cells[x][y]
+                color = COLORS.get(c, (255, 255, 255))
+                if color != last_color:
+                    (r, g, b) = color
+                    line.append(f"\x1b[38;2;{r};{g};{b}m")
+                    last_color = color
+                line.append(chr(ord(c) - 0x20 + 0xFF00))
+            print(''.join(line))
+        print("\x1b[0m")
 
 def place_rooms(width: int, height: int, config: MapgenConfig) -> list[Room]:
     rooms = []
@@ -302,20 +320,86 @@ def generate_perlin_noise(width: int, height: int, scale: float = 10.0, octaves:
 
     return noise
 
-def generate_cave(width: int, height: int, config: MapgenConfig = None,
-                 seed: int = None) -> CaveMap:
-    if seed is not None:
-        random.seed(seed)
-    if config is None:
-        config = MapgenConfig()
+def generate_colored_noise(width: int, height: int) -> list[list[int]]:
+    sines = {}
+    tau = 2 * math.pi
+    #frequencies = list(range(1, 31))
+    frequencies = list(range(1, 50))
+    for f in frequencies:
+        x_phase = random.uniform(0, 1)
+        y_phase = random.uniform(0, 1)
+        sines[f] = [
+            [
+                math.sin(tau * f * (x / width + x_phase)) +
+                math.sin(tau * f * (y / height + y_phase))
+                for y in range(height)
+            ]
+            for x in range(width)
+        ]
 
-    cave = CaveMap(width, height)
-    noise = generate_perlin_noise(width, height, scale=4.0, octaves=2, falloff=0.65)
+    amplitude = lambda f: f ** 1
+    norm = sum(amplitude(f) for f in frequencies)
+    noise = [[0.0 for _ in range(height)] for _ in range(width)]
     for x in range(width):
         for y in range(height):
-            (p, l) = (0.25, 1.0)
-            cave.cells[x][y] = (p * random.random() + (1 - p) * 0.5) > l * noise[x][y]
-    return cave
+            noise[x][y] = sum(amplitude(f) * sines[f][x][y] for f in frequencies) / norm
+
+    return noise
+
+def generate_blue_noise(width: int, height: int) -> list[list[int]]:
+    noise = [[0.0 for _ in range(height)] for _ in range(width)]
+    points = [Point(x, y) for x in range(width) for y in range(height)]
+    random.shuffle(points)
+    selected = set()
+
+    min_l2_distance = 8
+    d = math.ceil(math.sqrt(min_l2_distance // 2))
+    for point in points:
+        okay = True
+        for dx in range(-d, d + 1):
+            for dy in range(-d, d + 1):
+                if dx * dx + dy * dy >= min_l2_distance:
+                    continue
+                other = Point(point.x + dx, point.y + dy)
+                if other in selected:
+                    okay = False
+        if okay:
+            noise[point.x][point.y] = 1.0
+            selected.add(point)
+
+    return noise
+
+def generate_bluish_noise(width: int, height: int, base: list[list[int]]) -> list[list[int]]:
+    noise = [[0.0 for _ in range(height)] for _ in range(width)]
+    points = [Point(x, y) for x in range(width) for y in range(height)]
+    random.shuffle(points)
+    selected = set()
+
+    for point in points:
+        okay = True
+        here = base[point.x][point.y]
+        min_l2_distance = math.pow(8.0 * here, 1.0)
+        d = math.ceil(math.sqrt(min_l2_distance // 2))
+        for dx in range(-d, d + 1):
+            for dy in range(-d, d + 1):
+                if dx * dx + dy * dy >= min_l2_distance:
+                    continue
+                other = Point(point.x + dx, point.y + dy)
+                if other in selected:
+                    okay = False
+        if okay:
+            noise[point.x][point.y] = 1.0
+            selected.add(point)
+
+    return noise
+
+def generate_cave(config: MapgenConfig, seed: int = None) -> CaveMap:
+    (width, height) = (config.width, config.height)
+
+    if seed is not None:
+        random.seed(seed)
+
+    cave = CaveMap(width, height)
 
     # Try to place rooms until we get good coverage
     while True:
@@ -327,11 +411,23 @@ def generate_cave(width: int, height: int, config: MapgenConfig = None,
     # Fill rooms with cave generation
     fill_caves(cave, rooms, config)
 
+    # Detect each cave connected-component
+    sections = find_cave_sections(cave)
+
     # Connect nearby rooms
     connect_caves(cave, rooms, config)
+
+    noise = generate_perlin_noise(width, height, scale=4.0, octaves=2, falloff=0.65)
+    #noise = generate_bluish_noise(width, height, noise)
+
+    for x in range(width):
+        for y in range(height):
+            base = cave.cells[x][y]
+            cave.cells[x][y] = '#' if base else '"' if noise[x][y] > 0.45 + 0.3 * random.random() else '.'
 
     return cave
 
 if __name__ == "__main__":
-    cave = generate_cave(100, 100)
+    config = MapgenConfig()
+    cave = generate_cave(config)
     cave.print()
