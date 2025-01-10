@@ -9,10 +9,11 @@ class Point:
 @dataclass
 class MapgenConfig:
     # Room placement
-    min_room_size: int = 20
-    max_room_size: int = 60
-    room_attempts: int = 10000
-    min_coverage: float = 0.75
+    min_room_size: int = 10
+    max_room_size: int = 50
+    room_attempts: int = 100000
+    min_coverage: float = 0.80
+    start_with_center: bool = True
 
     # Room interior generation
     wall_chance: float = 0.45
@@ -22,7 +23,7 @@ class MapgenConfig:
 
     # Connections
     corridor_width: int = 1
-    max_connection_gap: int = 20
+    max_connection_gap: int = 6
 
 @dataclass
 class Room:
@@ -64,18 +65,17 @@ class CaveMap:
                 chars.append(chr(ord(c) - 0x20 + 0xFF00))
             print(''.join(chars))
 
-def try_place_rooms(width: int, height: int, config: MapgenConfig) -> list[Room] | None:
+def place_rooms(width: int, height: int, config: MapgenConfig) -> list[Room]:
     rooms = []
     total_area = width * height
-    room_area = 0
 
     # Place first room roughly in center
-    first_w = random.randint(config.min_room_size, config.max_room_size + 1)
-    first_h = random.randint(config.min_room_size, config.max_room_size + 1)
-    first_x = (width - first_w) // 2
-    first_y = (height - first_h) // 2
-    rooms.append(Room(first_x, first_y, first_w, first_h))
-    room_area = first_w * first_h
+    if config.start_with_center:
+        first_w = random.randint(config.min_room_size, config.max_room_size + 1)
+        first_h = random.randint(config.min_room_size, config.max_room_size + 1)
+        first_x = (width - first_w) // 2
+        first_y = (height - first_h) // 2
+        rooms.append(Room(first_x, first_y, first_w, first_h))
 
     for _ in range(config.room_attempts):
         w = random.randint(config.min_room_size, config.max_room_size + 1)
@@ -85,7 +85,7 @@ def try_place_rooms(width: int, height: int, config: MapgenConfig) -> list[Room]
         new_room = Room(x, y, w, h)
 
         # Check if touches any existing room
-        touches_existing = False
+        touches_existing = not rooms
         for room in rooms:
             if new_room.touches(room):
                 touches_existing = True
@@ -95,10 +95,8 @@ def try_place_rooms(width: int, height: int, config: MapgenConfig) -> list[Room]
 
         if touches_existing:
             rooms.append(new_room)
-            room_area += w * h
 
-    return rooms if room_area / total_area >= config.min_coverage else None
-
+    return rooms
 
 def fill_cave(width: int, height: int, config: MapgenConfig) -> CaveMap:
     cave = CaveMap(width, height)
@@ -121,7 +119,6 @@ def fill_cave(width: int, height: int, config: MapgenConfig) -> CaveMap:
         cave.cells = new_cells
 
     return cave
-
 
 def fill_caves(cave: CaveMap, rooms: list[Room], config: MapgenConfig):
     for room in rooms:
@@ -154,7 +151,7 @@ def find_cave_sections(cave: CaveMap) -> list[set[Point]]:
                 visited.add(p)
                 section.add(p)
 
-                for dx, dy in [(0,1), (1,0), (0,-1), (-1,0), (1,1), (1,-1), (-1,1), (-1,-1)]:
+                for dx, dy in [(0,1), (1,0), (0,-1), (-1,0)]:
                     nx, ny = p.x + dx, p.y + dy
                     if (0 <= nx < cave.width and 0 <= ny < cave.height and
                         not cave.cells[nx][ny] and Point(nx, ny) not in visited):
@@ -266,8 +263,9 @@ def generate_cave(width: int, height: int, config: MapgenConfig = None,
 
     # Try to place rooms until we get good coverage
     while True:
-        rooms = try_place_rooms(width, height, config)
-        if rooms is not None:
+        rooms = place_rooms(width, height, config)
+        area = sum(room.width * room.height for room in rooms)
+        if area / (width * height) >= config.min_coverage:
             break
 
     # Fill rooms with cave generation
