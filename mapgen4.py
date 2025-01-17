@@ -495,33 +495,24 @@ def try_place_cave(map_cave: CaveMap, room_cave: CaveMap, config: MapgenConfig) 
    random.shuffle(offsets)
 
    for offset in offsets:
-       # Check that no room floor overlaps a map wall
        valid = True
-       for rf in room_floors:
-           p = (offset[0] + rf[0], offset[1] + rf[1])
-           if p in map_walls:
-               valid = False
-               break
-       if not valid:
-           continue
 
        # Check that no map floor overlaps a room wall
        for rw in room_walls:
-           p = (offset[0] + rw[0], offset[1] + rw[1])
-           if map_cave.cells[p[0]][p[1]] == '.':
+           (x, y) = (offset[0] + rw[0], offset[1] + rw[1])
+           if map_cave.cells[x][y] == '.':
                valid = False
                break
        if not valid:
            continue
 
-       # Check that at least one wall touches
-       touches = False
-       for rw in room_walls:
-           p = (offset[0] + rw[0], offset[1] + rw[1])
-           if p in map_walls:
-               touches = True
+       # Check that no room floor overlaps a map wall
+       for rf in room_floors:
+           (x, y) = (offset[0] + rf[0], offset[1] + rf[1])
+           if map_cave.cells[x][y] == '#':
+               valid = False
                break
-       if not touches:
+       if not valid:
            continue
 
        # Place the cave
