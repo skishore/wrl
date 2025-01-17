@@ -22,8 +22,8 @@ class MapgenConfig:
     # Room placement
     min_room_size: int = 10
     max_room_size: int = 60
-    room_attempts: int = 100000
-    min_coverage: float = 0.80
+    room_attempts: int = 100
+    min_coverage: float = 0.40
     start_with_center: bool = True
 
     # Room interior generation
@@ -74,6 +74,9 @@ class CaveMap:
             last_color = None
             for x in range(self.width):
                 c = self.cells[x][y]
+                if c == ' ':
+                    line.append('  ')
+                    continue
                 color = COLORS.get(c, (255, 255, 255))
                 if color != last_color:
                     (r, g, b) = color
@@ -427,7 +430,152 @@ def generate_cave(config: MapgenConfig, seed: int = None) -> CaveMap:
 
     return cave
 
+def generate_room_cave(width: int, height: int, config: MapgenConfig) -> CaveMap:
+    """Generate a single room's cave, ensuring it has exactly one connected component."""
+    while True:
+        cave = fill_cave(width, height, config)
+        sections = find_cave_sections(cave)
+        if len(sections) == 1:
+            return cave
+
+def convert_to_three_state(cave: CaveMap) -> CaveMap:
+    """Convert a boolean cave (True=wall) to three-state (' ', '#', '.')"""
+    result = CaveMap(cave.width, cave.height)
+    # Start with undecided cells
+    for x in range(cave.width):
+        for y in range(cave.height):
+            result.cells[x][y] = ' '
+
+    # Mark floors and their adjacent walls
+    for x in range(cave.width):
+        for y in range(cave.height):
+            if not cave.cells[x][y]:  # False = floor in input
+                result.cells[x][y] = '.'
+                # Mark adjacent cells as walls
+                for dx in range(-1, 2):
+                    for dy in range(-1, 2):
+                        nx, ny = x + dx, y + dy
+                        if (0 <= nx < cave.width and
+                            0 <= ny < cave.height and
+                            result.cells[nx][ny] == ' '):
+                            result.cells[nx][ny] = '#'
+
+    return result
+
+def create_room_cave(width: int, height: int, config: MapgenConfig) -> CaveMap:
+    """Generate a room cave and convert it to three-state format"""
+    bool_cave = generate_room_cave(width, height, config)
+    return convert_to_three_state(bool_cave)
+
+def try_place_cave(map_cave: CaveMap, room_cave: CaveMap, config: MapgenConfig) -> bool:
+   """Try to place room_cave onto map_cave such that:
+   1. A wall from the new room touches a wall from the map
+   2. No floor from either cave overlaps a wall from the other"""
+
+   # Get walls and floors from both caves
+   map_walls = {Point(x, y) for x in range(map_cave.width)
+                for y in range(map_cave.height) if map_cave.cells[x][y] == '#'}
+   room_walls = {Point(x, y) for x in range(room_cave.width)
+                for y in range(room_cave.height) if room_cave.cells[x][y] == '#'}
+   room_floors = {Point(x, y) for x in range(room_cave.width)
+                 for y in range(room_cave.height) if room_cave.cells[x][y] == '.'}
+
+   # Find all possible offsets where walls could align
+   offsets = set()
+   for mw in map_walls:
+       for rw in room_walls:
+           # Offset that would place room_wall at map_wall
+           offset = Point(mw.x - rw.x, mw.y - rw.y)
+           if (0 <= offset.x < map_cave.width - room_cave.width and
+               0 <= offset.y < map_cave.height - room_cave.height):
+               offsets.add(offset)
+
+   # Try random offsets until we find one that works
+   offsets = list(offsets)
+   random.shuffle(offsets)
+
+   for offset in offsets:
+       # Check that no room floor overlaps a map wall
+       valid = True
+       for rf in room_floors:
+           p = Point(offset.x + rf.x, offset.y + rf.y)
+           if p in map_walls:
+               valid = False
+               break
+       if not valid:
+           continue
+
+       # Check that no map floor overlaps a room wall
+       for rw in room_walls:
+           p = Point(offset.x + rw.x, offset.y + rw.y)
+           if map_cave.cells[p.x][p.y] == '.':
+               valid = False
+               break
+       if not valid:
+           continue
+
+       # Check that at least one wall touches
+       touches = False
+       for rw in room_walls:
+           p = Point(offset.x + rw.x, offset.y + rw.y)
+           if p in map_walls:
+               touches = True
+               break
+       if not touches:
+           continue
+
+       # Place the cave
+       for rx in range(room_cave.width):
+           for ry in range(room_cave.height):
+               if room_cave.cells[rx][ry] != ' ':
+                   map_cave.cells[rx + offset.x][ry + offset.y] = room_cave.cells[rx][ry]
+       return True
+
+   return False
+
+def generate_cave_map(config: MapgenConfig) -> CaveMap:
+   cave = CaveMap(config.width, config.height)
+   # Initialize with undecided cells
+   for x in range(config.width):
+       for y in range(config.height):
+           cave.cells[x][y] = ' '
+
+   # Place first room in center
+   width = random.randint(config.min_room_size, config.max_room_size)
+   height = random.randint(config.min_room_size, config.max_room_size)
+   room = create_room_cave(width, height, config)
+
+   # Center it
+   x = (config.width - width) // 2
+   y = (config.height - height) // 2
+   for rx in range(width):
+       for ry in range(height):
+           if room.cells[rx][ry] != ' ':
+               cave.cells[x + rx][y + ry] = room.cells[rx][ry]
+
+   # Try to place more rooms
+   attempts = config.room_attempts
+   while attempts > 0:
+       width = random.randint(config.min_room_size, config.max_room_size)
+       height = random.randint(config.min_room_size, config.max_room_size)
+       room = create_room_cave(width, height, config)
+
+       if not try_place_cave(cave, room, config):
+           attempts -= 1
+           continue
+
+       attempts = config.room_attempts  # Reset attempts on success
+
+       # Check coverage
+       floor_cells = sum(1 for x in range(config.width)
+                        for y in range(config.height)
+                        if cave.cells[x][y] == '.')
+       if floor_cells / (config.width * config.height) >= config.min_coverage:
+           break
+
+   return cave
+
 if __name__ == "__main__":
     config = MapgenConfig()
-    cave = generate_cave(config)
+    cave = generate_cave_map(config)
     cave.print()
