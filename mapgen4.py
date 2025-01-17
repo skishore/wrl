@@ -473,11 +473,11 @@ def try_place_cave(map_cave: CaveMap, room_cave: CaveMap, config: MapgenConfig) 
    2. No floor from either cave overlaps a wall from the other"""
 
    # Get walls and floors from both caves
-   map_walls = {Point(x, y) for x in range(map_cave.width)
+   map_walls = {(x, y) for x in range(map_cave.width)
                 for y in range(map_cave.height) if map_cave.cells[x][y] == '#'}
-   room_walls = {Point(x, y) for x in range(room_cave.width)
+   room_walls = {(x, y) for x in range(room_cave.width)
                 for y in range(room_cave.height) if room_cave.cells[x][y] == '#'}
-   room_floors = {Point(x, y) for x in range(room_cave.width)
+   room_floors = {(x, y) for x in range(room_cave.width)
                  for y in range(room_cave.height) if room_cave.cells[x][y] == '.'}
 
    # Find all possible offsets where walls could align
@@ -485,9 +485,9 @@ def try_place_cave(map_cave: CaveMap, room_cave: CaveMap, config: MapgenConfig) 
    for mw in map_walls:
        for rw in room_walls:
            # Offset that would place room_wall at map_wall
-           offset = Point(mw.x - rw.x, mw.y - rw.y)
-           if (0 <= offset.x < map_cave.width - room_cave.width and
-               0 <= offset.y < map_cave.height - room_cave.height):
+           offset = (mw[0] - rw[0], mw[1] - rw[1])
+           if (0 <= offset[0] < map_cave.width - room_cave.width and
+               0 <= offset[1] < map_cave.height - room_cave.height):
                offsets.add(offset)
 
    # Try random offsets until we find one that works
@@ -498,7 +498,7 @@ def try_place_cave(map_cave: CaveMap, room_cave: CaveMap, config: MapgenConfig) 
        # Check that no room floor overlaps a map wall
        valid = True
        for rf in room_floors:
-           p = Point(offset.x + rf.x, offset.y + rf.y)
+           p = (offset[0] + rf[0], offset[1] + rf[1])
            if p in map_walls:
                valid = False
                break
@@ -507,8 +507,8 @@ def try_place_cave(map_cave: CaveMap, room_cave: CaveMap, config: MapgenConfig) 
 
        # Check that no map floor overlaps a room wall
        for rw in room_walls:
-           p = Point(offset.x + rw.x, offset.y + rw.y)
-           if map_cave.cells[p.x][p.y] == '.':
+           p = (offset[0] + rw[0], offset[1] + rw[1])
+           if map_cave.cells[p[0]][p[1]] == '.':
                valid = False
                break
        if not valid:
@@ -517,7 +517,7 @@ def try_place_cave(map_cave: CaveMap, room_cave: CaveMap, config: MapgenConfig) 
        # Check that at least one wall touches
        touches = False
        for rw in room_walls:
-           p = Point(offset.x + rw.x, offset.y + rw.y)
+           p = (offset[0] + rw[0], offset[1] + rw[1])
            if p in map_walls:
                touches = True
                break
@@ -528,7 +528,7 @@ def try_place_cave(map_cave: CaveMap, room_cave: CaveMap, config: MapgenConfig) 
        for rx in range(room_cave.width):
            for ry in range(room_cave.height):
                if room_cave.cells[rx][ry] != ' ':
-                   map_cave.cells[rx + offset.x][ry + offset.y] = room_cave.cells[rx][ry]
+                   map_cave.cells[rx + offset[0]][ry + offset[1]] = room_cave.cells[rx][ry]
        return True
 
    return False
