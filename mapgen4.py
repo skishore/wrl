@@ -1,10 +1,14 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+import copy
+import itertools
 import math
 import random
 
 COLORS: dict[str, tuple[int, int, int]] = {
     "#": (0, 84, 0),
     ".": (168, 168, 168),
+    ',': (126, 168, 84),
     '"': (84, 168, 0),
 }
 
@@ -13,6 +17,16 @@ class Point:
     x: int
     y: int
 
+@dataclass(eq=False)
+class CaveRoom:
+    points: set[Point]
+
+@dataclass(frozen=True)
+class RoomStep:
+    min_size: int
+    max_size: int
+    attempts: int
+
 @dataclass
 class MapgenConfig:
     # Overall size
@@ -20,10 +34,13 @@ class MapgenConfig:
     height: int = 100
 
     # Room placement
-    min_room_size: int = 10
-    max_room_size: int = 60
-    room_attempts: int = 100
-    min_coverage: float = 0.40
+    room_series: list[RoomStep] = field(default_factory=lambda: [
+        RoomStep(min_size=30, max_size=60, attempts=10),
+        RoomStep(min_size=25, max_size=50, attempts=15),
+        RoomStep(min_size=20, max_size=40, attempts=20),
+        RoomStep(min_size=15, max_size=30, attempts=25),
+        RoomStep(min_size=10, max_size=20, attempts=30),
+    ])
     start_with_center: bool = True
 
     # Room interior generation
@@ -33,7 +50,8 @@ class MapgenConfig:
     cave_steps: int = 3
 
     # Connections
-    corridor_width: int = 1
+    corridor_width: int = 2
+    corridor_limit: float = 8.0
     max_connection_gap: int = 6
 
 @dataclass
@@ -86,38 +104,6 @@ class CaveMap:
             print(''.join(line))
         print("\x1b[0m")
 
-def place_rooms(width: int, height: int, config: MapgenConfig) -> list[Room]:
-    rooms = []
-    total_area = width * height
-
-    # Place first room roughly in center
-    if config.start_with_center:
-        first_w = random.randint(config.min_room_size, config.max_room_size + 1)
-        first_h = random.randint(config.min_room_size, config.max_room_size + 1)
-        first_x = (width - first_w) // 2
-        first_y = (height - first_h) // 2
-        rooms.append(Room(first_x, first_y, first_w, first_h))
-
-    for _ in range(config.room_attempts):
-        w = random.randint(config.min_room_size, config.max_room_size + 1)
-        h = random.randint(config.min_room_size, config.max_room_size + 1)
-        x = random.randint(0, width - w)
-        y = random.randint(0, height - h)
-        new_room = Room(x, y, w, h)
-
-        # Check if touches any existing room
-        touches_existing = not rooms
-        for room in rooms:
-            if new_room.touches(room):
-                touches_existing = True
-            if new_room.overlaps(room):
-                touches_existing = False
-                break
-
-        if touches_existing:
-            rooms.append(new_room)
-
-    return rooms
 
 def fill_cave(width: int, height: int, config: MapgenConfig) -> CaveMap:
     cave = CaveMap(width, height)
@@ -141,25 +127,15 @@ def fill_cave(width: int, height: int, config: MapgenConfig) -> CaveMap:
 
     return cave
 
-def fill_caves(cave: CaveMap, rooms: list[Room], config: MapgenConfig):
-    for room in rooms:
-        while True:
-            room_cave = fill_cave(room.width, room.height, config)
-            if len(find_cave_sections(room_cave)) == 1:
-                break
-        for x in range(room.width):
-            for y in range(room.height):
-                cave.cells[room.x + x][room.y + y] = room_cave.cells[x][y]
 
-
-def find_cave_sections(cave: CaveMap) -> list[set[Point]]:
+def find_cave_sections(cave: CaveMap, value: str) -> list[set[Point]]:
     """Find connected components of unblocked cells"""
     sections = []
     visited = set()
 
     for x in range(cave.width):
         for y in range(cave.height):
-            if cave.cells[x][y] or Point(x, y) in visited:
+            if cave.cells[x][y] != value or Point(x, y) in visited:
                 continue
 
             # New section - flood fill
@@ -174,30 +150,34 @@ def find_cave_sections(cave: CaveMap) -> list[set[Point]]:
 
                 for dx, dy in [(0,1), (1,0), (0,-1), (-1,0)]:
                     nx, ny = p.x + dx, p.y + dy
-                    if (0 <= nx < cave.width and 0 <= ny < cave.height and
-                        not cave.cells[nx][ny] and Point(nx, ny) not in visited):
-                        queue.append(Point(nx, ny))
+                    if not (0 <= nx < cave.width and 0 <= ny < cave.height):
+                        continue
+                    if cave.cells[nx][ny] != value or Point(nx, ny) in visited:
+                        continue
+                    queue.append(Point(nx, ny))
 
             sections.append(section)
 
     return sections
 
-def find_closest_points(section1: set[Point], section2: set[Point]) -> tuple[Point, Point]:
+
+def find_closest_pairs(section1: set[Point], section2: set[Point]) -> list[tuple[Point, Point]]:
     """Find closest pair of points between two sections"""
-    min_dist = float('inf')
-    best_points = None
+    best_pairs = []
+    best_score = float('inf')
 
     for p1 in section1:
         for p2 in section2:
-            dx = p2.x - p1.x
-            dy = p2.y - p1.y
-            dist = dx*dx + dy*dy
-            if dist < min_dist:
-                min_dist = dist
-                best_points = (p1, p2)
+            score = (p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2
+            if score < best_score:
+                best_pairs.clear()
+                best_score = score
+            if score == best_score:
+                best_pairs.append((p1, p2))
 
-    assert best_points is not None
-    return best_points
+    assert best_pairs
+    return best_pairs
+
 
 def plot_line(start: Point, end: Point) -> list[tuple[int, int]]:
     """Bresenham's line algorithm"""
@@ -230,49 +210,6 @@ def plot_line(start: Point, end: Point) -> list[tuple[int, int]]:
     return points
 
 
-def room_contains_section(room: Room, section: set[Point]) -> bool:
-    return any(Point(x, y) in section
-               for x in range(room.x + 1, room.x + room.width)
-               for y in range(room.y + 1, room.y + room.height))
-
-
-def connect_caves(cave: CaveMap, rooms: list[Room], config: MapgenConfig):
-    # Find all potential connections between nearby rooms
-    connections = []
-    gap = config.max_connection_gap
-    for i, room1 in enumerate(rooms):
-        for room2 in rooms[i+1:]:
-            if room1.touches(room2, gap=config.max_connection_gap):
-                connections.append((room1, room2))
-
-    # For each connection, find the closest points between
-    # their respective cave sections and connect them
-    sections = find_cave_sections(cave)
-    for room1, room2 in connections:
-        # Find which sections these rooms belong to
-        section1 = set()
-        section2 = set()
-        for s in sections:
-            if room_contains_section(room1, s):
-                section1 |= s
-            if room_contains_section(room2, s):
-                section2 |= s
-
-        p1, p2 = find_closest_points(section1, section2)
-        (dx, dy) = (p1.x - p2.x, p1.y - p2.y)
-        if dx * dx + dy * dy > gap * gap:
-            continue
-
-        # Draw corridor
-        for x, y in plot_line(p1, p2):
-            cave.cells[x][y] = False
-            # Make corridor wider
-            for dx in range(-config.corridor_width//2, config.corridor_width//2 + 1):
-                for dy in range(-config.corridor_width//2, config.corridor_width//2 + 1):
-                    nx, ny = x + dx, y + dy
-                    if 0 <= nx < cave.width and 0 <= ny < cave.height:
-                        cave.cells[nx][ny] = False
-
 def generate_perlin_noise(width: int, height: int, scale: float = 10.0, octaves: int = 4, falloff = 0.5) -> list[list[float]]:
     """Generate Perlin noise in range [0,1]"""
 
@@ -280,6 +217,7 @@ def generate_perlin_noise(width: int, height: int, scale: float = 10.0, octaves:
         # Smoothstep interpolation
         return (a1 - a0) * (3.0 - w * 2.0) * w * w + a0
 
+    noises = []
     noise = [[0.0 for _ in range(height)] for _ in range(width)]
 
     for octave in range(octaves):
@@ -314,40 +252,18 @@ def generate_perlin_noise(width: int, height: int, scale: float = 10.0, octaves:
 
                 noise[x][y] += value * falloff ** octave
 
-    # Normalize to [0,1]
-    max_val = max(max(row) for row in noise)
-    min_val = min(min(row) for row in noise)
-    for x in range(width):
-        for y in range(height):
-            noise[x][y] = (noise[x][y] - min_val) / (max_val - min_val)
+        noises.append(copy.deepcopy(noise))
 
-    return noise
+    # Normalize each partial sum to [0,1]
+    for noise in noises:
+        max_val = max(max(row) for row in noise)
+        min_val = min(min(row) for row in noise)
+        for x in range(width):
+            for y in range(height):
+                noise[x][y] = (noise[x][y] - min_val) / (max_val - min_val)
 
-def generate_colored_noise(width: int, height: int) -> list[list[int]]:
-    sines = {}
-    tau = 2 * math.pi
-    #frequencies = list(range(1, 31))
-    frequencies = list(range(1, 50))
-    for f in frequencies:
-        x_phase = random.uniform(0, 1)
-        y_phase = random.uniform(0, 1)
-        sines[f] = [
-            [
-                math.sin(tau * f * (x / width + x_phase)) +
-                math.sin(tau * f * (y / height + y_phase))
-                for y in range(height)
-            ]
-            for x in range(width)
-        ]
+    return noises
 
-    amplitude = lambda f: f ** 1
-    norm = sum(amplitude(f) for f in frequencies)
-    noise = [[0.0 for _ in range(height)] for _ in range(width)]
-    for x in range(width):
-        for y in range(height):
-            noise[x][y] = sum(amplitude(f) * sines[f][x][y] for f in frequencies) / norm
-
-    return noise
 
 def generate_blue_noise(width: int, height: int) -> list[list[int]]:
     noise = [[0.0 for _ in range(height)] for _ in range(width)]
@@ -371,6 +287,7 @@ def generate_blue_noise(width: int, height: int) -> list[list[int]]:
             selected.add(point)
 
     return noise
+
 
 def generate_bluish_noise(width: int, height: int, base: list[list[int]]) -> list[list[int]]:
     noise = [[0.0 for _ in range(height)] for _ in range(width)]
@@ -396,47 +313,6 @@ def generate_bluish_noise(width: int, height: int, base: list[list[int]]) -> lis
 
     return noise
 
-def generate_cave(config: MapgenConfig, seed: int = None) -> CaveMap:
-    (width, height) = (config.width, config.height)
-
-    if seed is not None:
-        random.seed(seed)
-
-    cave = CaveMap(width, height)
-
-    # Try to place rooms until we get good coverage
-    while True:
-        rooms = place_rooms(width, height, config)
-        area = sum(room.width * room.height for room in rooms)
-        if area / (width * height) >= config.min_coverage:
-            break
-
-    # Fill rooms with cave generation
-    fill_caves(cave, rooms, config)
-
-    # Detect each cave connected-component
-    sections = find_cave_sections(cave)
-
-    # Connect nearby rooms
-    connect_caves(cave, rooms, config)
-
-    noise = generate_perlin_noise(width, height, scale=4.0, octaves=2, falloff=0.65)
-    #noise = generate_bluish_noise(width, height, noise)
-
-    for x in range(width):
-        for y in range(height):
-            base = cave.cells[x][y]
-            cave.cells[x][y] = '#' if base else '"' if noise[x][y] > 0.45 + 0.3 * random.random() else '.'
-
-    return cave
-
-def generate_room_cave(width: int, height: int, config: MapgenConfig) -> CaveMap:
-    """Generate a single room's cave, ensuring it has exactly one connected component."""
-    while True:
-        cave = fill_cave(width, height, config)
-        sections = find_cave_sections(cave)
-        if len(sections) == 1:
-            return cave
 
 def convert_to_three_state(cave: CaveMap) -> CaveMap:
     """Convert a boolean cave (True=wall) to three-state (' ', '#', '.')"""
@@ -462,10 +338,15 @@ def convert_to_three_state(cave: CaveMap) -> CaveMap:
 
     return result
 
+
 def create_room_cave(width: int, height: int, config: MapgenConfig) -> CaveMap:
     """Generate a room cave and convert it to three-state format"""
-    bool_cave = generate_room_cave(width, height, config)
+    sections = []
+    while len(sections) != 1:
+        bool_cave = fill_cave(width, height, config)
+        sections = find_cave_sections(bool_cave, False)
     return convert_to_three_state(bool_cave)
+
 
 def try_place_cave(map_cave: CaveMap, room_cave: CaveMap, config: MapgenConfig) -> bool:
    """Try to place room_cave onto map_cave such that:
@@ -524,47 +405,164 @@ def try_place_cave(map_cave: CaveMap, room_cave: CaveMap, config: MapgenConfig) 
 
    return False
 
+def build_lake(cave: CaveMap) -> None:
+    #noise = noises[-1]
+    #values = sorted([x for xs in noise for x in xs])
+    #mid = values[int(0.5 * len(values))]
+
+    #for x in range(width):
+    #    for y in range(height):
+    #        if noise[x][y] > mid + 0.0 * random.random():
+    #            cave.cells[x][y] = '#'
+    #        else:
+    #            cave.cells[x][y] = '.'
+
+    #noise = noises[0]
+    #xs = list(range(int(0.25 * width), int(0.75 * width)))
+    #ys = list(range(int(0.65 * height), int(0.85 * height)))
+    #ps = [(x, y) for x in xs for y in ys]
+    #root = min(ps, key=lambda p: noise[p[0]][p[1]])
+
+    #visited = set()
+    #frontier = [root]
+    #dirs = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+    #bias = lambda p: math.exp(-(((p[0] - root[0]) / 64.0) ** 2 + ((p[1] - root[1]) / 16.0) ** 2))
+    #while frontier and len(visited) < 100:
+    #    c = 0.5 * len(visited) / 100
+    #    p = min(frontier, key=lambda p: c * noise[p[0]][p[1]] - bias(p))
+    #    frontier = [x for x in frontier if x != p]
+    #    if p not in visited:
+    #        cave.cells[p[0]][p[1]] = '~'
+    #        visited.add(p)
+    #        for d in dirs:
+    #            (x, y) = (p[0] + d[0], p[1] + d[1])
+    #            if 0 <= x < width and 0 <= y < height:
+    #                frontier.append((x, y))
+
+    #return cave
+    pass
+
+def find_tree_edges(vertices: list[any], edges: dict[tuple[any, any], float]) -> list[tuple[any, any]]:
+    result = []
+    groups = [[x] for x in vertices]
+
+    while len(groups) > 1:
+        best_edges = []
+        best_score = float("inf")
+
+        for i, g1 in enumerate(groups):
+            for g2 in groups[i + 1:]:
+                for edge in itertools.product(g1, g2):
+                    score = edges[edge]
+                    if score < best_score:
+                        best_edges.clear()
+                        best_score = score
+                    if score == best_score:
+                        best_edges.append(((g1, g2), edge))
+
+        assert best_edges
+        print(f"Selected edge of weight: {best_score}")
+        (g1, g2), edge = random.choice(best_edges)
+        groups = [x for x in groups if not (x is g1 or x is g2)] + [g1 + g2]
+        result.append(edge)
+
+    return result
+
+
 def generate_cave_map(config: MapgenConfig) -> CaveMap:
-   cave = CaveMap(config.width, config.height)
-   # Initialize with undecided cells
-   for x in range(config.width):
-       for y in range(config.height):
-           cave.cells[x][y] = ' '
+    (width, height) = (config.width, config.height)
+    cave = CaveMap(width, height)
 
-   # Place first room in center
-   width = random.randint(config.min_room_size, config.max_room_size)
-   height = random.randint(config.min_room_size, config.max_room_size)
-   room = create_room_cave(width, height, config)
+    # Initialize with undecided cells
+    for x in range(width):
+        for y in range(height):
+            cave.cells[x][y] = ' '
 
-   # Center it
-   x = (config.width - width) // 2
-   y = (config.height - height) // 2
-   for rx in range(width):
-       for ry in range(height):
-           if room.cells[rx][ry] != ' ':
-               cave.cells[x + rx][y + ry] = room.cells[rx][ry]
+    # Place first room in center
+    room_config = config.room_series[0]
+    rw = random.randint(room_config.min_size, room_config.max_size)
+    rh = random.randint(room_config.min_size, room_config.max_size)
+    room = create_room_cave(rw, rh, config)
 
-   # Try to place more rooms
-   attempts = config.room_attempts
-   while attempts > 0:
-       width = random.randint(config.min_room_size, config.max_room_size)
-       height = random.randint(config.min_room_size, config.max_room_size)
-       room = create_room_cave(width, height, config)
+    # Center it
+    x = (width - rw) // 2
+    y = (height - rh) // 2
+    for rx in range(rw):
+        for ry in range(rh):
+            if room.cells[rx][ry] != ' ':
+                cave.cells[x + rx][y + ry] = room.cells[rx][ry]
 
-       if not try_place_cave(cave, room, config):
-           attempts -= 1
-           continue
+    # Try to place more rooms
+    for room_config in config.room_series:
+        for _ in range(room_config.attempts):
+            rw = random.randint(room_config.min_size, room_config.max_size)
+            rh = random.randint(room_config.min_size, room_config.max_size)
+            room = create_room_cave(rw, rh, config)
+            try_place_cave(cave, room, config)
 
-       attempts = config.room_attempts  # Reset attempts on success
+    # Connect up the rooms, with some cycles
+    rooms = find_cave_sections(cave, '.')
+    rooms = [CaveRoom(points=x) for x in rooms]
+    edges: dict[tuple[CaveRoom, CaveRoom], float] = {}
+    for i, r1 in enumerate(rooms):
+        for r2 in rooms[i + 1:]:
+            (pa, pb) = find_closest_pairs(r1.points, r2.points)[0]
+            distance = math.sqrt((pa.x - pb.x) ** 2 + (pa.y - pb.y) ** 2)
+            edges[(r1, r2)] = distance
+            edges[(r2, r1)] = distance
 
-       # Check coverage
-       floor_cells = sum(1 for x in range(config.width)
-                        for y in range(config.height)
-                        if cave.cells[x][y] == '.')
-       if floor_cells / (config.width * config.height) >= config.min_coverage:
-           break
+    tree = find_tree_edges(rooms, edges)
 
-   return cave
+    loops = []
+    for i, r1 in enumerate(rooms):
+        for r2 in rooms[i + 1:]:
+            e1, e2 = (r1, r2), (r2, r1)
+            if e1 not in tree and e2 not in tree and edges[e1] < config.corridor_limit:
+                loops.append(e1)
+
+    for r1, r2 in tree + loops:
+        corridor = config.corridor_width
+        (l, r) = (-corridor // 2, -corridor // 2 + corridor)
+        p1, p2 = random.choice(find_closest_pairs(r1.points, r2.points))
+        for x, y in plot_line(p1, p2):
+            cave.cells[x][y] = '.'
+            for dx in range(l, r):
+                for dy in range(l, r):
+                    nx, ny = x + dx, y + dy
+                    if 0 <= nx < cave.width and 0 <= ny < cave.height:
+                        cave.cells[nx][ny] = '.'
+
+    noises = generate_perlin_noise(width, height, scale=4.0, octaves=2, falloff=0.65)
+    noise = noises[-1]
+    #noise = generate_bluish_noise(width, height, noise)
+
+    for room in rooms:
+        grassiness = 0.0 + 0.5 * random.random()
+
+        values = {}
+        for p in room.points:
+            (x, y) = (p.x, p.y)
+            values[p] = noise[x][y] + 0.3 * random.random()
+
+        grass_count = max(0, min(int(grassiness * len(values)), len(values) - 1))
+        tall_grass_count = max(0, min(int((grassiness - 0.15) * len(values)), len(values) - 1))
+
+        ordered = sorted(values.values())
+        grass_threshold = ordered[grass_count]
+        tall_grass_threshold = ordered[tall_grass_count]
+
+        for p in room.points:
+            if values[p] < tall_grass_threshold:
+                cave.cells[p.x][p.y] = '"'
+            elif values[p] < grass_threshold:
+                cave.cells[p.x][p.y] = ','
+
+    for x in range(width):
+        for y in range(height):
+            if cave.cells[x][y] == ' ':
+                cave.cells[x][y] = '#'
+
+    return cave
 
 if __name__ == "__main__":
     config = MapgenConfig()
