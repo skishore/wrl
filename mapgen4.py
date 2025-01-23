@@ -5,11 +5,15 @@ import itertools
 import math
 import random
 
-COLORS: dict[str, tuple[int, int, int]] = {
-    "#": (0, 84, 0),
-    ".": (168, 168, 168),
-    ',': (126, 168, 84),
-    '"': (84, 168, 0),
+GLYPHS: dict[str, tuple[str, tuple[int, int, int]]] = {
+    "#": ('#', (32, 96, 0)),
+    ".": ('.', (255, 255, 255)),
+    ',': (',', (128, 192, 64)),
+    '"': ('"', (64, 192, 0)),
+    '~': ('~', (0, 128, 255)),
+    'R': ('.', (255, 128, 0)),
+    'S': ('.', (255, 255, 255)),
+    'W': ('~', (0, 128, 255)),
 }
 
 @dataclass(frozen=True)
@@ -35,9 +39,9 @@ class MapgenConfig:
 
     # Room placement
     room_series: list[RoomStep] = field(default_factory=lambda: [
-        RoomStep(min_size=30, max_size=60, attempts=10),
-        RoomStep(min_size=25, max_size=50, attempts=15),
-        RoomStep(min_size=20, max_size=40, attempts=20),
+        #RoomStep(min_size=30, max_size=60, attempts=10),
+        #RoomStep(min_size=25, max_size=50, attempts=15),
+        #RoomStep(min_size=20, max_size=40, attempts=20),
         RoomStep(min_size=15, max_size=30, attempts=25),
         RoomStep(min_size=10, max_size=20, attempts=30),
     ])
@@ -51,7 +55,7 @@ class MapgenConfig:
 
     # Connections
     corridor_width: int = 2
-    corridor_limit: float = 8.0
+    corridor_limit: float = 4.0
     max_connection_gap: int = 6
 
 @dataclass
@@ -95,12 +99,12 @@ class CaveMap:
                 if c == ' ':
                     line.append('  ')
                     continue
-                color = COLORS.get(c, (255, 255, 255))
+                (glyph, color) = GLYPHS.get(c, (c, (255, 255, 255)))
                 if color != last_color:
                     (r, g, b) = color
                     line.append(f"\x1b[38;2;{r};{g};{b}m")
                     last_color = color
-                line.append(chr(ord(c) - 0x20 + 0xFF00))
+                line.append(chr(ord(glyph) - 0x20 + 0xFF00))
             print(''.join(line))
         print("\x1b[0m")
 
@@ -532,9 +536,75 @@ def generate_cave_map(config: MapgenConfig) -> CaveMap:
                     if 0 <= nx < cave.width and 0 <= ny < cave.height:
                         cave.cells[nx][ny] = '.'
 
+    (lw, lh) = (24, 12)
+    (ls, lt) = (config.width - lw, config.height - lh)
+    lx = int((0.50 + 0.25 * random.random()) * ls)
+    ly = int((0.75 + 0.25 * random.random()) * lt)
+    while True:
+        lake = create_room_cave(lw, lh, config)
+        if len(find_cave_sections(lake, '#')) == 1:
+            break
+    mapping = {'#': 'S', '.': '~'}
+    for x in range(lw):
+        for y in range(lh):
+            tile = mapping.get(lake.cells[x][y])
+            if tile is not None:
+                cave.cells[x + lx][y + ly] = tile
+
+    inf = float('inf')
     noises = generate_perlin_noise(width, height, scale=4.0, octaves=2, falloff=0.65)
     noise = noises[-1]
-    #noise = generate_bluish_noise(width, height, noise)
+
+    # Noise function used to build a river
+    def river_score_one(p: tuple[int, int]) -> float:
+        (x, y) = p
+        if not (0 <= x < width and 0 <= y < height):
+            return inf
+
+        tile = cave.cells[x][y]
+        noise_score = 8.0 * (1.0 - noise[x][y])
+        tiles_score = 64.0 if tile == '#' else 0.0
+        return noise_score + tiles_score
+
+    def river_score(p: tuple[int, int]) -> float:
+        return river_score_one(p) + river_score_one((p[0] + 1, p[1]))
+
+    # Dijkstra to build a river...
+    complete = {}
+    frontier = {}
+    for x in range(int(0.25 * width), int(0.75 * width)):
+        frontier[(x, 0)] = (river_score((x, 0)), None)
+    while frontier:
+        (prev, result) = min(frontier.items(), key=lambda x: x[1][0])
+        assert result[0] != inf
+        assert prev not in complete
+        complete[prev] = result
+        del frontier[prev]
+
+        if cave.cells[prev[0]][prev[1]] == '~':
+            current = prev
+            while current is not None:
+                cave.cells[current[0]][current[1]] = 'W'
+                cave.cells[current[0] + 1][current[1]] = 'W'
+                current = complete[current][1]
+            break
+
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                if dx == 0 and dy == 0:
+                    continue
+                (x, y) = (prev[0] + dx, prev[1] + dy)
+                if (x, y) in complete:
+                    continue
+
+                point = (x, y)
+                score = result[0] + math.sqrt(dx ** 2 + dy ** 2) + river_score(point)
+                if score == inf:
+                    continue
+
+                current = frontier.get(point)
+                if current is None or current[0] > score:
+                    frontier[point] = (score, prev)
 
     for room in rooms:
         grassiness = 0.0 + 0.5 * random.random()
@@ -542,7 +612,11 @@ def generate_cave_map(config: MapgenConfig) -> CaveMap:
         values = {}
         for p in room.points:
             (x, y) = (p.x, p.y)
-            values[p] = noise[x][y] + 0.3 * random.random()
+            if cave.cells[x][y] == '.':
+                values[p] = noise[x][y] + 0.3 * random.random()
+
+        if not values:
+            continue
 
         grass_count = max(0, min(int(grassiness * len(values)), len(values) - 1))
         tall_grass_count = max(0, min(int((grassiness - 0.15) * len(values)), len(values) - 1))
@@ -551,11 +625,76 @@ def generate_cave_map(config: MapgenConfig) -> CaveMap:
         grass_threshold = ordered[grass_count]
         tall_grass_threshold = ordered[tall_grass_count]
 
-        for p in room.points:
+        for p in values:
             if values[p] < tall_grass_threshold:
                 cave.cells[p.x][p.y] = '"'
             elif values[p] < grass_threshold:
                 cave.cells[p.x][p.y] = ','
+
+    # Noise function used to build a route
+    route_costs = {
+        '#': 256,
+        ' ': 256,
+        '~': 64,
+        '"': 16,
+        'W': 16,
+        ',': 4,
+        'S': 4,
+    }
+
+    def route_score_one(p: tuple[int, int], center=False) -> float:
+        (x, y) = p
+        if not (0 <= x < width and 0 <= y < height):
+            return inf if center else 0
+
+        noise_score = 0.0 * (1.0 - noise[x][y])
+        tiles_score = route_costs.get(cave.cells[x][y], 0)
+        return noise_score + tiles_score
+
+    def route_score(p: tuple[int, int]) -> float:
+        (x, y) = p
+        result = 0
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                center = dx == 0 and dy == 0
+                result += route_score_one((x + dx, y + dy), center=center)
+        return result
+
+    # Dijkstra to build a route...
+    complete = {}
+    frontier = {}
+    for y in range(int(0.25 * width), int(0.75 * width)):
+        frontier[(0, y)] = (noise[0][y], None)
+    while frontier:
+        (prev, result) = min(frontier.items(), key=lambda x: x[1][0])
+        assert result[0] != inf
+        assert prev not in complete
+        complete[prev] = result
+        del frontier[prev]
+
+        if prev[0] == width - 1:
+            current = prev
+            while current is not None:
+                cave.cells[current[0]][current[1]] = 'R'
+                current = complete[current][1]
+            break
+
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                if dx == 0 and dy == 0:
+                    continue
+                (x, y) = (prev[0] + dx, prev[1] + dy)
+                if (x, y) in complete:
+                    continue
+
+                point = (x, y)
+                score = result[0] + math.sqrt(dx ** 2 + dy ** 2) + route_score(point)
+                if score == inf:
+                    continue
+
+                current = frontier.get(point)
+                if current is None or current[0] > score:
+                    frontier[point] = (score, prev)
 
     for x in range(width):
         for y in range(height):
