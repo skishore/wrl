@@ -10,3 +10,7 @@ lazy_static = "1.4.0"
 rand = "0.8.5"
 rand_distr = "0.4.3"
 slotmap = "1.0.7"
+
+[[bin]]
+name = "mapgen-test"
+path = "src/bin/mapgen-test.rs"
