@@ -1,5 +1,5 @@
 use wrl_base::base::{HashMap, Point, RNG};
-use wrl_base::mapgen::{MapgenConfig, mapgen};
+use wrl_base::mapgen::mapgen;
 
 use lazy_static::lazy_static;
 use rand::SeedableRng;
@@ -17,9 +17,8 @@ lazy_static! {
 }
 
 fn main() {
-    let config = MapgenConfig::default();
     let mut rng = RNG::from_entropy();
-    let map = mapgen(&config, &mut rng);
+    let map = mapgen(&mut rng);
 
     for y in 0..map.size.1 {
         let mut line = String::default();

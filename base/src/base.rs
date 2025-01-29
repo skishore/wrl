@@ -67,6 +67,12 @@ impl From<i32> for Color {
     }
 }
 
+impl From<(u8, u8, u8)> for Color {
+    fn from((r, g, b): (u8, u8, u8)) -> Self {
+        Color(((r as u32) << 16) | ((g as u32) << 8) | b as u32)
+    }
+}
+
 impl Color {
     pub fn black() -> Self { Self(0) }
     pub fn gray() -> Self { Self::dark(0x44) }

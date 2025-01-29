@@ -6,26 +6,26 @@ use rand::seq::SliceRandom;
 
 //////////////////////////////////////////////////////////////////////////////
 
-pub struct RoomStep {
-    pub min_size: i32,
-    pub max_size: i32,
-    pub attempts: i32,
+struct RoomStep {
+    min_size: i32,
+    max_size: i32,
+    attempts: i32,
 }
 
-pub struct MapgenConfig {
+struct MapgenConfig {
     // Overall structure of the map.
-    pub size: Point,
-    pub room_series: Vec<RoomStep>,
+    size: Point,
+    room_series: Vec<RoomStep>,
 
     // Cellular automaton params. Move to RoomStep?
-    pub wall_chance: f64,
-    pub birth_limit: i32,
-    pub death_limit: i32,
-    pub cave_steps: i32,
+    wall_chance: f64,
+    birth_limit: i32,
+    death_limit: i32,
+    cave_steps: i32,
 
     // Connections between each room.
-    pub corridor_width: i32,
-    pub corridor_limit: f64,
+    corridor_width: i32,
+    corridor_limit: f64,
 }
 
 impl Default for MapgenConfig {
@@ -51,6 +51,16 @@ impl Default for MapgenConfig {
         }
     }
 }
+
+impl MapgenConfig {
+    fn with_size(size: Point) -> Self {
+        let mut result = Self::default();
+        result.size = size;
+        result
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
 
 fn count_neighbors(cave: &Matrix<char>, p: Point, v: char) -> i32 {
     let mut count = 0;
@@ -367,7 +377,7 @@ fn dijkstra<F: Fn(Point) -> Vec<Point>, G: Fn(Point) -> f64, H: Fn(Point) -> boo
 
 //////////////////////////////////////////////////////////////////////////////
 
-pub fn mapgen(config: &MapgenConfig, rng: &mut RNG) -> Matrix<char> {
+fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> {
     let size = config.size;
     let mut map = Matrix::new(size, ' ');
 
@@ -473,7 +483,7 @@ pub fn mapgen(config: &MapgenConfig, rng: &mut RNG) -> Matrix<char> {
     let sources: Vec<_> = (0..size.0).map(|x| Point(x, 0)).collect();
 
     // Then, build the river.
-    let path = dijkstra(&sources, edges, score, target).unwrap();
+    let path = dijkstra(&sources, edges, score, target)?;
     for &p in path.iter().take(path.len() - 1) {
         for x in 0..width {
             for y in 0..width {
@@ -571,7 +581,7 @@ pub fn mapgen(config: &MapgenConfig, rng: &mut RNG) -> Matrix<char> {
     let sources: Vec<_> = (0..size.1).map(|y| Point(0, y)).collect();
 
     // Then, build the route.
-    let path = dijkstra(&sources, edges, score, target).unwrap();
+    let path = dijkstra(&sources, edges, score, target)?;
     let mut prev: Option<Point> = None;
     for &p in &path {
         if let Some(q) = prev && p.0 - q.0 > 1 {
@@ -590,7 +600,17 @@ pub fn mapgen(config: &MapgenConfig, rng: &mut RNG) -> Matrix<char> {
             if let Some(&c) = mapping.get(&map.get(p)) { map.set(p, c); }
         }
     }
-    map
+    Some(map)
+}
+
+pub fn mapgen(rng: &mut RNG) -> Matrix<char> {
+    let config = MapgenConfig::default();
+    loop { if let Some(x) = mapgen_attempt(&config, rng) { return x; } }
+}
+
+pub fn mapgen_with_size(size: Point, rng: &mut RNG) -> Matrix<char> {
+    let config = MapgenConfig::with_size(size);
+    loop { if let Some(x) = mapgen_attempt(&config, rng) { return x; } }
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -618,9 +638,8 @@ mod tests {
         for i in 0..iterations {
             black_box({
                 let seed = (i % NUM_SEEDS) + BASE_SEED;
-                let config = MapgenConfig::default();
                 let mut rng = RNG::seed_from_u64(seed);
-                mapgen(&config, &mut rng);
+                mapgen(&mut rng);
             });
         }
 

@@ -13,6 +13,7 @@ use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs};
 use crate::effect::{Effect, Event, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
 use crate::knowledge::{Knowledge, Vision, VisionArgs};
+use crate::mapgen::mapgen_with_size;
 use crate::pathing::Status;
 
 //////////////////////////////////////////////////////////////////////////////
@@ -28,7 +29,7 @@ const FOV_RADIUS_PC_: i32 = 21;
 const SPEED_PC_: f64 = 0.1;
 const SPEED_NPC: f64 = 0.1;
 
-const LIGHT: Light = Light::Sun(Point(4, 1));
+const LIGHT: Light = Light::Sun(Point(0, 0));
 const WEATHER: Weather = Weather::None;
 const WORLD_SIZE: i32 = 100;
 const NUM_PREDATORS: i32 = 2;
@@ -38,8 +39,9 @@ const UI_DAMAGE_FLASH: i32 = 6;
 const UI_DAMAGE_TICKS: i32 = 6;
 
 const UI_COLOR: i32 = 0x430;
-const UI_MAP_SIZE_X: i32 = WORLD_SIZE;
-const UI_MAP_SIZE_Y: i32 = WORLD_SIZE;
+const UI_MAP_SIZE: i32 = 2 * FOV_RADIUS_PC_ + 1;
+const UI_MAP_SIZE_X: i32 = UI_MAP_SIZE;
+const UI_MAP_SIZE_Y: i32 = UI_MAP_SIZE;
 
 const UI_MOVE_ALPHA: f64 = 0.75;
 const UI_MOVE_FRAMES: i32 = 12;
@@ -95,11 +97,13 @@ impl PartialEq for &'static Tile {
 lazy_static! {
     static ref TILES: HashMap<char, Tile> = {
         let items = [
-            ('.', (FLAGS_NONE,           Glyph::wdfg('.', 0x222), "grass")),
-            ('"', (FLAG_LIMITS_VISION,   Glyph::wdfg('"', 0x120), "tall grass")),
-            ('#', (FLAGS_BLOCKED,        Glyph::wdfg('#', 0x010), "a tree")),
-            ('%', (FLAGS_NONE,           Glyph::wdfg('%', 0x200), "flowers")),
-            ('~', (FLAGS_NONE,           Glyph::wdfg('~', 0x013), "water")),
+            ('#', (FLAGS_BLOCKED,      Glyph::wdfg('#', (32, 96, 0)),     "a tree")),
+            ('.', (FLAGS_NONE,         Glyph::wdfg('.', (255, 255, 255)), "grass")),
+            ('"', (FLAG_LIMITS_VISION, Glyph::wdfg('"', (64, 192, 0)),    "tall grass")),
+            ('~', (FLAGS_NONE,         Glyph::wdfg('~', (0, 128, 255)),   "water")),
+            ('*', (FLAGS_NONE,         Glyph::wdfg('*', (192, 128, 0)),   "a berry tree")),
+            ('=', (FLAGS_NONE,         Glyph::wdfg('=', (255, 128, 0)),   "a bridge")),
+            ('R', (FLAGS_NONE,         Glyph::wdfg('.', (255, 128, 0)),   "a path")),
         ];
         let mut result = HashMap::default();
         for (ch, (flags, glyph, description)) in items {
@@ -194,7 +198,7 @@ impl Board {
             rain,
             shadow,
         };
-        result.update_edge_shadows();
+        result.reset(Tile::get('.'));
         result
     }
 
@@ -414,99 +418,6 @@ impl Board {
             self.update_shadow(Point(-1, y), delta);
             self.update_shadow(Point(self.map.size.0, y), delta);
         }
-    }
-}
-
-//////////////////////////////////////////////////////////////////////////////
-
-// Map generation
-
-fn mapgen(board: &mut Board, rng: &mut RNG) {
-    let ft = Tile::get('.');
-    let wt = Tile::get('#');
-    let gt = Tile::get('"');
-    let fl = Tile::get('%');
-    let wa = Tile::get('~');
-
-    board.reset(ft);
-    let size = board.get_size();
-
-    let automata = |rng: &mut RNG, init: u32| -> Matrix<bool> {
-        let mut result = Matrix::new(size, false);
-        for x in 0..size.0 {
-            result.set(Point(x, 0), true);
-            result.set(Point(x, size.1 - 1), true);
-        }
-        for y in 0..size.1 {
-            result.set(Point(0, y), true);
-            result.set(Point(size.0 - 1, y), true);
-        }
-
-        for y in 0..size.1 {
-            for x in 0..size.0 {
-                let block = rng.gen_range(0..100) < init;
-                if block { result.set(Point(x, y),  true); }
-            }
-        }
-
-        for i in 0..3 {
-            let mut next = result.clone();
-            for y in 1..size.1 - 1 {
-                for x in 1..size.0 - 1 {
-                    let point = Point(x, y);
-                    let (mut adj1, mut adj2) = (0, 0);
-                    for dy in -2_i32..=2 {
-                        for dx in -2_i32..=2 {
-                            if dx == 0 && dy == 0 { continue; }
-                            if min(dx.abs(), dy.abs()) == 2 { continue; }
-                            let next = point + Point(dx, dy);
-                            if !result.get(next) { continue; }
-                            let distance = max(dx.abs(), dy.abs());
-                            if distance <= 1 { adj1 += 1; }
-                            if distance <= 2 { adj2 += 1; }
-                        }
-                    }
-                    let blocked = adj1 >= 5 || (i < 2 && adj2 <= 1);
-                    next.set(point, blocked);
-                }
-            }
-            std::mem::swap(&mut result, &mut next);
-        }
-        result
-    };
-
-    let walls = automata(rng, 45);
-    let grass = automata(rng, 45);
-    for y in 0..size.1 {
-        for x in 0..size.0 {
-            let point = Point(x, y);
-            if walls.get(point) {
-                board.set_tile(point, wt);
-            } else if grass.get(point) {
-                board.set_tile(point, gt);
-            }
-        }
-    }
-
-    let mut river = vec![Point::default()];
-    for i in 1..size.1 {
-        let last = river.last().unwrap().0;
-        let next = last + rng.gen_range(-1..=1);
-        river.push(Point(next, i));
-    }
-    let target = river[0] + *river.last().unwrap();
-    let offset = Point((size - target).0 / 2, 0);
-    for &x in &river { board.set_tile(x + offset, wa); }
-
-    let pos = |board: &Board, rng: &mut RNG| {
-        for _ in 0..100 {
-            let p = Point(rng.gen_range(0..size.0), rng.gen_range(0..size.1));
-            if let Status::Free = board.get_status(p) { return Some(p); }
-        }
-        None
-    };
-    for _ in 0..5 {
-        if let Some(p) = pos(board, rng) { board.set_tile(p, fl); }
     }
 }
 
@@ -883,9 +794,16 @@ impl State {
         let mut board = Board::new(size, LIGHT, WEATHER);
 
         loop {
-            mapgen(&mut board, &mut rng);
+            let map = mapgen_with_size(size, &mut rng);
+            for x in 0..size.0 {
+                for y in 0..size.1 {
+                    let p = Point(x, y);
+                    board.set_tile(p, Tile::get(map.get(p)));
+                }
+            }
             if !board.get_tile(pos).blocks_movement() { break; }
         }
+
         let input = Action::WaitForInput;
         let glyph = Glyph::wdfg('@', 0x222);
         let (player, speed) = (true, SPEED_PC_);
@@ -934,8 +852,8 @@ impl State {
 
         let entity = self.pov.and_then(
             |x| self.board.get_entity(x)).unwrap_or(self.get_player());
-        let _offset = entity.pos - Point(UI_MAP_SIZE_X / 2, UI_MAP_SIZE_Y / 2);
-        let offset = Point::default();
+        let offset = entity.pos - Point(UI_MAP_SIZE_X / 2, UI_MAP_SIZE_Y / 2);
+        //let offset = Point::default();
 
         let size = Point(2 * UI_MAP_SIZE_X, UI_MAP_SIZE_Y);
         let bound = Rect { root: Point(0, size.1 + 2), size: Point(size.0, 1) };

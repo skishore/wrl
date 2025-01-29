@@ -253,7 +253,7 @@ struct BasicNeedsStrategy {
 impl BasicNeedsStrategy {
     fn new(need: BasicNeed) -> Self {
         let tile = match need {
-            BasicNeed::Eat => Tile::get('%'),
+            BasicNeed::Eat => Tile::get('*'),
             BasicNeed::Drink => Tile::get('~'),
         };
         Self { last: None, need, path: Default::default(), tile }
