@@ -316,6 +316,57 @@ fn generate_perlin_noise(
 
 //////////////////////////////////////////////////////////////////////////////
 
+fn f64_to_monotonic_u64(x: f64) -> u64 {
+    let bits = x.to_bits();
+    let sign = 1u64 << 63;
+    if bits & sign == 0 { bits | sign } else { !bits }
+}
+
+fn dijkstra<F: Fn(Point) -> Vec<Point>, G: Fn(Point) -> f64, H: Fn(Point) -> bool>
+        (sources: &[Point], edges: F, score: G, target: H) -> Option<Vec<Point>> {
+
+    let mut complete = HashMap::default();
+    let mut frontier = HashMap::default();
+
+    for &source in sources {
+        let distance = score(source);
+        if distance != f64::INFINITY { frontier.insert(source, (distance, None)); }
+    }
+
+    while !frontier.is_empty() {
+        let (&prev, &value) = frontier.iter().min_by_key(
+            |&x| f64_to_monotonic_u64(x.1.0)).unwrap();
+        assert!(value.0 != f64::INFINITY);
+        let existing = complete.insert(prev, value);
+        assert!(existing.is_none());
+        frontier.remove(&prev);
+
+        if target(prev) {
+            let mut result = vec![];
+            let mut current = Some(prev);
+            while let Some(x) = current {
+                result.push(x);
+                current = complete.get(&x).unwrap().1;
+            }
+            result.reverse();
+            return Some(result);
+        }
+
+        for next in edges(prev) {
+            if complete.contains_key(&next) { continue; }
+
+            let distance = value.0 + score(next) + (next - prev).len_l2();
+            if distance == f64::INFINITY { continue; }
+
+            let v = (distance, Some(prev));
+            frontier.entry(next).and_modify(|x| { if distance < x.0 { *x = v; } }).or_insert(v);
+        }
+    }
+    None
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 pub fn mapgen(config: &MapgenConfig, rng: &mut RNG) -> Matrix<char> {
     let size = config.size;
     let mut map = Matrix::new(size, ' ');
@@ -348,14 +399,6 @@ pub fn mapgen(config: &MapgenConfig, rng: &mut RNG) -> Matrix<char> {
     let mut rooms = find_connected_components(&map, '.');
     rooms.shuffle(rng);
 
-    // Convert the remaining undefined cells to walls.
-    for x in 0..size.0 {
-        for y in 0..size.1 {
-            let p = Point(x, y);
-            if map.get(p) == ' ' { map.set(p, '#'); }
-        }
-    }
-
     // Connect up the rooms. We could build a spanning tree here, but instead
     // we just connect all rooms that are sufficiently close. Doing so forms a
     // connected graph since try_place_room puts new rooms near existing ones.
@@ -378,10 +421,66 @@ pub fn mapgen(config: &MapgenConfig, rng: &mut RNG) -> Matrix<char> {
         }
     }
 
-
+    // Noises used to guide feature placement.
     let noise = generate_perlin_noise(size, 4.0, 2, 0.65, rng);
     let berry_blue_noise = generate_blue_noise(size, 10, rng);
     let trees_blue_noise = generate_blue_noise(size, 5, rng);
+
+    // Build the lake...
+    let ls = Point(rng.gen_range(18..=36), rng.gen_range(12..=24));
+    let lz = config.size - ls;
+    let lx = ((0.50 + 0.25 * rng.gen::<f64>()) * lz.0 as f64).round() as i32;
+    let ly = ((0.75 + 0.25 * rng.gen::<f64>()) * lz.1 as f64).round() as i32;
+    let lake = (|| loop {
+        let result = build_room_cave(ls, config, rng);
+        if find_connected_components(&result, '#').len() == 1 { return result; }
+    })();
+
+    // Then, place the lake.
+    let mapping: HashMap<_, _> = [('#', 'S'), ('.', '~')].into_iter().collect();
+    for x in 0..ls.0 {
+        for y in 0..ls.1 {
+            let Some(&c) = mapping.get(&lake.get(Point(x, y))) else { continue };
+            map.set(Point(x + lx, y + ly), c);
+        }
+    }
+
+    // Set up Dijkstra parameters for the river...
+    let width = 2;
+    let costs: HashMap<_, _> = [('#', 64.0), (' ', 64.0)].into_iter().collect();
+    let score_one = |p: Point, center: bool| {
+        if !map.contains(p) {
+            return if center { f64::INFINITY } else { *costs.get(&' ').unwrap() };
+        }
+        let noise_score = 8.0 * (1.0 - noise.get(p));
+        let tiles_score = *costs.get(&map.get(p)).unwrap_or(&0.0);
+        noise_score + tiles_score
+    };
+    let score = |p: Point| {
+        let mut result = 0.0;
+        for dx in -1..=width {
+            for dy in -1..=width {
+                let center = 0 <= dx && dx < width && 0 <= dy && dy < width;
+                result += score_one(p + Point(dx, dy), center);
+            }
+        }
+        result
+    };
+    let edges = |p: Point| {
+        (-1..=1).flat_map(|x| (-1..=1).map(move |y| p + Point(x, y))).collect()
+    };
+    let target = |p: Point| { map.get(p) == '~' };
+    let sources: Vec<_> = (0..size.0).map(|x| Point(x, 0)).collect();
+
+    // Then, build the river.
+    let path = dijkstra(&sources, edges, score, target).unwrap();
+    for &p in path.iter().take(path.len() - 1) {
+        for x in 0..width {
+            for y in 0..width {
+                map.set(p + Point(x, y), 'W');
+            }
+        }
+    }
 
     // Plant grass and other features in each room.
     let l1 = (0.2 * (rooms.len() as f64)).round() as usize;
@@ -419,12 +518,76 @@ pub fn mapgen(config: &MapgenConfig, rng: &mut RNG) -> Matrix<char> {
 
         let target = (grassiness * values.len() as f64).round() as usize;
         let mut values: Vec<_> = values.into_iter().collect();
-        values.sort_by_key(|&x| (unsafe { std::mem::transmute::<f64, u64>(x.1) }, x.0.0, x.0.1));
+        values.sort_by_key(|&x| (f64_to_monotonic_u64(x.1), x.0.0, x.0.1));
 
         for (i, &(p, _)) in values.iter().enumerate() {
             if i >= target { break; }
             if !can_plant_grass.contains(&map.get(p)) { continue; }
             map.set(p, '"');
+        }
+    }
+
+    // Set up Dijkstra parameters for the route...
+    let costs: HashMap<_, _> = [
+        ('~', f64::INFINITY),
+        ('#', 64.0),
+        (' ', 64.0),
+        ('B', 64.0),
+        ('"', 16.0),
+        ('W', 16.0),
+        (',', 4.0),
+        ('S', 4.0),
+    ].into_iter().collect();
+    let score_one = |p: Point, center: bool| {
+        if !map.contains(p) {
+            return if center { f64::INFINITY } else { *costs.get(&' ').unwrap() };
+        }
+        let tile = map.get(p);
+        if tile == 'W' && center { return f64::INFINITY; }
+
+        let noise_score = 8.0 * (1.0 - noise.get(p));
+        let tiles_score = *costs.get(&tile).unwrap_or(&0.0);
+        noise_score + tiles_score
+    };
+    let score = |p: Point| {
+        let mut result = 0.0;
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                let center = dx == 0 && dy == 0;
+                result += score_one(p + Point(dx, dy), center);
+            }
+        }
+        result
+    };
+    let edges = |p: Point| {
+        let mut result: Vec<_> = (-1..=1).flat_map(
+            |x| (-1..=1).map(move |y| p + Point(x, y))).collect();
+        if map.get(p + Point(1, 0)) == 'W' && map.get(p + Point(2, 0)) == 'W' {
+            result.push(p + Point(3, 0));
+        }
+        result
+    };
+    let target = |p: Point| { p.0 + 1 == size.0 };
+    let sources: Vec<_> = (0..size.1).map(|y| Point(0, y)).collect();
+
+    // Then, build the route.
+    let path = dijkstra(&sources, edges, score, target).unwrap();
+    let mut prev: Option<Point> = None;
+    for &p in &path {
+        if let Some(q) = prev && p.0 - q.0 > 1 {
+            for x in (q.0 + 1)..p.0 { map.set(Point(x, p.1), '='); }
+        }
+        map.set(p, 'R');
+        prev = Some(p);
+    }
+
+    // Convert any undefined cells to walls, plus other similar replacements.
+    let mapping: HashMap<_, _> =
+        [(' ', '#'), ('B', '*'), ('S', '.'), ('W', '~')].into_iter().collect();
+    for x in 0..size.0 {
+        for y in 0..size.1 {
+            let p = Point(x, y);
+            if let Some(&c) = mapping.get(&map.get(p)) { map.set(p, c); }
         }
     }
     map
