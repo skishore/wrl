@@ -1,4 +1,4 @@
-use crate::base::{HashMap, HashSet, LOS, Matrix, Point};
+use crate::base::{HashMap, HashSet, LOS, Matrix, Point, dirs};
 use crate::base::{RNG, sample};
 
 use rand::Rng;
@@ -6,12 +6,14 @@ use rand::seq::SliceRandom;
 
 //////////////////////////////////////////////////////////////////////////////
 
+#[derive(Clone)]
 struct RoomStep {
     min_size: i32,
     max_size: i32,
     attempts: i32,
 }
 
+#[derive(Clone)]
 struct MapgenConfig {
     // Overall structure of the map.
     size: Point,
@@ -31,10 +33,9 @@ struct MapgenConfig {
 impl Default for MapgenConfig {
     fn default() -> Self {
         let room_series = vec![
-            // Temporarily stick to smaller rooms:
-            //RoomStep { min_size: 30, max_size: 60, attempts: 10 },
-            //RoomStep { min_size: 25, max_size: 50, attempts: 15 },
-            //RoomStep { min_size: 20, max_size: 40, attempts: 20 },
+            RoomStep { min_size: 30, max_size: 60, attempts: 10 },
+            RoomStep { min_size: 25, max_size: 50, attempts: 15 },
+            RoomStep { min_size: 20, max_size: 40, attempts: 20 },
             RoomStep { min_size: 15, max_size: 30, attempts: 25 },
             RoomStep { min_size: 10, max_size: 20, attempts: 30 },
         ];
@@ -467,16 +468,17 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
 
     // Noises used to guide feature placement.
     let noise = generate_perlin_noise(size, 4.0, 2, 0.65, rng);
-    let berry_blue_noise = generate_blue_noise(size, 10, rng);
-    let trees_blue_noise = generate_blue_noise(size, 5, rng);
+    let berry_blue_noise = generate_blue_noise(size, 24, rng);
+    let trees_blue_noise = generate_blue_noise(size, 12, rng);
 
     // Build the lake...
+    let lc = MapgenConfig { birth_limit: 6, ..config.clone() };
     let ls = Point(rng.gen_range(18..=36), rng.gen_range(12..=24));
     let lz = config.size - ls;
     let lx = ((0.50 + 0.25 * rng.gen::<f64>()) * lz.0 as f64).round() as i32;
     let ly = ((0.75 + 0.25 * rng.gen::<f64>()) * lz.1 as f64).round() as i32;
     let lake = (|| loop {
-        let result = build_room_cave(ls, config, rng);
+        let result = build_room_cave(ls, &lc, rng);
         if find_connected_components(&result, '#').len() == 1 { return result; }
     })();
 
@@ -527,10 +529,12 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
     }
 
     // Plant grass and other features in each room.
-    let l1 = (0.2 * (rooms.len() as f64)).round() as usize;
-    let l2 = (0.4 * (rooms.len() as f64)).round() as usize;
+    let l1 = std::cmp::max(2, (0.2 * (rooms.len() as f64)).round() as usize);
+    let l2 = std::cmp::max(4, (0.4 * (rooms.len() as f64)).round() as usize);
     let can_plant_grass = ['.', 'S'];
     let can_plant_trees = ['.'];
+    let mut has_thicket = false;
+    let mut has_grove = false;
 
     for (i, room) in rooms.iter().enumerate() {
         let mut values = HashMap::default();
@@ -546,6 +550,7 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
             for &p in values.keys() {
                 if !can_plant_trees.contains(&map.get(p)) { continue; }
                 if berry_blue_noise.get(p) == 0.0 { continue; }
+                has_grove = true;
                 map.set(p, 'B');
             }
             grassiness = 0.0 + 0.2 * grassiness;
@@ -553,11 +558,12 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
             for &p in values.keys() {
                 if !can_plant_trees.contains(&map.get(p)) { continue; }
                 if trees_blue_noise.get(p) == 0.0 { continue; }
+                has_thicket = true;
                 map.set(p, '#');
             }
             grassiness = 0.0 + 0.6 * grassiness;
         } else {
-            grassiness = 0.2 + 0.2 * grassiness;
+            grassiness = 0.0 + 0.4 * grassiness;
         };
 
         let target = (grassiness * values.len() as f64).round() as usize;
@@ -570,6 +576,7 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
             map.set(p, '"');
         }
     }
+    if !has_grove || !has_thicket { return None; }
 
     // Set up Dijkstra parameters for the route...
     let costs: HashMap<_, _> = [
