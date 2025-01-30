@@ -255,19 +255,21 @@ impl Knowledge {
                 self.cells.push_front(CellKnowledge::new(point, tile))
             });
 
+            // Update basic information about the given cell.
             let cell = &mut self.cells[cell_handle];
-            let prev_handle = std::mem::replace(&mut cell.handle, handle);
-
-            if see_entity_at { cell.last_see_entity_at = time; }
-
             cell.last_seen = time;
             cell.point = point;
             cell.shade = shade;
             cell.tile = tile;
 
-            if prev_handle != handle && let Some(other) = prev_handle {
-                self.mark_entity_moved(other, point);
-            };
+            // Only update the cell's entity if we can see entities there.
+            if see_entity_at {
+                cell.last_see_entity_at = time;
+                let existing = std::mem::replace(&mut cell.handle, handle);
+                if existing != handle && let Some(x) = existing {
+                    self.mark_entity_moved(x, point);
+                };
+            }
         }
 
         self.forget(me.player);
