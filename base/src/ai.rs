@@ -11,7 +11,7 @@ use crate::base::{LOS, Point, RNG, dirs, sample, weighted};
 use crate::entity::Entity;
 use crate::game::{NOISY_RADIUS, Action, Move, Tile, move_ready};
 use crate::knowledge::{CellKnowledge, Knowledge, Timestamp};
-use crate::pathing::{AStar, BFS, DijkstraLength, DijkstraMap, Status};
+use crate::pathing::{AStar, BFS, DijkstraLength, DijkstraMap, Neighborhood, Status};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -81,6 +81,7 @@ pub struct AIEnv<'a> {
 
 #[derive(Default)]
 struct CachedPath {
+    skipped: usize,
     steps: Vec<Point>,
     pos: Point,
 }
@@ -95,6 +96,7 @@ impl CachedPath {
     fn reset(&mut self) { self.steps.clear(); }
 
     fn check(&self, ctx: &Context) -> bool {
+        if self.steps.len() <= self.skipped { return false; }
         let Some(&next) = self.steps.last() else { return false; };
 
         let Context { known, pos, .. } = *ctx;
@@ -106,7 +108,7 @@ impl CachedPath {
             Status::Free     => true,
             Status::Unknown  => true,
         };
-        self.steps.iter().all(|&x| valid(x))
+        self.steps.iter().skip(self.skipped).all(|&x| valid(x))
     }
 
     fn sneak(&mut self, ctx: &Context, target: Point,
@@ -221,8 +223,8 @@ struct Context<'a, 'b> {
     dir: Point,
     // Computed by the executor during this turn.
     observations: Vec<&'a CellKnowledge>,
-    neighborhood: Vec<(Point, i32)>,
-    sneakable: Vec<(Point, i32)>,
+    neighborhood: Neighborhood,
+    sneakable: Neighborhood,
     shared: &'a mut SharedAIState,
     // Mutable access to the RNG.
     env: &'a mut AIEnv<'b>,
@@ -247,16 +249,19 @@ struct BasicNeedsStrategy {
     last: Option<Point>,
     need: BasicNeed,
     path: CachedPath,
-    tile: &'static Tile,
 }
 
 impl BasicNeedsStrategy {
     fn new(need: BasicNeed) -> Self {
-        let tile = match need {
-            BasicNeed::Eat => Tile::get('*'),
-            BasicNeed::Drink => Tile::get('~'),
-        };
-        Self { last: None, need, path: Default::default(), tile }
+        let path = CachedPath { skipped: 1, ..Default::default() };
+        Self { last: None, need, path }
+    }
+
+    fn satisfies_need(&self, tile: &Tile) -> bool {
+        match self.need {
+            BasicNeed::Eat => tile.can_eat(),
+            BasicNeed::Drink => tile.can_drink(),
+        }
     }
 
     fn timeout(&self) -> i32 {
@@ -282,14 +287,15 @@ impl Strategy for BasicNeedsStrategy {
         let asleep = ctx.entity.asleep;
         if !asleep { *self.turns_left(ctx) = max(*self.turns_left(ctx) - 1, 0); }
         for cell in &ctx.observations {
-            if cell.tile != self.tile { continue; }
+            if !self.satisfies_need(cell.tile) { continue; }
             self.last = Some(cell.point);
             break;
         }
 
         // Clear the cached path, if it's no longer good.
         let known = ctx.known;
-        let valid = |p: Point| known.get(p).tile() == Some(self.tile);
+        let valid = |p: Point| known.get(p).tile().map(
+            |x| self.satisfies_need(x)).unwrap_or(false);
         if !(self.path.check(ctx) && valid(self.path.steps[0])) { self.path.reset(); }
 
         // Compute a priority for satisfying this need.
@@ -306,18 +312,25 @@ impl Strategy for BasicNeedsStrategy {
         if let Some(x) = self.path.follow(ctx, turns) { return Some(x); }
 
         let Context { known, pos, .. } = *ctx;
-        let valid = |p: Point| known.get(p).tile() == Some(self.tile);
+        let valid = |p: Point| known.get(p).tile().map(
+            |x| self.satisfies_need(x)).unwrap_or(false);
         if valid(pos) {
             *self.turns_left(ctx) = self.timeout();
             return Some(Action::Idle);
         }
+        for &dir in &dirs::ALL {
+            if valid(pos + dir) {
+                *self.turns_left(ctx) = self.timeout();
+                return Some(Action::Look(dir));
+            }
+        }
 
         ensure_neighborhood(ctx);
 
-        for &(point, _) in &ctx.neighborhood {
-            let cell = known.get(point);
-            if cell.tile() != Some(self.tile) { continue; }
-            if cell.status() != Status::Free { continue; }
+        let n = &ctx.neighborhood;
+        for &(point, _) in std::iter::chain(&n.blocked, &n.visited) {
+            let Some(cell) = known.get(point).tile() else { continue };
+            if !self.satisfies_need(cell) { continue; }
 
             // Compute at most one path to a point in the neighborhood.
             let action = self.path.start(ctx, point, turns);
@@ -371,7 +384,7 @@ impl Strategy for RestStrategy {
 
         ensure_neighborhood(ctx);
 
-        for &(point, _) in &ctx.neighborhood {
+        for &(point, _) in &ctx.neighborhood.visited {
             if !valid(point) { continue; }
             if known.get(point).status() != Status::Free { continue; }
 
@@ -460,7 +473,7 @@ impl Strategy for ExploreStrategy {
         ensure_neighborhood(ctx);
 
         let mut min_age = std::i32::MAX;
-        for &(point, _) in &ctx.neighborhood {
+        for &(point, _) in &ctx.neighborhood.visited {
             let age = known.get(point).time_since_seen();
             if age > 0 { min_age = min(min_age, age); }
         }
@@ -486,7 +499,7 @@ impl Strategy for ExploreStrategy {
             base * (cos + 1.).pow(4) / (distance as f64).pow(2)
         };
 
-        let scores: Vec<_> = ctx.neighborhood.iter().map(
+        let scores: Vec<_> = ctx.neighborhood.visited.iter().map(
             |&(p, distance)| (p, score(p, distance))).collect();
         let target = select_target(&scores, ctx.env)?;
         self.path.start(ctx, target, turns)
@@ -796,7 +809,7 @@ fn search_around(ctx: &mut Context, path: &mut CachedPath,
 
     ensure_neighborhood(ctx);
 
-    let scores: Vec<_> = ctx.neighborhood.iter().map(
+    let scores: Vec<_> = ctx.neighborhood.visited.iter().map(
         |&(p, distance)| (p, score(p, distance))).collect();
     let target = select_target(&scores, ctx.env)?;
     path.start(ctx, target, turns)
@@ -844,7 +857,7 @@ fn flight_cell(ctx: &mut Context, threats: &[Threat], hiding: bool) -> Option<Po
         (cos + 1.).pow(3) * base.pow(9)
     };
 
-    let map = if hiding { &ctx.sneakable } else { &ctx.neighborhood };
+    let map = if hiding { &ctx.sneakable.visited } else { &ctx.neighborhood.visited };
     let scores: Vec<_> = map.iter().map(
         |&(p, distance)| (p, score(p, distance))).collect();
     select_target(&scores, ctx.env)
@@ -876,14 +889,14 @@ fn assess_directions(dirs: &[Point], turns: i32, rng: &mut RNG) -> Vec<Point> {
 }
 
 fn ensure_neighborhood(ctx: &mut Context) {
-    if !ctx.neighborhood.is_empty() { return; }
+    if !ctx.neighborhood.visited.is_empty() { return; }
     let known = ctx.known;
     let check = |p: Point| known.get(p).status();
     ctx.neighborhood = DijkstraMap(ctx.pos, check, SEARCH_CELLS, SEARCH_LIMIT, FOV_RADIUS);
 }
 
 fn ensure_sneakable(ctx: &mut Context, threats: &[Threat]) {
-    if !ctx.sneakable.is_empty() { return; }
+    if !ctx.sneakable.visited.is_empty() { return; }
     let Context { entity, known, .. } = *ctx;
     let check = |p: Point| {
         if !is_hiding_place(entity, p, threats) { return Status::Blocked; }
@@ -963,8 +976,8 @@ impl AIState {
             pos: entity.pos,
             dir: entity.dir,
             observations,
-            neighborhood: vec![],
-            sneakable: vec![],
+            neighborhood: Default::default(),
+            sneakable: Default::default(),
             shared,
             env,
         };
