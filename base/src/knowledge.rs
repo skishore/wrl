@@ -222,7 +222,14 @@ impl Knowledge {
         let dark = matches!(board.get_light(), Light::None);
 
         // Entities have exact knowledge about anything they can see.
-        for &point in &vision.points_seen {
+        //
+        // We want self.cells to be sorted by recency, and if there are ties,
+        // by distance. Closer and more recently seen points come first.
+        //
+        // Within the loop here, we repeatedly move cells to the front of
+        // self.cells. Because points_seen is sorted by distance, we iterate
+        // over it in reverse order to get the ordering above.
+        for &point in vision.points_seen.iter().rev() {
             let visibility = vision.get_visibility_at(point);
             assert!(visibility >= 0);
 

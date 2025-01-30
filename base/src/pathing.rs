@@ -406,6 +406,12 @@ thread_local! {
     };
 }
 
+#[derive(Default)]
+pub struct Neighborhood {
+    pub blocked: Vec<(Point, i32)>,
+    pub visited: Vec<(Point, i32)>,
+}
+
 // Expose a distance function for use in other heuristics.
 #[allow(non_snake_case)]
 pub fn DijkstraLength(p: Point) -> i32 {
@@ -415,7 +421,7 @@ pub fn DijkstraLength(p: Point) -> i32 {
 
 #[allow(non_snake_case)]
 pub fn DijkstraMap<F: Fn(Point) -> Status>(
-        source: Point, check: F, cells: i32, limit: i32, radius: i32) -> Vec<(Point, i32)> {
+        source: Point, check: F, cells: i32, limit: i32, radius: i32) -> Neighborhood {
     CACHE.with_borrow_mut(|cache|{
         // Make sure the Matrix has enough space for the search.
         let n = 2 * limit + 1;
@@ -446,10 +452,11 @@ pub fn DijkstraMap<F: Fn(Point) -> Status>(
 #[allow(non_snake_case)]
 fn CachedDijkstraMap<F: Fn(Point) -> Status>(
         state: &mut DijkstraState, fov: &mut FOV,
-        source: Point, check: F, cells: i32, limit: i32) -> Vec<(Point, i32)> {
-    let mut current = 0;
-    let mut result = vec![];
-    result.reserve(cells as usize);
+        source: Point, check: F, cells: i32, limit: i32) -> Neighborhood {
+    let cells = cells as usize;
+    let mut result = Neighborhood::default();
+    result.blocked.reserve(cells);
+    result.visited.reserve(cells);
 
     let initial = Point(limit, limit);
     let offset = source - initial;
@@ -488,14 +495,14 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
 
         entry.status = Some(status);
         if !visited { state.dirty.push(point); }
-        if status == Status::Blocked { return true; }
+        let blocked = status == Status::Blocked;
 
         let diagonal = dir.0 != 0 && dir.1 != 0;
         let occipied = status == Status::Occupied;
         let score = prev_score + DIJKSTRA_COST +
                     if diagonal { DIJKSTRA_DIAGONAL_PENALTY } else { 0 } +
                     if occipied { DIJKSTRA_OCCUPIED_PENALTY } else { 0 };
-        if visited && score >= entry.score { return false; }
+        if visited && score >= entry.score { return blocked; }
 
         if visited {
             let score = entry.score;
@@ -504,7 +511,7 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
             state.link(prev, score).next = next;
         }
         init(state, index, point, score, status);
-        false
+        blocked
     };
 
     let index = state.map.index(initial).unwrap();
@@ -518,7 +525,8 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
         step(state, n.next - n.prev, prev_point, prev_score)
     });
 
-    for _ in 0..cells {
+    let mut current = 0;
+    loop {
         let lists = &state.lists;
         while current < lists.len() && lists[current].next == 0 { current += 1; }
         if current == lists.len() { break; }
@@ -533,16 +541,22 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
 
         let node = &state.map.data[prev];
         let (prev_point, prev_score) = (node.point, node.score);
-        result.push((prev_point + offset, prev_score));
-        if node.status == Some(Status::Unknown) { continue; }
+        let value = (prev_point + offset, prev_score);
 
-        for dir in &dirs::ALL {
-            step(state, *dir, prev_point, prev_score);
+        let status = node.status.unwrap();
+        if status == Status::Blocked {
+            result.blocked.push(value);
+        } else {
+            result.visited.push(value);
+            if result.visited.len() >= (cells as usize) { break; }
+        }
+
+        if matches!(status, Status::Free | Status::Occupied) {
+            for dir in &dirs::ALL {
+                step(state, *dir, prev_point, prev_score);
+            }
         }
     }
-
-    assert!(result.len() <= cells as usize);
-
     result
 }
 

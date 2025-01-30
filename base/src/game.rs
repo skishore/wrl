@@ -29,7 +29,7 @@ const FOV_RADIUS_PC_: i32 = 21;
 const SPEED_PC_: f64 = 0.1;
 const SPEED_NPC: f64 = 0.1;
 
-const LIGHT: Light = Light::Sun(Point(0, 0));
+const LIGHT: Light = Light::Sun(Point(4, 1));
 const WEATHER: Weather = Weather::None;
 const WORLD_SIZE: i32 = 100;
 const NUM_PREDATORS: i32 = 2;
@@ -39,7 +39,8 @@ const UI_DAMAGE_FLASH: i32 = 6;
 const UI_DAMAGE_TICKS: i32 = 6;
 
 const UI_COLOR: i32 = 0x430;
-const UI_MAP_SIZE: i32 = 2 * FOV_RADIUS_PC_ + 1;
+//const UI_MAP_SIZE: i32 = 2 * FOV_RADIUS_PC_ + 1;
+const UI_MAP_SIZE: i32 = WORLD_SIZE;
 const UI_MAP_SIZE_X: i32 = UI_MAP_SIZE;
 const UI_MAP_SIZE_Y: i32 = UI_MAP_SIZE;
 
@@ -58,9 +59,13 @@ pub enum Input { Escape, BackTab, Char(char) }
 const FLAG_BLOCKS_VISION: u32 = 1 << 0;
 const FLAG_LIMITS_VISION: u32 = 1 << 1;
 const FLAG_BLOCKS_MOVEMENT: u32 = 1 << 2;
+const FLAG_CAN_DRINK: u32 = 1 << 3;
+const FLAG_CAN_EAT: u32 = 1 << 4;
 
 const FLAGS_NONE: u32 = 0;
 const FLAGS_BLOCKED: u32 = FLAG_BLOCKS_MOVEMENT | FLAG_BLOCKS_VISION;
+const FLAGS_FRESH_WATER: u32 = FLAG_BLOCKS_MOVEMENT | FLAG_CAN_DRINK;
+const FLAGS_BERRY_TREE: u32 = FLAG_BLOCKS_MOVEMENT | FLAG_LIMITS_VISION | FLAG_CAN_EAT;
 
 pub struct Tile {
     pub flags: u32,
@@ -74,10 +79,16 @@ static_assert_size!(Tile, 32);
 
 impl Tile {
     pub fn get(ch: char) -> &'static Tile { TILES.get(&ch).unwrap() }
-    pub fn casts_shadow(&self) -> bool { self.flags & FLAG_BLOCKS_MOVEMENT != 0 }
+
+    // Raw flags-based predicates.
+    pub fn can_eat(&self) -> bool { self.flags & FLAG_CAN_EAT != 0 }
+    pub fn can_drink(&self) -> bool { self.flags & FLAG_CAN_DRINK != 0 }
     pub fn blocks_vision(&self) -> bool { self.flags & FLAG_BLOCKS_VISION != 0 }
     pub fn limits_vision(&self) -> bool { self.flags & FLAG_LIMITS_VISION != 0 }
     pub fn blocks_movement(&self) -> bool { self.flags & FLAG_BLOCKS_MOVEMENT != 0 }
+
+    // Derived predicates.
+    pub fn casts_shadow(&self) -> bool { self.blocks_vision() }
 }
 
 impl Debug for Tile {
@@ -97,11 +108,11 @@ impl PartialEq for &'static Tile {
 lazy_static! {
     static ref TILES: HashMap<char, Tile> = {
         let items = [
-            ('#', (FLAGS_BLOCKED,      Glyph::wdfg('#', (32, 96, 0)),     "a tree")),
+            ('#', (FLAGS_BLOCKED,      Glyph::wdfg('#', (16, 96, 0)),     "a tree")),
             ('.', (FLAGS_NONE,         Glyph::wdfg('.', (255, 255, 255)), "grass")),
-            ('"', (FLAG_LIMITS_VISION, Glyph::wdfg('"', (64, 192, 0)),    "tall grass")),
-            ('~', (FLAGS_NONE,         Glyph::wdfg('~', (0, 128, 255)),   "water")),
-            ('*', (FLAGS_NONE,         Glyph::wdfg('*', (192, 128, 0)),   "a berry tree")),
+            ('"', (FLAG_LIMITS_VISION, Glyph::wdfg('"', (96, 192, 0)),    "tall grass")),
+            ('~', (FLAGS_FRESH_WATER,  Glyph::wdfg('~', (0, 128, 255)),   "water")),
+            ('*', (FLAGS_BERRY_TREE,   Glyph::wdfg('*', (192, 128, 0)),   "a berry tree")),
             ('=', (FLAGS_NONE,         Glyph::wdfg('=', (255, 128, 0)),   "a bridge")),
             ('R', (FLAGS_NONE,         Glyph::wdfg('.', (255, 128, 0)),   "a path")),
         ];
@@ -853,7 +864,7 @@ impl State {
         let entity = self.pov.and_then(
             |x| self.board.get_entity(x)).unwrap_or(self.get_player());
         let offset = entity.pos - Point(UI_MAP_SIZE_X / 2, UI_MAP_SIZE_Y / 2);
-        //let offset = Point::default();
+        let offset = Point::default();
 
         let size = Point(2 * UI_MAP_SIZE_X, UI_MAP_SIZE_Y);
         let bound = Rect { root: Point(0, size.1 + 2), size: Point(size.0, 1) };
