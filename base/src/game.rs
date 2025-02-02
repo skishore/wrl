@@ -47,7 +47,7 @@ const UI_MAP_SIZE_Y: i32 = UI_MAP_SIZE;
 
 const UI_MOVE_ALPHA: f64 = 0.75;
 const UI_MOVE_FRAMES: i32 = 12;
-const UI_MAP_MEMORY: usize = 64;
+const UI_MAP_MEMORY: usize = 32;
 
 const UI_SHADE_FADE: f64 = 0.30;
 const UI_REMEMBERED: f64 = 0.15;
@@ -900,23 +900,21 @@ impl State {
             let debug = entity.debug.as_ref();
             let path = entity.ai.get_path();
             let target = path.first();
+            let slice_point = |p: Point| Point(2 * (p.0 - offset.0), p.1 - offset.1);
 
             for &p in path.iter().skip(1) {
-                let Point(x, y) = p - offset;
-                let point = Point(2 * x, y);
+                let point = slice_point(p);
                 let mut glyph = slice.get(point);
                 if glyph.ch() == Glyph::wide(' ').ch() { glyph = Glyph::wide('.'); }
                 slice.set(point, glyph.with_fg(0x400));
             }
-            for &(point, score) in debug.map(|x| x.utility.as_slice()).unwrap_or_default() {
-                let Point(x, y) = point - offset;
-                let point = Point(2 * x, y);
+            for &(p, score) in debug.map(|x| x.utility.as_slice()).unwrap_or(&[]) {
+                let point = slice_point(p);
                 let glyph = slice.get(point);
                 slice.set(point, glyph.with_bg(Color::gray(score)));
             }
-            if let Some(&target) = target {
-                let Point(x, y) = target - offset;
-                let point = Point(2 * x, y);
+            if let Some(&p) = target {
+                let point = slice_point(p);
                 let glyph = slice.get(point);
                 slice.set(point, glyph.with_fg(Color::black()).with_bg(0x400));
             }
