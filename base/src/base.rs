@@ -82,7 +82,7 @@ impl Color {
         let s = self.0;
         let (x, y) = (alpha, 1. - alpha);
         let (sr, sg, sb) = (s >> 16, (s >> 8) & 0xff, s & 0xff);
-        let (br, bg, bb) = (0x1d as u32, 0x1f as u32, 0x21 as u32);
+        let (br, bg, bb) = (0x00 as u32, 0x00 as u32, 0x00 as u32);
         let r = (x * sr as f64 + y * br as f64) as i32;
         let g = (x * sg as f64 + y * bg as f64) as i32;
         let b = (x * sb as f64 + y * bb as f64) as i32;
