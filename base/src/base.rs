@@ -74,9 +74,9 @@ impl From<(u8, u8, u8)> for Color {
 }
 
 impl Color {
-    pub fn black() -> Self { Self(0) }
-    pub fn gray() -> Self { Self::dark(0x44) }
-    pub fn dark(n: u8) -> Self { Self(0x010101 * n as u32) }
+    pub fn black() -> Self { Self::gray(0) }
+    pub fn white() -> Self { Self::gray(0xff) }
+    pub fn gray(n: u8) -> Self { Self(0x010101 * n as u32) }
 
     pub fn fade(&self, alpha: f64) -> Self {
         let s = self.0;

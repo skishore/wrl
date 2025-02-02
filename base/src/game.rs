@@ -12,7 +12,7 @@ use crate::base::{Buffer, Color, Glyph, Rect, Slice};
 use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs};
 use crate::effect::{Effect, Event, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
-use crate::knowledge::{Knowledge, Vision, VisionArgs};
+use crate::knowledge::{Knowledge, Timestamp, Vision, VisionArgs};
 use crate::mapgen::mapgen_with_size;
 use crate::pathing::Status;
 
@@ -47,6 +47,10 @@ const UI_MAP_SIZE_Y: i32 = UI_MAP_SIZE;
 
 const UI_MOVE_ALPHA: f64 = 0.75;
 const UI_MOVE_FRAMES: i32 = 12;
+const UI_MAP_MEMORY: usize = 64;
+
+const UI_SHADE_FADE: f64 = 0.30;
+const UI_REMEMBERED: f64 = 0.15;
 
 pub const NOISY_RADIUS: i32 = 4;
 
@@ -742,6 +746,7 @@ fn update_state(state: &mut State) {
         let eid = state.board.get_active_entity();
         let entity = &state.board.entities[eid];
         let player = entity.player;
+        let pos = entity.pos;
 
         if !turn_ready(entity) {
             state.board.advance_entity();
@@ -757,6 +762,13 @@ fn update_state(state: &mut State) {
         let action = plan(state, eid);
         let result = act(state, eid, action);
         if player && !result.success { break; }
+
+        if player && state.get_player().pos != pos {
+            let time = state.get_player().known.time;
+            let times = &mut state.turn_times;
+            if times.len() == UI_MAP_MEMORY { times.pop_back(); }
+            times.push_front(time);
+        }
 
         //state.board.update_known(eid);
         //state.board.update_known(state.player);
@@ -795,6 +807,7 @@ pub struct State {
     ai: Option<Box<AIState>>,
     // Animations
     moves: HashMap<Point, MoveAnimation>,
+    turn_times: VecDeque<Timestamp>,
 }
 
 impl State {
@@ -841,9 +854,11 @@ impl State {
         board.entities[player].dir = Point::default();
         board.update_known(player);
 
+        let inputs = vec![];
         let moves = Default::default();
         let ai = Some(Box::new(AIState::new(&mut rng)));
-        Self { board, frame: 0, input, inputs: vec![], player, pov: None, rng, ai, moves }
+        let turn_times = [Timestamp::default()].into_iter().collect();
+        Self { board, frame: 0, input, inputs, player, pov: None, rng, ai, moves, turn_times }
     }
 
     fn get_player(&self) -> &Entity { &self.board.entities[self.player] }
@@ -897,7 +912,7 @@ impl State {
                 let Point(x, y) = point - offset;
                 let point = Point(2 * x, y);
                 let glyph = slice.get(point);
-                slice.set(point, glyph.with_bg(Color::dark(score)));
+                slice.set(point, glyph.with_bg(Color::gray(score)));
             }
             if let Some(&target) = target {
                 let Point(x, y) = target - offset;
@@ -925,13 +940,15 @@ impl State {
             for drop in &rain.drops {
                 let index = drop.frame - self.frame;
                 let Some(&delta) = rain.path.get(index) else { continue; };
-                let point = drop.point - delta;
-                let cell = if index == 0 { known.get(point) } else { known.default() };
-                if index == 0 && !cell.visible() { continue; }
+
+                let (ground, point) = (index == 0, drop.point - delta);
+                let cell = if ground { known.get(point) } else { known.default() };
+                if ground && !cell.visible() { continue; }
 
                 let Point(x, y) = point - offset;
                 let ch = if index == 0 { 'o' } else { rain.ch };
-                let color = if cell.shade() { Color::gray() } else { base };
+                let shade = cell.shade();
+                let color = if shade { base.fade(UI_SHADE_FADE) } else { base };
                 let glyph = Glyph::wdfg(ch, color);
                 slice.set(Point(2 * x, y), glyph);
             }
@@ -995,19 +1012,30 @@ impl State {
             let cell = known.get(point);
             let Some(tile) = cell.tile() else { return unseen; };
 
+            let age_in_turns = (|| {
+                if !player { return 0; }
+                let age = cell.time_since_seen();
+                for (turn, &turn_time) in self.turn_times.iter().enumerate() {
+                    if age <= known.time - turn_time { return turn; }
+                }
+                return UI_MAP_MEMORY;
+            })();
+            if age_in_turns >= max(UI_MAP_MEMORY, 1) { return unseen; }
+
             let other = if cell.can_see_entity_at() { cell.entity() } else { None };
-            let dead = other.is_some_and(|x| !x.alive);
             let obscured = tile.limits_vision();
             let shadowed = cell.shade();
 
-            let glyph = other.map(|x| x.glyph).unwrap_or(tile.glyph);
-            let color = {
-                if !cell.visible() { 0x011.into() }
-                else if dead { 0x400.into() }
-                else if shadowed { Color::gray() }
-                else if obscured { tile.glyph.fg() }
-                else { glyph.fg() }
-            };
+            let glyph = if let Some(x) = other { x.glyph } else { tile.glyph };
+            let mut color = if obscured { tile.glyph.fg() } else { glyph.fg() };
+
+            if !cell.visible() {
+                let limit = max(UI_MAP_MEMORY, 1) as f64;
+                let delta = (UI_MAP_MEMORY - age_in_turns) as f64;
+                color = Color::white().fade(UI_REMEMBERED * delta / limit);
+            } else if shadowed {
+                color = color.fade(UI_SHADE_FADE);
+            }
             glyph.with_fg(color)
         };
 
