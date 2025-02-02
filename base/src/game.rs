@@ -35,12 +35,13 @@ const WORLD_SIZE: i32 = 100;
 const NUM_PREDATORS: i32 = 2;
 const NUM_PREY: i32 = 18;
 
+const FULL_VIEW: bool = false;
+const UI_MAP_SIZE: i32 = if FULL_VIEW { WORLD_SIZE } else { 2 * FOV_RADIUS_PC_ + 1 };
+
 const UI_DAMAGE_FLASH: i32 = 6;
 const UI_DAMAGE_TICKS: i32 = 6;
 
 const UI_COLOR: i32 = 0x430;
-//const UI_MAP_SIZE: i32 = 2 * FOV_RADIUS_PC_ + 1;
-const UI_MAP_SIZE: i32 = WORLD_SIZE;
 const UI_MAP_SIZE_X: i32 = UI_MAP_SIZE;
 const UI_MAP_SIZE_Y: i32 = UI_MAP_SIZE;
 
@@ -864,7 +865,7 @@ impl State {
         let entity = self.pov.and_then(
             |x| self.board.get_entity(x)).unwrap_or(self.get_player());
         let offset = entity.pos - Point(UI_MAP_SIZE_X / 2, UI_MAP_SIZE_Y / 2);
-        let offset = Point::default();
+        let offset = if FULL_VIEW { Point::default() } else { offset };
 
         let size = Point(2 * UI_MAP_SIZE_X, UI_MAP_SIZE_Y);
         let bound = Rect { root: Point(0, size.1 + 2), size: Point(size.0, 1) };
