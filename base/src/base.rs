@@ -451,12 +451,10 @@ impl FOV {
     pub fn new(radius: i32) -> Self {
         let mut result = Self { radius, nodes: vec![], cache: vec![] };
         result.nodes.push(FOVNode::default());
-        for i in 0..=radius {
-            for j in 0..8 {
-                let (xa, ya) = if j & 1 == 0 { (radius, i) } else { (i, radius) };
-                let xb = xa * if j & 2 == 0 { 1 } else { -1 };
-                let yb = ya * if j & 4 == 0 { 1 } else { -1 };
-                let pos = Point(xb, yb);
+        for x in -radius..=radius {
+            for y in -radius..=radius {
+                let pos = Point(x, y);
+                if pos == Point::default() { continue; }
                 let inv_l2 = 1. / (pos.len_l2_squared() as f64).sqrt();
                 let endpoint = FOVEndpoint { pos, inv_l2  };
                 result.update(0, &LOS(Point::default(), pos), &endpoint, 0);
