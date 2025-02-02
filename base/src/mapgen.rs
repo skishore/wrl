@@ -326,6 +326,34 @@ fn generate_perlin_noise(
 
 //////////////////////////////////////////////////////////////////////////////
 
+struct DijkstraNode {
+    point: Point,
+    distance: f64,
+}
+
+impl Eq for DijkstraNode {}
+
+impl PartialEq for DijkstraNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.point == other.point && self.distance == other.distance
+    }
+}
+
+impl std::cmp::Ord for DijkstraNode {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let sd = f64_to_monotonic_u64(self.distance);
+        let od = f64_to_monotonic_u64(other.distance);
+        let (sp, op) = (self.point, other.point);
+        od.cmp(&sd).then_with(|| (sp.0, sp.1).cmp(&(op.0, op.1)))
+    }
+}
+
+impl std::cmp::PartialOrd for DijkstraNode {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 fn f64_to_monotonic_u64(x: f64) -> u64 {
     let bits = x.to_bits();
     let sign = 1u64 << 63;
@@ -335,41 +363,47 @@ fn f64_to_monotonic_u64(x: f64) -> u64 {
 fn dijkstra<F: Fn(Point) -> Vec<Point>, G: Fn(Point) -> f64, H: Fn(Point) -> bool>
         (sources: &[Point], edges: F, score: G, target: H) -> Option<Vec<Point>> {
 
-    let mut complete = HashMap::default();
-    let mut frontier = HashMap::default();
+    let mut map = HashMap::default();
+    let mut heap = std::collections::BinaryHeap::new();
+    let sentinel = Point(std::i32::MAX, std::i32::MAX);
 
+    // We assume sources are distinct. We can relax this assumption later.
     for &source in sources {
         let distance = score(source);
-        if distance != f64::INFINITY { frontier.insert(source, (distance, None)); }
+        if distance == f64::INFINITY { continue; }
+
+        heap.push(DijkstraNode { point: source, distance });
+        let existing = map.insert(source, (sentinel, distance, false));
+        assert!(existing.is_none());
     }
 
-    while !frontier.is_empty() {
-        let (&prev, &value) = frontier.iter().min_by_key(
-            |&x| f64_to_monotonic_u64(x.1.0)).unwrap();
-        assert!(value.0 != f64::INFINITY);
-        let existing = complete.insert(prev, value);
-        assert!(existing.is_none());
-        frontier.remove(&prev);
+    while let Some(node) = heap.pop() {
+        let prev = node.point;
+        assert!(node.distance != f64::INFINITY);
+        let entry = map.get_mut(&prev).unwrap();
+        if std::mem::replace(&mut entry.2, true) { continue; }
 
         if target(prev) {
             let mut result = vec![];
-            let mut current = Some(prev);
-            while let Some(x) = current {
-                result.push(x);
-                current = complete.get(&x).unwrap().1;
+            let mut current = prev;
+            while current != sentinel {
+                result.push(current);
+                current = map.get(&current).unwrap().0;
             }
             result.reverse();
             return Some(result);
         }
 
         for next in edges(prev) {
-            if complete.contains_key(&next) { continue; }
+            let entry = map.get(&next);
+            if let Some(x) = entry && x.2 { continue; }
 
-            let distance = value.0 + score(next) + (next - prev).len_l2();
+            let distance = node.distance + score(next) + (next - prev).len_l2();
+            if let Some(x) = entry && distance > x.1 { continue; }
             if distance == f64::INFINITY { continue; }
 
-            let v = (distance, Some(prev));
-            frontier.entry(next).and_modify(|x| { if distance < x.0 { *x = v; } }).or_insert(v);
+            heap.push(DijkstraNode { point: next, distance });
+            map.insert(next, (prev, distance, false));
         }
     }
     None
