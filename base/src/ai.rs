@@ -364,9 +364,9 @@ impl Strategy for RestStrategy {
         if !self.path.check(ctx) { self.path.reset(); }
 
         // Compute a priority for satisfying this need.
-        let cutoff = max(MAX_RESTED / 2, 1);
         let turns_left = ctx.shared.till_rested;
-        if !last && turns_left >= cutoff { return (Priority::Skip, 0); }
+        let cutoff = max(MAX_RESTED / if last { 1 } else { 2 }, 1);
+        if turns_left >= cutoff { return (Priority::Skip, 0); }
         let tiebreaker = if last { -1 } else { 100 * turns_left / cutoff };
         (Priority::SatisfyNeeds, tiebreaker)
     }
