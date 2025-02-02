@@ -995,7 +995,7 @@ impl State {
             let cell = known.get(point);
             let Some(tile) = cell.tile() else { return unseen; };
 
-            let other = cell.entity();
+            let other = if cell.can_see_entity_at() { cell.entity() } else { None };
             let dead = other.is_some_and(|x| !x.alive);
             let obscured = tile.limits_vision();
             let shadowed = cell.shade();
@@ -1011,6 +1011,7 @@ impl State {
             glyph.with_fg(color)
         };
 
+        // Render all currently-visible cells.
         slice.fill(Glyph::wide(' '));
         for y in 0..UI_MAP_SIZE_Y {
             for x in 0..UI_MAP_SIZE_X {
@@ -1018,6 +1019,8 @@ impl State {
                 slice.set(Point(2 * x, y), glyph);
             }
         }
+
+        // Render ephemeral state: sounds we've heard and moves we've glimpsed.
         for entity in &known.entities {
             if !entity.heard { continue; }
             let Point(x, y) = entity.pos - offset;
@@ -1044,22 +1047,28 @@ impl State {
             }
         }
 
-        // If we're still playing, animate arrows showing NPC facing.
-        if entity.cur_hp == 0 { return; }
+        // If we're still playing, render arrows showing NPC facing.
+        if entity.cur_hp > 0 { self.render_arrows(known, offset, slice); }
+    }
 
-        let length = 3 as usize;
+    fn render_arrows(&self, known: &Knowledge, offset: Point, slice: &mut Slice) {
+        let arrow_length = 3;
+        let sleep_length = 2;
         let mut arrows = vec![];
         for other in &known.entities {
             if other.friend || other.age > 0 { continue; }
 
             let (pos, dir) = (other.pos, other.dir);
-            let ch = Glyph::ray(dir);
-            let diff = dir.normalize(length as f64);
+            let mut ch = Glyph::ray(dir);
+            let mut diff = dir.normalize(arrow_length as f64);
+            if other.asleep { (ch, diff) = ('Z', Point(0, -sleep_length)); }
             arrows.push((ch, LOS(pos, pos + diff)));
         }
 
         for (ch, arrow) in &arrows {
-            let index = (self.frame / 2) % (8 * length);
+            let speed = if *ch == 'Z' { 8 } else { 2 };
+            let denom = if *ch == 'Z' { sleep_length } else { arrow_length };
+            let index = (self.frame / speed) % (8 * denom as usize);
             if let Some(x) = arrow.get(index + 1) {
                 let point = Point(2 * (x.0 - offset.0), x.1 - offset.1);
                 slice.set(point, Glyph::wide(*ch));
