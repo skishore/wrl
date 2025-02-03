@@ -224,6 +224,7 @@ pub mod dirs {
     pub const SW:   Point = Point(-1,  1);
 
     pub const ALL: [Point; 8] = [N, S, E, W, NE, NW, SE, SW];
+    pub const CARDINAL: [Point; 4] = [N, S, E, W];
 }
 
 //////////////////////////////////////////////////////////////////////////////

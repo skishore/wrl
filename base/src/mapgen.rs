@@ -125,7 +125,7 @@ fn build_cave(size: Point, config: &MapgenConfig, rng: &mut RNG) -> Matrix<char>
 fn build_room_cave(size: Point, config: &MapgenConfig, rng: &mut RNG) -> Matrix<char> {
     loop {
         let result = build_cave(size, config, rng);
-        if find_connected_components(&result, '.').len() == 1 { return result; }
+        if find_cardinal_components(&result, '.').len() == 1 { return result; }
     }
 }
 
@@ -204,7 +204,7 @@ fn find_closest_pairs(r1: &[Point], r2: &[Point]) -> Vec<(Point, Point)> {
     result
 }
 
-fn find_connected_components(map: &Matrix<char>, v: char) -> Vec<Vec<Point>> {
+fn find_components(map: &Matrix<char>, v: char, dirs: &[Point]) -> Vec<Vec<Point>> {
     let mut result = vec![];
     let mut visited = HashSet::default();
 
@@ -218,8 +218,8 @@ fn find_connected_components(map: &Matrix<char>, v: char) -> Vec<Vec<Point>> {
             while let Some(p) = queue.pop() {
                 if !visited.insert(p) { continue; }
 
-                for d in &[(1, 0), (-1, 0), (0, 1), (0, -1)] {
-                    let q = p + Point(d.0, d.1);
+                for &dir in dirs {
+                    let q = p + dir;
                     if map.get(q) == v && !visited.contains(&q) { queue.push(q); }
                 }
                 component.push(p);
@@ -228,6 +228,14 @@ fn find_connected_components(map: &Matrix<char>, v: char) -> Vec<Vec<Point>> {
         }
     }
     result
+}
+
+fn find_cardinal_components(map: &Matrix<char>, v: char) -> Vec<Vec<Point>> {
+    find_components(map, v, &dirs::CARDINAL)
+}
+
+fn find_diagonal_components(map: &Matrix<char>, v: char) -> Vec<Vec<Point>> {
+    find_components(map, v, &dirs::ALL)
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -441,7 +449,7 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
             try_place_room(&mut map, &room, rng);
         }
     }
-    let mut rooms = find_connected_components(&map, '.');
+    let mut rooms = find_cardinal_components(&map, '.');
     rooms.shuffle(rng);
 
     // Connect up the rooms. We could build a spanning tree here, but instead
@@ -479,7 +487,7 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
     let ly = ((0.75 + 0.25 * rng.gen::<f64>()) * lz.1 as f64).round() as i32;
     let lake = (|| loop {
         let result = build_room_cave(ls, &lc, rng);
-        if find_connected_components(&result, '#').len() == 1 { return result; }
+        if find_cardinal_components(&result, '#').len() == 1 { return result; }
     })();
 
     // Then, place the lake.
@@ -551,7 +559,7 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
                 if !can_plant_trees.contains(&map.get(p)) { continue; }
                 if berry_blue_noise.get(p) == 0.0 { continue; }
                 has_grove = true;
-                map.set(p, 'B');
+                map.set(p, '*');
             }
             grassiness = 0.0 + 0.2 * grassiness;
         } else if i < l2 {
@@ -583,7 +591,7 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
         ('~', f64::INFINITY),
         ('#', 64.0),
         (' ', 64.0),
-        ('B', 64.0),
+        ('*', 64.0),
         ('"', 16.0),
         ('W', 16.0),
         (',', 4.0),
@@ -632,9 +640,55 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
         prev = Some(p);
     }
 
+    // Split the final map into components that are reachable by walking.
+    let mapping: HashMap<_, _> =
+        [('"', '.'), ('=', '.'), ('R', '.'), ('S', '.')].into_iter().collect();
+    let mut copy = map.clone();
+    for x in 0..size.0 {
+        for y in 0..size.1 {
+            let p = Point(x, y);
+            if let Some(&c) = mapping.get(&copy.get(p)) { copy.set(p, c); }
+        }
+    }
+    let mut components = find_diagonal_components(&copy, '.');
+    if components.is_empty() { return None; }
+
+    // Connect all other components to the biggest walkable component.
+    components.sort_by_key(|x| x.len());
+    let biggest: HashSet<_> = components.pop().unwrap().into_iter().collect();
+    let target = |p: Point| { biggest.contains(&p) };
+    for component in &components {
+        let score = |p: Point| {
+            let noise_score = 8.0 * (1.0 - noise.get(p));
+            let tiles_score = *costs.get(&map.get(p)).unwrap_or(&0.0);
+            noise_score + tiles_score
+        };
+        let edges = |p: Point| {
+            let mut result: Vec<_> = (-1..=1).flat_map(
+                |x| (-1..=1).map(move |y| p + Point(x, y))).collect();
+            if map.get(p + Point(1, 0)) == 'W' && map.get(p + Point(2, 0)) == 'W' {
+                result.push(p + Point(3, 0));
+            }
+            if map.get(p + Point(-1, 0)) == 'W' && map.get(p + Point(-2, 0)) == 'W' {
+                result.push(p + Point(-3, 0));
+            }
+            result
+        };
+        let path = dijkstra(component, edges, score, target)?;
+        let mut prev: Option<Point> = None;
+        for &p in &path {
+            if let Some(q) = prev && (p.0 - q.0).abs() > 1 {
+                let (a, b) = (std::cmp::min(p.0, q.0), std::cmp::max(p.0, q.0));
+                for x in (a + 1)..b { map.set(Point(x, p.1), '='); }
+            }
+            if copy.get(p) != '.' { map.set(p, '.'); }
+            prev = Some(p);
+        }
+    }
+
     // Convert any undefined cells to walls, plus other similar replacements.
     let mapping: HashMap<_, _> =
-        [(' ', '#'), ('B', '*'), ('S', '.'), ('W', '~')].into_iter().collect();
+        [(' ', '#'), ('S', '.'), ('W', '~')].into_iter().collect();
     for x in 0..size.0 {
         for y in 0..size.1 {
             let p = Point(x, y);
