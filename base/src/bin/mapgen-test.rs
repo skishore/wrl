@@ -1,20 +1,8 @@
-use wrl_base::base::{HashMap, Point, RNG};
+use wrl_base::base::{Point, RNG};
+use wrl_base::game::Tile;
 use wrl_base::mapgen::mapgen;
 
-use lazy_static::lazy_static;
 use rand::SeedableRng;
-
-lazy_static! {
-    static ref GLYPHS: HashMap<char, (char, (i32, i32, i32))> = [
-        ('#', ('#', (32, 96, 0))),
-        ('.', ('.', (255, 255, 255))),
-        ('"', ('"', (64, 192, 0))),
-        ('~', ('~', (0, 128, 255))),
-        ('*', ('*', (192, 128, 0))),
-        ('=', ('=', (255, 128, 0))),
-        ('R', ('.', (255, 128, 0))),
-    ].into_iter().collect();
-}
 
 fn main() {
     let mut rng = RNG::from_entropy();
@@ -22,7 +10,7 @@ fn main() {
 
     for y in 0..map.size.1 {
         let mut line = String::default();
-        let mut last_color: Option<(i32, i32, i32)> = None;
+        let mut last_color: Option<(u32, u32, u32)> = None;
         for x in 0..map.size.0 {
             let c = map.get(Point(x, y));
             if c == ' ' {
@@ -30,13 +18,19 @@ fn main() {
                 continue;
             }
 
-            let &(glyph, color) = GLYPHS.get(&c).unwrap_or(&(c, (255, 255, 255)));
+            let (ch, color) = if let Some(x) = Tile::try_get(c) {
+                let (ch, fg) = (x.glyph.ch().0, x.glyph.fg().0);
+                (ch as u32, (fg >> 16, (fg >> 8) & 0xff, fg & 0xff))
+            } else {
+                let ch = c as u32 + (0xff00 - 0x20);
+                (ch, (0xff as u32, 0xff as u32, 0xff as u32))
+            };
             if Some(color) != last_color {
                 let (r, g, b) = color;
                 line.push_str(&format!("\x1b[38;2;{};{};{}m", r, g, b));
                 last_color = Some(color);
             }
-            line.push(char::from_u32(glyph as u32 + (0xff00 - 0x20)).unwrap());
+            line.push(char::from_u32(ch).unwrap());
         }
         println!("{}\x1b[0m", line);
     }

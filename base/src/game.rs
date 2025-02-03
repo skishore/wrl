@@ -84,6 +84,7 @@ static_assert_size!(Tile, 32);
 
 impl Tile {
     pub fn get(ch: char) -> &'static Tile { TILES.get(&ch).unwrap() }
+    pub fn try_get(ch: char) -> Option<&'static Tile> { TILES.get(&ch) }
 
     // Raw flags-based predicates.
     pub fn can_eat(&self) -> bool { self.flags & FLAG_CAN_EAT != 0 }
