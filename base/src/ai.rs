@@ -9,7 +9,8 @@ use rand_distr::num_traits::Pow;
 
 use crate::base::{LOS, Point, RNG, dirs, sample, weighted};
 use crate::entity::Entity;
-use crate::game::{NOISY_RADIUS, Action, Move, Tile, move_ready};
+use crate::game::{NOISY_RADIUS, Item, move_ready};
+use crate::game::{Action, EatAction, MoveAction};
 use crate::knowledge::{CellKnowledge, Knowledge, Timestamp};
 use crate::pathing::{AStar, BFS, DijkstraLength, DijkstraMap, Neighborhood, Status};
 
@@ -32,9 +33,10 @@ const ASSESS_TURNS_EXPLORE: i32 = 8;
 const ASSESS_TURNS_FLIGHT: i32 = 1;
 
 const MAX_ASSESS: i32 = 32;
-const MAX_HUNGER: i32 = 1024;
 const MAX_RESTED: i32 = 4096;
 const MAX_THIRST: i32 = 256;
+const MAX_HUNGER_HERBIVORE: i32 = 1024;
+const MAX_HUNGER_CARNIVORE: i32 = 2048;
 
 const MIN_FLIGHT_TURNS: i32 = 16;
 const MAX_FLIGHT_TURNS: i32 = 64;
@@ -155,7 +157,7 @@ impl CachedPath {
             }
         }
         let look = if target == pos { dir } else { target - pos };
-        Some(Action::Move(Move { look, step: next - pos, turns }))
+        Some(Action::Move(MoveAction { look, step: next - pos, turns }))
     }
 }
 
@@ -185,10 +187,11 @@ impl Debug for SharedAIState {
 }
 
 impl SharedAIState {
-    pub fn new(rng: &mut RNG) -> Self {
+    pub fn new(predator: bool, rng: &mut RNG) -> Self {
+        let max_hunger = if predator { MAX_HUNGER_CARNIVORE } else { MAX_HUNGER_HERBIVORE };
         Self {
             till_assess: rng.gen_range(0..MAX_ASSESS),
-            till_hunger: rng.gen_range(0..MAX_HUNGER),
+            till_hunger: rng.gen_range(0..max_hunger),
             till_rested: rng.gen_range(0..MAX_RESTED),
             till_thirst: rng.gen_range(0..MAX_THIRST),
             time: Default::default(),
@@ -201,7 +204,14 @@ impl SharedAIState {
         self.time - self.turn_times[min(self.turn_times.len() - 1, turn as usize)]
     }
 
-    fn update(&mut self, known: &Knowledge) {
+    fn update(&mut self, entity: &Entity, known: &Knowledge) {
+        if !entity.asleep {
+            self.till_assess = max(self.till_assess - 1, 0);
+            self.till_hunger = max(self.till_hunger - 1, 0);
+            self.till_thirst = max(self.till_thirst - 1, 0);
+            self.till_rested = max(self.till_rested - 1, 0);
+        }
+
         if self.turn_times.len() == TURN_TIMES_LIMIT { self.turn_times.pop_back(); }
         self.turn_times.push_front(self.time);
         self.time = known.time;
@@ -213,7 +223,7 @@ impl SharedAIState {
 // Strategy-based planning
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-enum Priority { Survive, Hunt, SatisfyNeeds, Explore, Skip }
+enum Priority { Survive, EatMeat, Hunt, SatisfyNeeds, Explore, Skip }
 
 struct Context<'a, 'b> {
     // Derived from the entity.
@@ -242,7 +252,7 @@ trait Strategy : Debug {
 // BasicNeedsStrategy
 
 #[derive(Debug, Eq, PartialEq)]
-enum BasicNeed { Eat, Drink }
+enum BasicNeed { EatMeat, EatPlants, Drink }
 
 #[derive(Debug)]
 struct BasicNeedsStrategy {
@@ -257,23 +267,43 @@ impl BasicNeedsStrategy {
         Self { last: None, need, path }
     }
 
-    fn satisfies_need(&self, tile: &Tile) -> bool {
+    fn action(&self, point: Point) -> Action {
         match self.need {
-            BasicNeed::Eat => tile.can_eat(),
-            BasicNeed::Drink => tile.can_drink(),
+            BasicNeed::EatMeat => Action::Eat(EatAction { point, item: Some(Item::Corpse) }),
+            BasicNeed::EatPlants => Action::Eat(EatAction { point, item: None }),
+            BasicNeed::Drink => Action::Drink(point),
+        }
+    }
+
+    fn priority(&self) -> Priority {
+        match self.need {
+            BasicNeed::EatMeat => Priority::EatMeat,
+            BasicNeed::EatPlants => Priority::SatisfyNeeds,
+            BasicNeed::Drink => Priority::SatisfyNeeds,
+        }
+    }
+
+    fn satisfies_need(&self, cell: Option<&CellKnowledge>) -> bool {
+        let Some(cell) = cell else { return false };
+        match self.need {
+            BasicNeed::EatMeat => cell.items.contains(&Item::Corpse),
+            BasicNeed::EatPlants => cell.tile.can_eat(),
+            BasicNeed::Drink => cell.tile.can_drink(),
         }
     }
 
     fn timeout(&self) -> i32 {
         match self.need {
-            BasicNeed::Eat => MAX_HUNGER,
+            BasicNeed::EatMeat => MAX_HUNGER_CARNIVORE,
+            BasicNeed::EatPlants => MAX_HUNGER_HERBIVORE,
             BasicNeed::Drink => MAX_THIRST,
         }
     }
 
     fn turns_left<'a>(&self, ctx: &'a mut Context) -> &'a mut i32 {
         match self.need {
-            BasicNeed::Eat => &mut ctx.shared.till_hunger,
+            BasicNeed::EatMeat => &mut ctx.shared.till_hunger,
+            BasicNeed::EatPlants => &mut ctx.shared.till_hunger,
             BasicNeed::Drink => &mut ctx.shared.till_thirst,
         }
     }
@@ -284,18 +314,15 @@ impl Strategy for BasicNeedsStrategy {
 
     fn bid(&mut self, ctx: &mut Context, last: bool) -> (Priority, i32) {
         // Update our state, which stores up to one tile that meets this need.
-        let asleep = ctx.entity.asleep;
-        if !asleep { *self.turns_left(ctx) = max(*self.turns_left(ctx) - 1, 0); }
         for cell in &ctx.observations {
-            if !self.satisfies_need(cell.tile) { continue; }
+            if !self.satisfies_need(Some(cell)) { continue; }
             self.last = Some(cell.point);
             break;
         }
 
         // Clear the cached path, if it's no longer good.
         let known = ctx.known;
-        let valid = |p: Point| known.get(p).tile().map(
-            |x| self.satisfies_need(x)).unwrap_or(false);
+        let valid = |p: Point| self.satisfies_need(known.get(p).get_cell());
         if !(self.path.check(ctx) && valid(self.path.steps[0])) { self.path.reset(); }
 
         // Compute a priority for satisfying this need.
@@ -304,7 +331,7 @@ impl Strategy for BasicNeedsStrategy {
         let cutoff = max(timeout / 2, 1);
         if turns_left >= cutoff { return (Priority::Skip, 0); }
         let tiebreaker = if last { -1 } else { 100 * turns_left / cutoff };
-        (Priority::SatisfyNeeds, tiebreaker)
+        (self.priority(), tiebreaker)
     }
 
     fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
@@ -312,16 +339,11 @@ impl Strategy for BasicNeedsStrategy {
         if let Some(x) = self.path.follow(ctx, turns) { return Some(x); }
 
         let Context { known, pos, .. } = *ctx;
-        let valid = |p: Point| known.get(p).tile().map(
-            |x| self.satisfies_need(x)).unwrap_or(false);
-        if valid(pos) {
-            *self.turns_left(ctx) = self.timeout();
-            return Some(Action::Idle);
-        }
-        for &dir in &dirs::ALL {
+        let valid = |p: Point| self.satisfies_need(known.get(p).get_cell());
+        for &dir in std::iter::chain(&[dirs::NONE], &dirs::ALL) {
             if valid(pos + dir) {
-                *self.turns_left(ctx) = self.timeout();
-                return Some(Action::Look(dir));
+                *self.turns_left(ctx) = max(*self.turns_left(ctx), self.timeout());
+                return Some(self.action(pos + dir));
             }
         }
 
@@ -329,8 +351,7 @@ impl Strategy for BasicNeedsStrategy {
 
         let n = &ctx.neighborhood;
         for &(point, _) in std::iter::chain(&n.blocked, &n.visited) {
-            let Some(cell) = known.get(point).tile() else { continue };
-            if !self.satisfies_need(cell) { continue; }
+            if !self.satisfies_need(known.get(point).get_cell()) { continue; }
 
             // Compute at most one path to a point in the neighborhood.
             let action = self.path.start(ctx, point, turns);
@@ -358,9 +379,6 @@ impl Strategy for RestStrategy {
     fn get_path(&self) -> &[Point] { &self.path.steps }
 
     fn bid(&mut self, ctx: &mut Context, last: bool) -> (Priority, i32) {
-        let asleep = ctx.entity.asleep;
-        if !asleep { ctx.shared.till_rested = max(ctx.shared.till_rested - 1, 0); }
-
         if !self.path.check(ctx) { self.path.reset(); }
 
         // Compute a priority for satisfying this need.
@@ -419,8 +437,6 @@ impl Strategy for AssessStrategy {
     fn get_path(&self) -> &[Point] { &[] }
 
     fn bid(&mut self, ctx: &mut Context, last: bool) -> (Priority, i32) {
-        ctx.shared.till_assess = max(ctx.shared.till_assess - 1, 0);
-
         if ctx.shared.till_assess > 0 { return (Priority::Skip, 0); }
         let priority = if last { Priority::SatisfyNeeds } else { Priority::Explore };
         let tiebreaker = if last { -1 } else { 0 };
@@ -531,6 +547,10 @@ impl Strategy for ChaseStrategy {
         if !ctx.entity.predator { return (Priority::Skip, 0); }
 
         let prev = self.target.take();
+
+        let turns_left = ctx.shared.till_hunger;
+        let cutoff = max(MAX_HUNGER_CARNIVORE / 2, 1);
+        if turns_left >= cutoff { return (Priority::Skip, 0); }
 
         let Context { known, pos, .. } = *ctx;
         let last_turn_age = ctx.shared.age_at_turn(1);
@@ -746,7 +766,7 @@ fn path_to_target<F: Fn(Point) -> bool>(
     let check = |p: Point| known.get(p).status();
     let step = |dir: Point| {
         let look = target - source - dir;
-        Action::Move(Move { step: dir, look, turns: 1. })
+        Action::Move(MoveAction { step: dir, look, turns: 1. })
     };
 
     // Given a non-empty list of "good" directions (each of which brings us
@@ -940,17 +960,19 @@ pub struct AIState {
 }
 
 impl AIState {
-    pub fn new(rng: &mut RNG) -> Self {
+    pub fn new(predator: bool, rng: &mut RNG) -> Self {
         let strategies: Vec<Box<dyn Strategy>> = vec![
             Box::new(ChaseStrategy::default()),
             Box::new(FlightStrategy::default()),
             Box::new(RestStrategy::default()),
-            Box::new(BasicNeedsStrategy::new(BasicNeed::Eat)),
+            Box::new(BasicNeedsStrategy::new(BasicNeed::EatMeat)),
+            Box::new(BasicNeedsStrategy::new(BasicNeed::EatPlants)),
             Box::new(BasicNeedsStrategy::new(BasicNeed::Drink)),
             Box::new(AssessStrategy::default()),
             Box::new(ExploreStrategy::default()),
         ];
-        Self { bids: vec![], strategies, shared: SharedAIState::new(rng), last: -1 }
+        let shared = SharedAIState::new(predator, rng);
+        Self { bids: vec![], strategies, shared, last: -1 }
     }
 
     pub fn get_path(&self) -> &[Point] {
@@ -966,7 +988,7 @@ impl AIState {
             if (self.shared.time - cell.last_seen) >= 0 { break; }
             observations.push(cell);
         }
-        self.shared.update(known);
+        self.shared.update(entity, known);
 
         // Step 1: build a context object with all strategies' mutable state.
         let shared = &mut self.shared;

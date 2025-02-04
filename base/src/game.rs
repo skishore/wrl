@@ -5,6 +5,7 @@ use std::mem::{replace, swap};
 
 use lazy_static::lazy_static;
 use rand::{Rng, SeedableRng};
+use thin_vec::{ThinVec, thin_vec};
 
 use crate::static_assert_size;
 use crate::ai::{AIEnv, AIState};
@@ -35,7 +36,7 @@ const WORLD_SIZE: i32 = 100;
 const NUM_PREDATORS: i32 = 2;
 const NUM_PREY: i32 = 18;
 
-const FULL_VIEW: bool = false;
+const FULL_VIEW: bool = true;
 const UI_MAP_SIZE: i32 = if FULL_VIEW { WORLD_SIZE } else { 2 * FOV_RADIUS_PC_ + 1 };
 
 const UI_DAMAGE_FLASH: i32 = 6;
@@ -118,7 +119,7 @@ lazy_static! {
             ('.', (FLAGS_NONE,         Glyph::wdfg('.', (255, 255, 255)), "grass")),
             ('"', (FLAG_LIMITS_VISION, Glyph::wdfg('"', (96, 192, 0)),    "tall grass")),
             ('~', (FLAGS_FRESH_WATER,  Glyph::wdfg('~', (0, 128, 255)),   "water")),
-            ('*', (FLAGS_BERRY_TREE,   Glyph::wdfg('*', (192, 128, 0)),   "a berry tree")),
+            ('B', (FLAGS_BERRY_TREE,   Glyph::wdfg('#', (192, 128, 0)),   "a berry tree")),
             ('=', (FLAGS_NONE,         Glyph::wdfg('=', (255, 128, 0)),   "a bridge")),
             ('R', (FLAGS_NONE,         Glyph::wdfg('.', (255, 128, 0)),   "a path")),
         ];
@@ -132,18 +133,21 @@ lazy_static! {
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Board
+// Item
 
-#[derive(Clone, Copy)]
-pub struct Cell {
-    pub eid: Option<EID>,
-    pub shadow: i32,
-    pub tile: &'static Tile,
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum Item { Berry, Corpse }
+
+fn show_item(item: &Item) -> Glyph {
+    match item {
+        Item::Berry => Glyph::wdfg('*', (192, 128, 0)),
+        Item::Corpse => Glyph::wdfg('%', (255, 255, 255)),
+    }
 }
-#[cfg(target_pointer_width = "32")]
-static_assert_size!(Cell, 16);
-#[cfg(target_pointer_width = "64")]
-static_assert_size!(Cell, 24);
+
+//////////////////////////////////////////////////////////////////////////////
+
+// Environment
 
 pub enum Light { None, Sun(Point) }
 
@@ -162,6 +166,22 @@ struct Rain {
     lightning: i32,
     thunder: i32,
 }
+
+//////////////////////////////////////////////////////////////////////////////
+
+// Board
+
+#[derive(Clone)]
+pub struct Cell {
+    pub eid: Option<EID>,
+    pub items: ThinVec<Item>,
+    pub shadow: i32,
+    pub tile: &'static Tile,
+}
+#[cfg(target_pointer_width = "32")]
+static_assert_size!(Cell, 20);
+#[cfg(target_pointer_width = "64")]
+static_assert_size!(Cell, 32);
 
 pub struct Board {
     active_entity_index: usize,
@@ -197,7 +217,7 @@ impl Board {
             }),
             Weather::None => None,
         };
-        let cell = Cell { eid: None, shadow: 0, tile: Tile::get('#') };
+        let cell = Cell { eid: None, items: thin_vec![], shadow: 0, tile: Tile::get('#') };
 
         let mut result = Self {
             active_entity_index: 0,
@@ -278,7 +298,21 @@ impl Board {
 
     pub fn get_tile(&self, p: Point) -> &'static Tile { self.get_cell(p).tile }
 
-    // Setters
+    // Item setters
+
+    fn add_item(&mut self, pos: Point, item: Item) {
+        let Some(cell) = self.map.entry_mut(pos) else { return };
+        cell.items.push(item);
+    }
+
+    fn remove_item(&mut self, pos: Point, item: Item) -> bool {
+        let Some(cell) = self.map.entry_mut(pos) else { return false };
+        let Some(index) = cell.items.iter().position(|&x| x == item) else { return false };
+        cell.items.remove(index);
+        true
+    }
+
+    // Entity setters
 
     fn add_entity(&mut self, args: &EntityArgs, rng: &mut RNG) -> EID {
         let pos = args.pos;
@@ -330,7 +364,7 @@ impl Board {
     }
 
     fn reset(&mut self, tile: &'static Tile) {
-        self.map.fill(Cell { eid: None, shadow: 0, tile });
+        self.map.fill(Cell { eid: None, items: thin_vec![], shadow: 0, tile });
         self.update_edge_shadows();
         self.entity_order.clear();
         self.active_entity_index = 0;
@@ -372,10 +406,14 @@ impl Board {
 
         let me = &self.entities[eid];
         let other = &self.entities[oid];
-        known.update_entity(me, other, self, /*seen=*/false, /*heard=*/heard);
+        known.update_entity(me, other, /*seen=*/false, /*heard=*/heard);
 
         swap(&mut known, &mut self.entities[eid].known);
         self.known = Some(known);
+    }
+
+    fn remove_known_entity(&mut self, eid: EID, oid: EID) {
+        self.entities[eid].known.remove_entity(oid);
     }
 
     // Environmental effects
@@ -442,15 +480,19 @@ impl Board {
 
 // Action
 
-pub struct Move { pub look: Point, pub step: Point, pub turns: f64 }
+pub struct EatAction { pub point: Point, pub item: Option<Item> }
+
+pub struct MoveAction { pub look: Point, pub step: Point, pub turns: f64 }
 
 pub enum Action {
     Idle,
     Rest,
     WaitForInput,
     Look(Point),
-    Move(Move),
+    Move(MoveAction),
     Attack(Point),
+    Drink(Point),
+    Eat(EatAction),
 }
 
 struct ActionResult {
@@ -502,7 +544,7 @@ fn plan(state: &mut State, eid: EID) -> Action {
     let entity = &mut state.board.entities[eid];
     let mut debug = None;
     let mut ai = state.ai.take().unwrap_or_else(
-        || Box::new(AIState::new(&mut state.rng)));
+        || Box::new(AIState::new(false, &mut state.rng)));
     swap(&mut debug, &mut entity.debug);
     swap(&mut ai, &mut entity.ai);
 
@@ -529,7 +571,26 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             state.board.entities[eid].dir = dir;
             ActionResult::success()
         }
-        Action::Move(Move { look, step, turns }) => {
+        Action::Drink(point) => {
+            let entity = &mut state.board.entities[eid];
+            if (entity.pos - point).len_l1() > 1 { return ActionResult::failure(); }
+
+            if entity.pos != point { entity.dir = point - entity.pos; }
+            let okay = state.board.get_cell(point).tile.can_drink();
+            if okay { ActionResult::success() } else { ActionResult::failure() }
+        }
+        Action::Eat(EatAction { point, item }) => {
+            let entity = &mut state.board.entities[eid];
+            if (entity.pos - point).len_l1() > 1 { return ActionResult::failure(); }
+
+            if entity.pos != point { entity.dir = point - entity.pos; }
+            let okay = match item {
+                Some(x) => state.board.remove_item(point, x),
+                None => state.board.get_cell(point).tile.can_eat(),
+            };
+            if okay { ActionResult::success() } else { ActionResult::failure() }
+        }
+        Action::Move(MoveAction { look, step, turns }) => {
             let entity = &mut state.board.entities[eid];
             if look != dirs::NONE { entity.dir = look; }
             if step == dirs::NONE { return ActionResult::success_turns(turns); }
@@ -607,21 +668,15 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 let cb = move |board: &mut Board, _: &mut RNG| {
                     let Some(other) = board.entities.get_mut(oid) else { return; };
 
-                    // Player scores a critical hit if they're unseen.
-                    let _damage = if other.player {
-                        1
-                    } else if other.known.get(source).visible() {
-                        0
-                    } else {
-                        other.cur_hp
-                    };
-                    let damage = 0;
-
+                    let damage = 1;
                     if other.cur_hp > damage {
                         other.cur_hp -= damage;
                         board.update_known_entity(oid, eid, /*heard=*/true);
                     } else {
+                        let pos = other.pos;
                         board.remove_entity(oid);
+                        board.add_item(pos, Item::Corpse);
+                        board.remove_known_entity(eid, oid);
                     }
                 };
                 board.add_effect(apply_damage(board, target, Box::new(cb)), rng);
@@ -709,7 +764,7 @@ fn process_input(state: &mut State, input: Input) {
     if let Some(x) = cell.entity() && x.rival {
         state.input = Action::Attack(player.pos + dir);
     } else {
-        state.input = Action::Move(Move { look: dir, step: dir, turns: 1. });
+        state.input = Action::Move(MoveAction { look: dir, step: dir, turns: 1. });
     }
 }
 
@@ -857,7 +912,7 @@ impl State {
 
         let inputs = vec![];
         let moves = Default::default();
-        let ai = Some(Box::new(AIState::new(&mut rng)));
+        let ai = Some(Box::new(AIState::new(false, &mut rng)));
         let turn_times = [Timestamp::default()].into_iter().collect();
         Self { board, frame: 0, input, inputs, player, pov: None, rng, ai, moves, turn_times }
     }
@@ -1021,12 +1076,18 @@ impl State {
             })();
             if age_in_turns >= max(UI_MAP_MEMORY, 1) { return unseen; }
 
-            let other = if cell.can_see_entity_at() { cell.entity() } else { None };
+            let see_entity = cell.can_see_entity_at();
             let obscured = tile.limits_vision();
             let shadowed = cell.shade();
 
-            let glyph = if let Some(x) = other { x.glyph } else { tile.glyph };
-            let mut color = if obscured { tile.glyph.fg() } else { glyph.fg() };
+            let glyph = if see_entity && let Some(x) = cell.entity() {
+                if obscured { x.glyph.with_fg(tile.glyph.fg()) } else { x.glyph }
+            } else if let Some(x) = cell.items().last() {
+                show_item(x)
+            } else {
+                tile.glyph
+            };
+            let mut color = glyph.fg();
 
             if !cell.visible() {
                 let limit = max(UI_MAP_MEMORY, 1) as f64;

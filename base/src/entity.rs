@@ -11,7 +11,7 @@ use crate::knowledge::Knowledge;
 //////////////////////////////////////////////////////////////////////////////
 
 const ATTACK_RANGE: i32 = 8;
-const MAX_HP: i32 = 8;
+const MAX_HP: i32 = 3;
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -78,12 +78,11 @@ pub struct EntityMap {
 
 impl EntityMap {
     pub fn add(&mut self, args: &EntityArgs, rng: &mut RNG) -> EID {
-        let dir = *sample(&dirs::ALL, rng);
         let key = self.map.insert_with_key(|x| Entity {
             eid: to_eid(x),
             glyph: args.glyph,
             known: Default::default(),
-            ai: Box::new(AIState::new(rng)),
+            ai: Box::new(AIState::new(args.predator, rng)),
             debug: Some(Box::default()),
             asleep: false,
             player: args.player,
@@ -95,7 +94,7 @@ impl EntityMap {
             range: ATTACK_RANGE,
             speed: args.speed,
             pos: args.pos,
-            dir,
+            dir: *sample(&dirs::ALL, rng),
         });
         to_eid(key)
     }

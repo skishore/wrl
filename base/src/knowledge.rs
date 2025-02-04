@@ -1,10 +1,12 @@
 use std::cmp::max;
 use std::f64::consts::TAU;
 
+use thin_vec::{ThinVec, thin_vec};
+
 use crate::static_assert_size;
 use crate::base::{FOV, FOVEndpoint, FOVNode, Glyph, HashMap, Matrix, Point};
 use crate::entity::{EID, Entity};
-use crate::game::{Board, Light, Tile};
+use crate::game::{Board, Item, Light, Tile};
 use crate::list::{Handle, List};
 use crate::pathing::Status;
 
@@ -149,20 +151,21 @@ impl Vision {
 type CellHandle = Handle<CellKnowledge>;
 type EntityHandle = Handle<EntityKnowledge>;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct CellKnowledge {
     handle: Option<EntityHandle>,
     pub last_see_entity_at: Timestamp,
     pub last_seen: Timestamp,
+    pub items: ThinVec<Item>,
     pub point: Point,
     pub shade: bool,
     pub tile: &'static Tile,
     visibility: i32,
 }
 #[cfg(target_pointer_width = "32")]
-static_assert_size!(CellKnowledge, 32);
+static_assert_size!(CellKnowledge, 36);
 #[cfg(target_pointer_width = "64")]
-static_assert_size!(CellKnowledge, 40);
+static_assert_size!(CellKnowledge, 48);
 
 pub struct EntityKnowledge {
     pub eid: EID,
@@ -191,9 +194,16 @@ pub struct Knowledge {
 
 impl CellKnowledge {
     fn new(point: Point, tile: &'static Tile) -> Self {
-        let (handle, shade, visibility) = (None, false, -1);
-        let (last_seen, last_see_entity_at) = (Default::default(), Default::default());
-        Self { handle, last_seen, last_see_entity_at, point, shade, tile, visibility }
+        Self {
+            handle: None,
+            items: thin_vec![],
+            last_seen: Default::default(),
+            last_see_entity_at: Default::default(),
+            point,
+            shade: false,
+            tile,
+            visibility: -1,
+        }
     }
 }
 
@@ -234,7 +244,7 @@ impl Knowledge {
             assert!(visibility >= 0);
 
             let cell = board.get_cell(point);
-            let (eid, tile) = (cell.eid, cell.tile);
+            let (eid, items, tile) = (cell.eid, &cell.items, cell.tile);
 
             let nearby = (point - pos).len_l1() <= 1;
             if dark && !nearby { continue; }
@@ -246,7 +256,7 @@ impl Knowledge {
                 if !see_entity_at { return None; }
                 let other = board.get_entity(eid?)?;
                 let (seen, heard) = (true, false);
-                Some(self.update_entity(me, other, board, seen, heard))
+                Some(self.update_entity(me, other, seen, heard))
             })();
 
             let cell_handle = *self.cell_by_point.entry(point).and_modify(|&mut x| {
@@ -262,6 +272,10 @@ impl Knowledge {
             cell.shade = shade;
             cell.tile = tile;
 
+            // Clone items, but reuse the existing allocation, if any.
+            cell.items.clear();
+            for &x in items { cell.items.push(x); }
+
             // Only update the cell's entity if we can see entities there.
             if see_entity_at {
                 cell.last_see_entity_at = time;
@@ -276,7 +290,7 @@ impl Knowledge {
     }
 
     pub fn update_entity(&mut self, entity: &Entity, other: &Entity,
-                         _: &Board, seen: bool, heard: bool) -> EntityHandle {
+                         seen: bool, heard: bool) -> EntityHandle {
         let handle = *self.entity_by_eid.entry(other.eid).and_modify(|&mut x| {
             self.entities.move_to_front(x);
             let existing = &mut self.entities[x];
@@ -323,6 +337,17 @@ impl Knowledge {
         entry.asleep = other.asleep;
 
         handle
+    }
+
+    pub fn remove_entity(&mut self, oid: EID) {
+        let Some(handle) = self.entity_by_eid.remove(&oid) else { return };
+        let EntityKnowledge { moved, pos, .. } = self.entities.remove(handle);
+        if !moved {
+            let cell_handle = self.cell_by_point.get(&pos);
+            let cell = &mut self.cells[*cell_handle.unwrap()];
+            assert!(cell.handle == Some(handle));
+            cell.handle = None;
+        }
     }
 
     // Private helpers
@@ -388,6 +413,8 @@ pub struct CellResult<'a> {
 impl<'a> CellResult<'a> {
     // Field lookups
 
+    pub fn get_cell(&self) -> Option<&CellKnowledge> { self.cell }
+
     pub fn time_since_seen(&self) -> i32 {
         let time = self.cell.map(|x| x.last_seen).unwrap_or_default();
         if time == Default::default() { std::i32::MAX } else { self.root.time - time }
@@ -396,6 +423,10 @@ impl<'a> CellResult<'a> {
     pub fn time_since_entity_visible(&self) -> i32 {
         let time = self.cell.map(|x| x.last_see_entity_at).unwrap_or_default();
         if time == Default::default() { std::i32::MAX } else { self.root.time - time }
+    }
+
+    pub fn items(&self) -> &[Item] {
+        self.cell.map(|x| x.items.as_slice()).unwrap_or(&[])
     }
 
     pub fn shade(&self) -> bool {

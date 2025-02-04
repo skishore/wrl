@@ -559,7 +559,7 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
                 if !can_plant_trees.contains(&map.get(p)) { continue; }
                 if berry_blue_noise.get(p) == 0.0 { continue; }
                 has_grove = true;
-                map.set(p, '*');
+                map.set(p, 'B');
             }
             grassiness = 0.0 + 0.2 * grassiness;
         } else if i < l2 {
@@ -591,7 +591,7 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
         ('~', f64::INFINITY),
         ('#', 64.0),
         (' ', 64.0),
-        ('*', 64.0),
+        ('B', 64.0),
         ('"', 16.0),
         ('W', 16.0),
         (',', 4.0),
