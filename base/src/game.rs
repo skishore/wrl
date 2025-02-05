@@ -248,7 +248,16 @@ impl Board {
         self._execute_effect_callbacks(rng);
     }
 
-    fn advance_effect(&mut self, rng: &mut RNG) -> bool {
+    fn advance_effect(&mut self, pov: Option<EID>, rng: &mut RNG) -> bool {
+        let mut visible = self._pov_sees_effect(pov);
+        while self._advance_one_frame(rng) {
+            visible = visible || self._pov_sees_effect(pov);
+            if visible { return true; }
+        }
+        false
+    }
+
+    fn _advance_one_frame(&mut self, rng: &mut RNG) -> bool {
         if self._effect.frames.is_empty() {
             assert!(self._effect.events.is_empty());
             return false;
@@ -272,6 +281,21 @@ impl Board {
             Event::Other { .. } => (),
         }
         true
+    }
+
+    fn _pov_sees_effect(&self, pov: Option<EID>) -> bool {
+        if self._effect.frames.is_empty() { return false; }
+
+        let eid = (|| {
+            if let Some(x) = pov && self.entities.has(x) { return x; }
+            let result = self.entity_order[0];
+            assert!(self.entities[result].player);
+            result
+        })();
+
+        let frame = &self._effect.frames[0];
+        let known = &self.entities[eid].known;
+        frame.iter().any(|y| known.get(y.point).visible())
     }
 
     // Getters
@@ -349,9 +373,13 @@ impl Board {
         entity.cur_hp = 0;
         if entity.player { return; }
 
-        // Remove the entity from the map.
+        // Remove the entity from the spatial map.
         let existing = self.map.entry_mut(entity.pos).unwrap().eid.take();
         assert!(existing == Some(eid));
+
+        // Remove the entity from the entities SlotMap.
+        let okay = self.entities.remove(eid).is_some();
+        assert!(okay);
 
         // Remove the entity from the entity_order list.
         let index = self.entity_order.iter().position(|&x| x == eid).unwrap();
@@ -368,6 +396,7 @@ impl Board {
         self.update_edge_shadows();
         self.entity_order.clear();
         self.active_entity_index = 0;
+        self.entities.clear();
     }
 
     fn set_tile(&mut self, point: Point, tile: &'static Tile) {
@@ -810,6 +839,13 @@ fn process_input(state: &mut State, input: Input) {
     }
 }
 
+fn update_pov_entities(state: &mut State) {
+    state.board.update_known(state.player);
+    if let Some(x) = state.pov && state.board.entities.has(x) {
+        state.board.update_known(x);
+    }
+}
+
 fn update_state(state: &mut State) {
     state.frame += 1;
     let pos = state.get_player().pos;
@@ -818,8 +854,8 @@ fn update_state(state: &mut State) {
     for x in state.moves.values_mut() { x.frame += 1; }
     state.moves.retain(|_, v| v.frame < v.limit);
 
-    if state.board.advance_effect(&mut state.rng) {
-        state.board.update_known(state.player);
+    if state.board.advance_effect(state.pov, &mut state.rng) {
+        update_pov_entities(state);
         return;
     }
 
@@ -874,12 +910,7 @@ fn update_state(state: &mut State) {
         if let Some(x) = state.board.entities.get_mut(eid) { drain(x, &result); }
     }
 
-    if update {
-        state.board.update_known(state.player);
-        if let Some(x) = state.pov && state.board.entity_order.contains(&x) {
-            state.board.update_known(x);
-        }
-    }
+    if update { update_pov_entities(state); }
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -1156,7 +1187,7 @@ impl State {
             let Point(x, y) = entity.pos - offset;
             slice.set(Point(2 * x, y), Glyph::wide('?'));
         }
-        if entity.player {
+        if player {
             for (&k, v) in &self.moves {
                 let Point(x, y) = k - offset;
                 let p = Point(2 * x, y);
@@ -1171,7 +1202,7 @@ impl State {
         // Render any animation that's currently running.
         if let Some(frame) = frame {
             for &effect::Particle { point, glyph } in frame {
-                if player && !known.get(point).visible() { continue; }
+                if !known.get(point).visible() { continue; }
                 let Point(x, y) = point - offset;
                 slice.set(Point(2 * x, y), glyph);
             }

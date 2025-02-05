@@ -99,13 +99,15 @@ impl EntityMap {
         to_eid(key)
     }
 
-    pub fn get(&self, eid: EID) -> Option<&Entity> {
-        self.map.get(to_key(eid))
-    }
+    pub fn clear(&mut self) { self.map.clear(); }
 
-    pub fn get_mut(&mut self, eid: EID) -> Option<&mut Entity> {
-        self.map.get_mut(to_key(eid))
-    }
+    pub fn get(&self, eid: EID) -> Option<&Entity> { self.map.get(to_key(eid)) }
+
+    pub fn get_mut(&mut self, eid: EID) -> Option<&mut Entity> { self.map.get_mut(to_key(eid)) }
+
+    pub fn has(&self, eid: EID) -> bool { self.map.contains_key(to_key(eid)) }
+
+    pub fn remove(&mut self, eid: EID) -> Option<Entity> { self.map.remove(to_key(eid)) }
 }
 
 impl Index<EID> for EntityMap {
