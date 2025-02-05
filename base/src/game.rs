@@ -577,18 +577,33 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
             if entity.pos != point { entity.dir = point - entity.pos; }
             let okay = state.board.get_cell(point).tile.can_drink();
-            if okay { ActionResult::success() } else { ActionResult::failure() }
+            if !okay { return ActionResult::failure(); }
+
+            let board = &mut state.board;
+            let cb = Box::new(|_: &mut Board, _: &mut RNG| {});
+            board.add_effect(apply_flash(board, point, 0x004, cb), &mut state.rng);
+            ActionResult::success()
         }
         Action::Eat(EatAction { point, item }) => {
             let entity = &mut state.board.entities[eid];
             if (entity.pos - point).len_l1() > 1 { return ActionResult::failure(); }
 
             if entity.pos != point { entity.dir = point - entity.pos; }
+            let cell = state.board.get_cell(point);
             let okay = match item {
-                Some(x) => state.board.remove_item(point, x),
-                None => state.board.get_cell(point).tile.can_eat(),
+                Some(x) => cell.items.iter().find(|&&y| y == x).is_some(),
+                None => cell.tile.can_eat(),
             };
-            if okay { ActionResult::success() } else { ActionResult::failure() }
+            if !okay { return ActionResult::failure(); }
+
+            let board = &mut state.board;
+            let color = if item.is_some() { 0x400 } else { 0x440 };
+            let cb = Box::new(move |board: &mut Board, _: &mut RNG| {
+                let Some(item) = item else { return };
+                board.remove_item(point, item);
+            });
+            board.add_effect(apply_flash(board, point, color, cb), &mut state.rng);
+            ActionResult::success()
         }
         Action::Move(MoveAction { look, step, turns }) => {
             let entity = &mut state.board.entities[eid];
@@ -693,8 +708,35 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 //////////////////////////////////////////////////////////////////////////////
 
 // Animation
+//
+// TODO(skishore): All this code is WRONG! It may reveal things (e.g. hidden
+// entities) to the player that they should not be able to see.
+//
+// To fix these bugs, we need to audit all usage of Board getters in Effects,
+// and instead of directly overwriting cells, we need to apply updates (e.g.
+// moving Entities) and use the player's FOV resolve what they can see.
+//
+// We also need to figure out if items are "hidden" the same way entities are.
 
 type CB = Box<dyn Fn(&mut Board, &mut RNG)>;
+
+fn apply_flash<T: Into<Color>>(board: &Board, target: Point, color: T, callback: CB) -> Effect {
+    let cell = board.get_cell(target);
+    let glyph = if let Some(x) = cell.eid {
+        board.entities[x].glyph
+    } else if let Some(x) = cell.items.last() {
+        show_item(x)
+    } else {
+        cell.tile.glyph
+    };
+
+    let flash = glyph.with_fg(Color::black()).with_bg(color.into());
+    let particle = effect::Particle { glyph: flash, point: target };
+    let mut effect = Effect::constant(particle, UI_DAMAGE_FLASH);
+    let frame = effect.frames.len() as i32;
+    effect.add_event(Event::Callback { frame, callback });
+    effect
+}
 
 fn apply_damage(board: &Board, target: Point, callback: CB) -> Effect {
     let eid = board.get_cell(target).eid;
