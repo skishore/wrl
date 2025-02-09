@@ -454,13 +454,17 @@ impl FOV {
         result.nodes.push(FOVNode::default());
         for x in -radius..=radius {
             for y in -radius..=radius {
-                let pos = Point(x, y);
-                if pos == Point::default() { continue; }
-                let inv_l2 = 1. / (pos.len_l2_squared() as f64).sqrt();
-                let endpoint = FOVEndpoint { pos, inv_l2  };
-                result.update(0, &LOS(Point::default(), pos), &endpoint, 0);
+                result.add_ray(Point(x, y));
             }
         }
+        //for i in 0..=radius {
+        //    for j in 0..8 {
+        //        let (xa, ya) = if j & 1 == 0 { (radius, i) } else { (i, radius) };
+        //        let x = xa * if j & 2 == 0 { 1 } else { -1 };
+        //        let y = ya * if j & 4 == 0 { 1 } else { -1 };
+        //        result.add_ray(Point(x, y));
+        //    }
+        //}
         result
     }
 
@@ -478,7 +482,14 @@ impl FOV {
         self.cache.clear();
     }
 
-    fn update(&mut self, node: usize, los: &[Point], endpoint: &FOVEndpoint, i: usize) {
+    fn add_ray(&mut self, target: Point) {
+        if target == Point::default() { return; }
+        let inv_l2 = 1. / (target.len_l2_squared() as f64).sqrt();
+        let endpoint = FOVEndpoint { pos: target, inv_l2  };
+        self.add_trie_nodes(0, &LOS(Point::default(), target), &endpoint, 0);
+    }
+
+    fn add_trie_nodes(&mut self, node: usize, los: &[Point], endpoint: &FOVEndpoint, i: usize) {
         let prev = los[i];
         assert!(self.nodes[node].next == prev);
         if prev != Point::default() { self.nodes[node].ends.push(*endpoint); }
@@ -496,6 +507,6 @@ impl FOV {
             self.nodes[node].children.push(result as i32);
             result
         })();
-        self.update(child, los, endpoint, i + 1);
+        self.add_trie_nodes(child, los, endpoint, i + 1);
     }
 }

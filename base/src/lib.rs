@@ -8,6 +8,7 @@ mod entity;
 mod knowledge;
 mod list;
 mod pathing;
+mod shadowcast;
 
 pub mod base;
 pub mod game;
