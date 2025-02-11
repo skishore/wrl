@@ -4,28 +4,35 @@ use crate::base::{Matrix, Point};
 
 //////////////////////////////////////////////////////////////////////////////
 
+// Invariant (enforced by new): den > 0
 #[derive(Copy, Clone, Debug)]
-struct Rational {
-    num: i32,
-    den: i32,  // Always positive
-}
+struct Slope { num: i32, den: i32 }
 
-impl Rational {
+impl Slope {
     fn new(num: i32, den: i32) -> Self {
         debug_assert!(den > 0);
-        Rational { num, den }
+        Self { num, den }
     }
 }
 
-impl PartialOrd for Rational {
+impl Eq for Slope {}
+
+impl Ord for Slope {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // a/b < c/d  <=>  ad < bc  (valid since b, d > 0)
+        (self.num * other.den).cmp(&(other.num * self.den))
+    }
+}
+
+impl PartialOrd for Slope {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        // a/b < c/d  <=>  ad < bc  (valid since b,d > 0)
-        Some((self.num * other.den).cmp(&(other.num * self.den)))
+        Some(self.cmp(other))
     }
 }
 
-impl PartialEq for Rational {
+impl PartialEq for Slope {
     fn eq(&self, other: &Self) -> bool {
+        // a/b == c/d <=> ad == bc (valid since b, d != 0)
         self.num * other.den == other.num * self.den
     }
 }
@@ -34,17 +41,17 @@ impl PartialEq for Rational {
 
 type Transform = [[i32; 2]; 2];
 
-const TRANSFORMS: [Transform; 8] = [
-    [[ 1,  0], [ 0,  1]], [[ 0,  1], [ 1,  0]],
-    [[ 0,  1], [-1,  0]], [[-1,  0], [ 0,  1]],
-    [[-1,  0], [ 0, -1]], [[ 0, -1], [-1,  0]],
-    [[ 0, -1], [ 1,  0]], [[ 1,  0], [ 0, -1]],
+const TRANSFORMS: [Transform; 4] = [
+    [[ 1,  0], [ 0,  1]],
+    [[ 0,  1], [-1,  0]],
+    [[-1,  0], [ 0, -1]],
+    [[ 0, -1], [ 1,  0]],
 ];
 
 #[derive(Debug)]
 struct SlopeRange {
-    min: Rational,
-    max: Rational,
+    min: Slope,
+    max: Slope,
     transform: &'static Transform,
 }
 
@@ -54,12 +61,17 @@ struct SlopeRanges {
     items: Vec<SlopeRange>,
 }
 
+fn is_symmetric(range: &SlopeRange, depth: i32, width: i32) -> bool {
+    let SlopeRange { min, max, .. } = *range;
+    width * min.den >= depth * min.num && width * max.den <= depth * max.num
+}
+
 fn fov(eye: Point, map: &Matrix<char>) -> Matrix<bool> {
     let mut result = Matrix::new(map.size, false);
     result.set(eye, true);
 
     let seeds = TRANSFORMS.iter().map(|x| {
-        let (min, max) = (Rational::new(0, 1), Rational::new(1, 1));
+        let (min, max) = (Slope::new(-1, 1), Slope::new(1, 1));
         SlopeRange { min, max, transform: x }
     }).collect();
     let mut prev = SlopeRanges { depth: 1, items: seeds };
@@ -67,36 +79,36 @@ fn fov(eye: Point, map: &Matrix<char>) -> Matrix<bool> {
 
     while !prev.items.is_empty() {
         let depth = prev.depth;
-        let start_depth = 2 * depth - 1;
-        let limit_depth = 2 * depth + 1;
 
         for range in &prev.items {
-            let mut prev_visible = true;
+            let mut prev_blocked = None;
             let [[a00, a01], [a10, a11]] = range.transform;
             let SlopeRange { mut min, max, transform } = *range;
-            let start = (min.den + min.num * start_depth - 0) / (min.den * 2);
-            let limit = (max.den + max.num * limit_depth - 1) / (max.den * 2);
+            let start = (2 * min.num * depth + min.den).div_floor(2 * min.den);
+            let limit = (2 * max.num * depth - max.den).div_ceil(2 * max.den);
 
             for width in start..=limit {
                 let (x, y) = (depth, width);
                 let point = Point(x * a00 + y * a10, x * a01 + y * a11) + eye;
-                result.set(point, true);
+                let next_blocked = map.get(point) == '#';
 
-                let next_visible = map.get(point) == '.';
-                if next_visible != prev_visible {
-                    // Angle depends on if we're getting more visible or less.
-                    let den = if prev_visible { limit_depth } else { start_depth };
-                    let slope = Rational::new(2 * width - 1, den);
-                    if prev_visible && min < slope {
+                if next_blocked || is_symmetric(range, depth, width) {
+                    result.set(point, true);
+                }
+
+                if let Some(prev_blocked) = prev_blocked {
+                    let slope = Slope::new(2 * width - 1, 2 * depth);
+                    if prev_blocked && !next_blocked {
+                        min = slope;
+                    } else if !prev_blocked && next_blocked {
                         next.items.push(SlopeRange { min, max: slope, transform });
                     }
-                    min = slope;
                 }
+                prev_blocked = Some(next_blocked);
+            }
 
-                if width == limit && next_visible && min < max {
-                    next.items.push(SlopeRange { min, max, transform });
-                }
-                prev_visible = next_visible;
+            if let Some(false) = prev_blocked {
+                next.items.push(SlopeRange { min, max, transform });
             }
         }
 
@@ -240,6 +252,7 @@ mod tests {
     fn test_gaps() {
         test_fov(&[
             "..........#",
+            "..........#",
             "......#...#",
             "..##..#...#",
             "..........#",
@@ -249,12 +262,13 @@ mod tests {
             "..........#",
             "####..##..#",
         ], &[
-            "%%%%...%%%%",
+            "%%%%%...%%%",
+            ".%%%...%%%%",
             ".%%%..#%%.#",
             "..##..#...#",
             "..........#",
             "...@......#",
-            "......#...#",
+            "......#%%.#",
             "##....#%%%%",
             "%......%%%%",
             "####..##%%%",
@@ -325,20 +339,20 @@ mod tests {
             "...............",
         ], &[
             "%%%%%%%%%%%%%%%",
-            "%##########%%#%",
+            "%##########%##%",
             "%#........%%.#%",
             "%#........%..#%",
             "%#.......#...#%",
             "%%%..........#%",
-            "%#..#........#%",
+            "%#%%#........#%",
             "%#.....@.....#%",
             "%#...........#%",
             "%#...........#%",
             "%#.......#...#%",
             "%#....#...%..#%",
-            "%#........%%.#%",
-            "%#.........%%#%",
-            "%#...%.....%%%%",
+            "%#....%...%%.#%",
+            "%#...%%....%.#%",
+            "%#...%%....%%#%",
             "%####%######%%%",
             "%%%%%%%%%%%%%%%",
         ]);
