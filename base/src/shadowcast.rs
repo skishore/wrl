@@ -61,11 +61,6 @@ struct SlopeRanges {
     items: Vec<SlopeRange>,
 }
 
-fn is_symmetric(range: &SlopeRange, depth: i32, width: i32) -> bool {
-    let SlopeRange { min, max, .. } = *range;
-    width * min.den >= depth * min.num && width * max.den <= depth * max.num
-}
-
 fn fov(eye: Point, map: &Matrix<char>) -> Matrix<bool> {
     let mut result = Matrix::new(map.size, false);
     result.set(eye, true);
@@ -90,12 +85,9 @@ fn fov(eye: Point, map: &Matrix<char>) -> Matrix<bool> {
             for width in start..=limit {
                 let (x, y) = (depth, width);
                 let point = Point(x * a00 + y * a10, x * a01 + y * a11) + eye;
+                result.set(point, true);
+
                 let next_blocked = map.get(point) == '#';
-
-                if next_blocked || is_symmetric(range, depth, width) {
-                    result.set(point, true);
-                }
-
                 if let Some(prev_blocked) = prev_blocked {
                     let slope = Slope::new(2 * width - 1, 2 * depth);
                     if prev_blocked && !next_blocked {
@@ -253,6 +245,7 @@ mod tests {
         test_fov(&[
             "..........#",
             "..........#",
+            "..........#",
             "......#...#",
             "..##..#...#",
             "..........#",
@@ -262,16 +255,17 @@ mod tests {
             "..........#",
             "####..##..#",
         ], &[
-            "%%%%%...%%%",
+            "%%%%%....%%",
+            "%%%%....%%%",
             ".%%%...%%%%",
-            ".%%%..#%%.#",
+            "..%%..#%%.#",
             "..##..#...#",
             "..........#",
             "...@......#",
-            "......#%%.#",
+            "......#...#",
             "##....#%%%%",
-            "%......%%%%",
-            "####..##%%%",
+            "%.......%%%",
+            "####..##.%%",
         ]);
     }
 
@@ -340,19 +334,19 @@ mod tests {
         ], &[
             "%%%%%%%%%%%%%%%",
             "%##########%##%",
-            "%#........%%.#%",
             "%#........%..#%",
+            "%#...........#%",
             "%#.......#...#%",
             "%%%..........#%",
-            "%#%%#........#%",
+            "%#..#........#%",
             "%#.....@.....#%",
             "%#...........#%",
             "%#...........#%",
             "%#.......#...#%",
-            "%#....#...%..#%",
-            "%#....%...%%.#%",
-            "%#...%%....%.#%",
-            "%#...%%....%%#%",
+            "%#....#......#%",
+            "%#........%..#%",
+            "%#.........%.#%",
+            "%#...%.....%%#%",
             "%####%######%%%",
             "%%%%%%%%%%%%%%%",
         ]);
