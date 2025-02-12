@@ -61,7 +61,8 @@ struct SlopeRanges {
     items: Vec<SlopeRange>,
 }
 
-fn fov(eye: Point, map: &Matrix<char>) -> Matrix<bool> {
+fn fov(eye: Point, map: &Matrix<char>, radius: i32) -> Matrix<bool> {
+    let r2 = radius * radius + radius;
     let mut result = Matrix::new(map.size, false);
     result.set(eye, true);
 
@@ -84,10 +85,11 @@ fn fov(eye: Point, map: &Matrix<char>) -> Matrix<bool> {
 
             for width in start..=limit {
                 let (x, y) = (depth, width);
+                let nearby = x * x + y * y <= r2;
                 let point = Point(x * a00 + y * a10, x * a01 + y * a11) + eye;
-                result.set(point, true);
+                if nearby { result.set(point, true); }
 
-                let next_blocked = map.get(point) == '#';
+                let next_blocked = !nearby || map.get(point) == '#';
                 if let Some(prev_blocked) = prev_blocked {
                     let slope = Slope::new(2 * width - 1, 2 * depth);
                     if prev_blocked && !next_blocked {
@@ -143,7 +145,7 @@ mod tests {
 
         // Get the FOV result and compare it to the expected value.
         let eye = eye.unwrap();
-        let visible = fov(eye, &map);
+        let visible = fov(eye, &map, map.size.0 + map.size.1);
         let result = show_fov(eye, &map, &visible);
         if expected != result {
             panic!("\nExpected:\n&{:#?}\n\nGot:\n&{:#?}", expected, result);
@@ -356,7 +358,7 @@ mod tests {
     fn bench_fov_shadowcast(b: &mut test::Bencher) {
         let (eye, map) = generate_fov_input();
         b.iter(|| {
-            let visible = fov(eye, &map);
+            let visible = fov(eye, &map, eye.0);
             debug_fov_output(eye, &map, &visible);
         });
     }
