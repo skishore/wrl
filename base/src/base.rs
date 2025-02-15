@@ -457,14 +457,6 @@ impl FOV {
                 result.add_ray(Point(x, y));
             }
         }
-        //for i in 0..=radius {
-        //    for j in 0..8 {
-        //        let (xa, ya) = if j & 1 == 0 { (radius, i) } else { (i, radius) };
-        //        let x = xa * if j & 2 == 0 { 1 } else { -1 };
-        //        let y = ya * if j & 4 == 0 { 1 } else { -1 };
-        //        result.add_ray(Point(x, y));
-        //    }
-        //}
         result
     }
 
