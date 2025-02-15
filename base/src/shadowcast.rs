@@ -48,11 +48,12 @@ const TRANSFORMS: [Transform; 4] = [
     [[ 0, -1], [ 1,  0]],
 ];
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 struct SlopeRange {
     min: Slope,
     max: Slope,
     transform: &'static Transform,
+    visibility: i32,
 }
 
 #[derive(Debug)]
@@ -61,6 +62,9 @@ struct SlopeRanges {
     items: Vec<SlopeRange>,
 }
 
+const INITIAL_VISIBILITY: i32 = 100;
+const VISIBILITY_LOSS: i32 = 45;
+
 fn fov(eye: Point, map: &Matrix<char>, radius: i32) -> Matrix<bool> {
     let r2 = radius * radius + radius;
     let mut result = Matrix::new(map.size, false);
@@ -68,18 +72,28 @@ fn fov(eye: Point, map: &Matrix<char>, radius: i32) -> Matrix<bool> {
 
     let seeds = TRANSFORMS.iter().map(|x| {
         let (min, max) = (Slope::new(-1, 1), Slope::new(1, 1));
-        SlopeRange { min, max, transform: x }
+        SlopeRange { min, max, transform: x, visibility: INITIAL_VISIBILITY }
     }).collect();
     let mut prev = SlopeRanges { depth: 1, items: seeds };
     let mut next = SlopeRanges { depth: 2, items: vec![] };
+
+    let push = |next: &mut SlopeRanges, s: SlopeRange| {
+        if let Some(x) = next.items.last_mut() &&
+            x.max == s.min && x.visibility == s.visibility &&
+            x.transform.as_ptr() == s.transform.as_ptr() {
+                x.max = s.max;
+        } else {
+            next.items.push(s);
+        }
+    };
 
     while !prev.items.is_empty() {
         let depth = prev.depth;
 
         for range in &prev.items {
-            let mut prev_blocked = None;
+            let mut prev_visibility = -1;
             let [[a00, a01], [a10, a11]] = range.transform;
-            let SlopeRange { mut min, max, transform } = *range;
+            let SlopeRange { mut min, max, transform, visibility } = *range;
             let start = (2 * min.num * depth + min.den).div_floor(2 * min.den);
             let limit = (2 * max.num * depth - max.den).div_ceil(2 * max.den);
 
@@ -89,20 +103,28 @@ fn fov(eye: Point, map: &Matrix<char>, radius: i32) -> Matrix<bool> {
                 let point = Point(x * a00 + y * a10, x * a01 + y * a11) + eye;
                 if nearby { result.set(point, true); }
 
-                let next_blocked = !nearby || map.get(point) == '#';
-                if let Some(prev_blocked) = prev_blocked {
+                let tile = map.get(point);
+                let next_visibility = (|| {
+                    if !nearby || tile == '#' { return 0; }
+                    if tile != ',' { return visibility; }
+                    let r = 1.0 + (0.8 * y.abs() as f64) / (x as f64);
+                    std::cmp::max(visibility - (r * VISIBILITY_LOSS as f64) as i32, 0)
+                })();
+
+                if prev_visibility != next_visibility && prev_visibility >= 0 {
                     let slope = Slope::new(2 * width - 1, 2 * depth);
-                    if prev_blocked && !next_blocked {
-                        min = slope;
-                    } else if !prev_blocked && next_blocked {
-                        next.items.push(SlopeRange { min, max: slope, transform });
+                    if prev_visibility > 0 {
+                        let (max, visibility) = (slope, prev_visibility);
+                        push(&mut next, SlopeRange { min, max, transform, visibility });
                     }
+                    min = slope;
                 }
-                prev_blocked = Some(next_blocked);
+                prev_visibility = next_visibility;
             }
 
-            if let Some(false) = prev_blocked {
-                next.items.push(SlopeRange { min, max, transform });
+            if prev_visibility > 0 {
+                let visibility = prev_visibility;
+                push(&mut next, SlopeRange { min, max, transform, visibility });
             }
         }
 
@@ -354,6 +376,88 @@ mod tests {
         ]);
     }
 
+    #[test]
+    fn test_field_of_grass() {
+        test_fov(&[
+            ",,,,,,,,,,,,,,,",
+            ",,,,,,,,,,,,,,,",
+            ",,,,,,,,,,,,,,,",
+            ",,,,,,,,,,,,,,,",
+            ",,,,,,,,,,,,,,,",
+            ",,,,,,,,,,,,,,,",
+            ",,,,,,,,,,,,,,,",
+            ",,,,,,,,,,,,,,,",
+            ",,,,,,,@,,,,,,,",
+            ",,,,,,,,,,,,,,,",
+            ",,,,,,,,,,,,,,,",
+            ",,,,,,,,,,,,,,,",
+            ",,,,,,,,,,,,,,,",
+            ",,,,,,,,,,,,,,,",
+            ",,,,,,,,,,,,,,,",
+            ",,,,,,,,,,,,,,,",
+            ",,,,,,,,,,,,,,,",
+        ], &[
+            "%%%%%%%%%%%%%%%",
+            "%%%%%%%%%%%%%%%",
+            "%%%%%%%%%%%%%%%",
+            "%%%%%%%%%%%%%%%",
+            "%%%%%%%%%%%%%%%",
+            "%%%%%%,,,%%%%%%",
+            "%%%%%,,,,,%%%%%",
+            "%%%%,,,,,,,%%%%",
+            "%%%%,,,@,,,%%%%",
+            "%%%%,,,,,,,%%%%",
+            "%%%%%,,,,,%%%%%",
+            "%%%%%%,,,%%%%%%",
+            "%%%%%%%%%%%%%%%",
+            "%%%%%%%%%%%%%%%",
+            "%%%%%%%%%%%%%%%",
+            "%%%%%%%%%%%%%%%",
+            "%%%%%%%%%%%%%%%",
+        ]);
+    }
+
+    #[test]
+    fn test_semitransparent_walls() {
+        test_fov(&[
+            ".....,...,.,.,.",
+            ".....,.@.,.,.,.",
+            ".....,...,.,.,.",
+            ".....,...,.,.,.",
+            ".....,...,.,.,.",
+            ".....,...,.,.,.",
+            ".....,...,.,.,.",
+            ".....,...,.,.,.",
+            ".....,...,.,.,.",
+            ".....,...,.,.,.",
+            ".....,...,.,.,.",
+            ".....,...,.,.,.",
+            ".....,...,.,.,.",
+            ".....,...,.,.,.",
+            ".....,...,.,.,.",
+            ".....,...,.,.,.",
+            ".....,...,.,.,.",
+        ], &[
+            ".....,...,.,.,%",
+            ".....,.@.,.,.,%",
+            ".....,...,.,.,%",
+            ".....,...,.,%%%",
+            ".....,...,.,%%%",
+            ".....,...,.,%%%",
+            ".....,...,.,%%%",
+            "....%,...,%,%%%",
+            "....%,...,%%%%%",
+            "...%%,...,%%%%%",
+            "..%%%,...,%%%%%",
+            "..%%%,...,%%%%%",
+            ".%%%%,...,%%%%%",
+            "%%%%%,...,%%%%%",
+            "%%%%%,...,%%%%%",
+            "%%%%%,...,%%%%%",
+            "%%%%%,...,%%%%%",
+        ]);
+    }
+
     #[bench]
     fn bench_fov_shadowcast(b: &mut test::Bencher) {
         let (eye, map) = generate_fov_input();
@@ -369,10 +473,24 @@ mod tests {
         let mut fov = crate::base::FOV::new(eye.0);
         b.iter(|| {
             let mut visible = Matrix::new(map.size, false);
+            let mut visibility = Matrix::new(map.size, -1);
             fov.apply(|x| {
-                let p = x.next + eye;
-                visible.set(p, true);
-                x.next != Point::default() && map.get(p) == '#'
+                let (next, prev) = (x.next + eye, x.prev + eye);
+                let next_visibility = (|| {
+                    if next == eye { return INITIAL_VISIBILITY; }
+                    let tile = map.get(next);
+                    if tile == '#' { return 0; }
+                    let prev_visibility = visibility.get(prev);
+                    if tile == '.' { return prev_visibility; }
+                    let diagonal = next.0 != prev.0 && next.1 != prev.1;
+                    let factor = if diagonal { 2.5 } else { 1.25 };
+                    let loss = (factor * VISIBILITY_LOSS as f64) as i32;
+                    std::cmp::max(prev_visibility - loss, 0)
+                })();
+                visible.set(next, true);
+                let entry = visibility.entry_mut(next).unwrap();
+                *entry = std::cmp::max(*entry, next_visibility);
+                next_visibility == 0
             });
             debug_fov_output(eye, &map, &visible);
         });
@@ -390,11 +508,14 @@ mod tests {
 
     fn run_vision_benchmark(b: &mut test::Bencher, player: bool) {
         let (eye, map) = generate_fov_input();
+        let mapping: crate::base::HashMap<_, _> =
+                [('.', '.'), ('#', '#'), (',', '"')].into_iter().collect();
         let mut tiles = Matrix::new(map.size, crate::game::Tile::get('#'));
         for x in 0..map.size.0 {
             for y in 0..map.size.1 {
                 let p = Point(x, y);
-                tiles.set(p, crate::game::Tile::get(map.get(p)));
+                let c = *mapping.get(&map.get(p)).unwrap();
+                tiles.set(p, crate::game::Tile::get(c));
             }
         }
         let mut vision = crate::knowledge::Vision::new(eye.0);
@@ -403,11 +524,7 @@ mod tests {
             pos: eye,
             dir: crate::base::dirs::S,
         };
-
-        b.iter(|| {
-            vision.compute(&args, |x| tiles.get(x));
-            //debug_fov_output(eye, &map, &visible);
-        });
+        b.iter(|| { vision.compute(&args, |x| tiles.get(x)); });
     }
 
     fn debug_fov_output(eye: Point, map: &Matrix<char>, visible: &Matrix<bool>) {
@@ -418,7 +535,7 @@ mod tests {
     }
 
     fn generate_fov_input() -> (Point, Matrix<char>) {
-        let radius = 40;
+        let radius = 21;
         let side = 2 * radius + 1;
         let size = Point(side, side);
         let eye = Point(radius, radius);
@@ -427,8 +544,9 @@ mod tests {
         let mut map = Matrix::new(size, '#');
         for x in 0..size.0 {
             for y in 0..size.1 {
-                let blocked = rng.gen_range(0..100) < 1;
-                map.set(Point(x, y), if blocked { '#' } else { '.' });
+                let sample = rng.gen_range(0..100);
+                let c = if sample < 1 { '#' } else if sample < 5 { ',' } else { '.' };
+                map.set(Point(x, y), c);
             }
         }
         (eye, map)
