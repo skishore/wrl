@@ -1,5 +1,3 @@
-use std::cmp::{max, min};
-use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::mem::{replace, swap};
 
@@ -9,11 +7,11 @@ use thin_vec::{ThinVec, thin_vec};
 
 use crate::static_assert_size;
 use crate::ai::{AIEnv, AIState};
-use crate::base::{Buffer, Color, Glyph, Slice};
+use crate::base::{Buffer, Color, Glyph};
 use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs};
 use crate::effect::{Effect, Event, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
-use crate::knowledge::{Knowledge, Timestamp, Vision, VisionArgs};
+use crate::knowledge::{Knowledge, Vision, VisionArgs};
 use crate::mapgen::mapgen_with_size;
 use crate::pathing::Status;
 use crate::ui::UI;
@@ -24,31 +22,21 @@ use crate::ui::UI;
 
 pub const MOVE_TIMER: i32 = 960;
 pub const TURN_TIMER: i32 = 120;
+pub const WORLD_SIZE: i32 = 100;
 
-const FOV_RADIUS_NPC: i32 = 12;
-const FOV_RADIUS_PC_: i32 = 21;
+pub const FOV_RADIUS_NPC: i32 = 12;
+pub const FOV_RADIUS_PC_: i32 = 21;
 
 const SPEED_PC_: f64 = 0.1;
 const SPEED_NPC: f64 = 0.1;
 
 const LIGHT: Light = Light::Sun(Point(4, 1));
 const WEATHER: Weather = Weather::None;
-const WORLD_SIZE: i32 = 100;
 const NUM_PREDATORS: i32 = 2;
 const NUM_PREY: i32 = 18;
 
-const FULL_VIEW: bool = false;
-const UI_MAP_SIZE: i32 = if FULL_VIEW { WORLD_SIZE } else { 2 * FOV_RADIUS_PC_ + 1 };
-
 const UI_DAMAGE_FLASH: i32 = 6;
 const UI_DAMAGE_TICKS: i32 = 6;
-
-pub const UI_MAP_SIZE_X: i32 = UI_MAP_SIZE;
-pub const UI_MAP_SIZE_Y: i32 = UI_MAP_SIZE;
-
-pub const UI_MOVE_FRAMES: i32 = 12;
-pub const UI_MAP_MEMORY: usize = 32;
-pub const UI_SHADE_FADE: f64 = 0.30;
 
 pub const NOISY_RADIUS: i32 = 4;
 
@@ -150,20 +138,6 @@ pub enum Light { None, Sun(Point) }
 
 enum Weather { None, Rain(Point, usize) }
 
-struct Drop {
-    frame: usize,
-    point: Point,
-}
-
-struct Rain {
-    ch: char,
-    diff: Point,
-    drops: VecDeque<Drop>,
-    path: Vec<Point>,
-    lightning: i32,
-    thunder: i32,
-}
-
 //////////////////////////////////////////////////////////////////////////////
 
 // Board
@@ -193,26 +167,14 @@ pub struct Board {
     _pc_vision: Vision,
     // Environmental effects
     light: Light,
-    rain: Option<Rain>,
     shadow: Vec<Point>,
 }
 
 impl Board {
-    fn new(size: Point, light: Light, weather: Weather) -> Self {
+    fn new(size: Point, light: Light) -> Self {
         let shadow = match light {
             Light::Sun(x) => LOS(Point::default(), x).into_iter().skip(1).collect(),
             Light::None => vec![],
-        };
-        let rain = match weather {
-            Weather::Rain(x, y) => Some(Rain {
-                ch: Glyph::ray(x),
-                diff: x,
-                drops: VecDeque::with_capacity(y),
-                path: LOS(Point::default(), x),
-                lightning: -1,
-                thunder: 0,
-            }),
-            Weather::None => None,
         };
         let cell = Cell { eid: None, items: thin_vec![], shadow: 0, tile: Tile::get('#') };
 
@@ -229,7 +191,6 @@ impl Board {
             _pc_vision: Vision::new(FOV_RADIUS_PC_),
             // Environmental effects
             light,
-            rain,
             shadow,
         };
         result.reset(Tile::get('.'));
@@ -444,40 +405,6 @@ impl Board {
 
     // Environmental effects
 
-    fn update_env(&mut self, frame: usize, pos: Point, rng: &mut RNG) {
-        let Some(rain) = &mut self.rain else { return; };
-
-        while let Some(x) = rain.drops.front() && x.frame < frame {
-            rain.drops.pop_front();
-        }
-        let total = rain.drops.capacity();
-        let denom = max(rain.diff.1, 1);
-        let delta = denom as usize;
-        let extra = (frame + 1) * total / delta - (frame * total) / delta;
-        for _ in 0..min(extra, total - rain.drops.len()) {
-            let x = rng.gen_range(0..denom);
-            let y = rng.gen_range(0..denom);
-            let target_frame = frame + rain.path.len() - 1;
-            let target_point = Point(x - denom / 2, y - denom / 2) + pos;
-            rain.drops.push_back(Drop { frame: target_frame, point: target_point });
-        }
-
-        assert!(rain.lightning >= -1);
-        if rain.lightning == -1 {
-            if rng.gen::<f32>() < 0.002 { rain.lightning = 10; }
-        } else if rain.lightning > 0 {
-            rain.lightning -= 1;
-        }
-
-        assert!(rain.thunder >= 0);
-        if rain.thunder == 0 {
-            if rain.lightning == 0 && rng.gen::<f32>() < 0.02 { rain.thunder = 16; }
-        } else {
-            rain.thunder -= 1;
-            if rain.thunder == 0 { rain.lightning = -1; }
-        }
-    }
-
     fn update_shadow(&mut self, point: Point, delta: i32) {
         if delta == 0 { return; }
         for &x in &self.shadow {
@@ -676,17 +603,8 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                         let source_seen = known.get(source).can_see_entity_at();
                         let target_seen = known.get(target).can_see_entity_at();
                         if source_seen || target_seen {
-                            let limit = UI_MOVE_FRAMES;
-                            if target_seen {
-                                let m = MoveAnimation { color, frame: 0, limit };
-                                state.moves.insert(source, m);
-                            } else {
-                                let a = limit / 2;
-                                let m = MoveAnimation { color, frame: 0, limit };
-                                state.moves.insert(source, m);
-                                let m = MoveAnimation { color, frame: -a, limit };
-                                state.moves.insert(target, m);
-                            }
+                            state.ui.animate_move(color, 0, source);
+                            if !target_seen { state.ui.animate_move(color, 1, target); }
                         }
                     }
                     ActionResult::success_turns(turns)
@@ -811,8 +729,7 @@ fn get_direction(ch: char) -> Option<Point> {
 fn process_input(state: &mut State, input: Input) {
     if input == Input::Char('q') || input == Input::Char('w') {
         let board = &state.board;
-        let i = board.entity_order.iter().position(
-            |&x| Some(x) == state.pov).unwrap_or(0);
+        let i = board.entity_order.iter().position(|&x| Some(x) == state.pov).unwrap_or(0);
         let l = board.entity_order.len();
         let j = (i + if input == Input::Char('q') { l - 1 } else { 1 }) % l;
         state.pov = if j == 0 { None } else { Some(board.entity_order[j]) };
@@ -844,12 +761,8 @@ fn update_pov_entities(state: &mut State) {
 }
 
 fn update_state(state: &mut State) {
-    state.frame += 1;
     let pos = state.get_player().pos;
-    state.board.update_env(state.frame, pos, &mut state.rng);
-
-    for x in state.moves.values_mut() { x.frame += 1; }
-    state.moves.retain(|_, v| v.frame < v.limit);
+    state.ui.update(pos, &mut state.rng);
 
     if state.board.advance_effect(state.pov, &mut state.rng) {
         update_pov_entities(state);
@@ -895,10 +808,7 @@ fn update_state(state: &mut State) {
         if player && !result.success { break; }
 
         if player && state.get_player().pos != pos {
-            let time = state.get_player().known.time;
-            let times = &mut state.turn_times;
-            if times.len() == UI_MAP_MEMORY { times.pop_back(); }
-            times.push_front(time);
+            state.ui.add_turn_time(state.get_player().known.time);
         }
 
         //state.board.update_known(eid);
@@ -914,26 +824,14 @@ fn update_state(state: &mut State) {
 
 // State
 
-#[derive(Copy, Clone)]
-pub struct MoveAnimation {
-    pub color: Color,
-    pub frame: i32,
-    pub limit: i32,
-}
-
 pub struct State {
     board: Board,
     input: Action,
     inputs: Vec<Input>,
     player: EID,
-    // Update fields
+    pov: Option<EID>,
     rng: RNG,
     ai: Option<Box<AIState>>,
-    // Rendering state
-    pub frame: usize,
-    pub moves: HashMap<Point, MoveAnimation>,
-    pub turn_times: VecDeque<Timestamp>,
-    pov: Option<EID>,
     ui: UI,
 }
 
@@ -943,7 +841,7 @@ impl State {
         let pos = Point(size.0 / 2, size.1 / 2);
         let rng = seed.map(|x| RNG::seed_from_u64(x));
         let mut rng = rng.unwrap_or_else(|| RNG::from_entropy());
-        let mut board = Board::new(size, LIGHT, WEATHER);
+        let mut board = Board::new(size, LIGHT);
 
         loop {
             let map = mapgen_with_size(size, &mut rng);
@@ -982,35 +880,21 @@ impl State {
         board.entities[player].dir = dirs::S;
         board.update_known(player);
 
-        let turn_times = [Timestamp::default()].into_iter().collect();
-
         let inputs = Default::default();
-        let moves = Default::default();
-        let frame = Default::default();
-        let pov = Default::default();
         let ai = Default::default();
-        let ui = Default::default();
+        let pov = None;
 
-        Self {
-            board,
-            input,
-            inputs,
-            player,
-            // Update state
-            rng,
-            ai,
-            // Rendering state
-            frame,
-            moves,
-            turn_times,
-            pov,
-            ui,
+        let mut ui = UI::default();
+        ui.add_turn_time(Default::default());
+        match WEATHER {
+            Weather::Rain(angle, count) => ui.start_rain(angle, count),
+            Weather::None => (),
         }
+
+        Self { board, input, inputs, player, pov, rng, ai, ui }
     }
 
     fn get_player(&self) -> &Entity { &self.board.entities[self.player] }
-
-    fn mut_player(&mut self) -> &mut Entity { &mut self.board.entities[self.player] }
 
     pub fn add_effect(&mut self, x: Effect) { self.board.add_effect(x, &mut self.rng) }
 
@@ -1019,110 +903,21 @@ impl State {
     pub fn update(&mut self) { update_state(self); }
 
     pub fn render(&self, buffer: &mut Buffer, debug: &mut String) {
-        if buffer.data.is_empty() {
-            *buffer = Matrix::new(self.ui.bounds, ' '.into());
-        }
-        buffer.fill(buffer.default);
-        self.ui.render_frame(buffer);
-
         let entity = self.pov.and_then(
             |x| self.board.get_entity(x)).unwrap_or(self.get_player());
-        let offset = entity.pos - Point(UI_MAP_SIZE_X / 2, UI_MAP_SIZE_Y / 2);
-        let offset = if FULL_VIEW { Point::default() } else { offset };
-
-        self.ui.render_status(buffer, entity, None, None);
-        self.ui.render_rivals(buffer, entity, None);
-        self.ui.render_target(buffer, entity, None);
-        self.ui.render_log(buffer, &[]);
-
-        let known = &*entity.known;
         let frame = self.board.get_frame();
-        let slice = &mut Slice::new(buffer, self.ui.map);
-        self.ui.render_map(&self, entity, frame, offset, slice);
 
-        if entity.eid != self.player && frame.is_none() {
+        debug.clear();
+        let mut entities = vec![];
+
+        if !entity.player {
             *debug = format!("{:?}", entity.ai);
-            let debug = entity.debug.as_ref();
-            let path = entity.ai.get_path();
-            let target = path.first();
-            let slice_point = |p: Point| Point(2 * (p.0 - offset.0), p.1 - offset.1);
-
-            for &p in path.iter().skip(1) {
-                let point = slice_point(p);
-                let mut glyph = slice.get(point);
-                if glyph.ch() == Glyph::wide(' ').ch() { glyph = Glyph::wide('.'); }
-                slice.set(point, glyph.with_fg(0x400));
-            }
-            for &(p, score) in debug.map(|x| x.utility.as_slice()).unwrap_or(&[]) {
-                let point = slice_point(p);
-                let glyph = slice.get(point);
-                slice.set(point, glyph.with_bg(Color::gray(score)));
-            }
-            if let Some(&p) = target {
-                let point = slice_point(p);
-                let glyph = slice.get(point);
-                slice.set(point, glyph.with_fg(Color::black()).with_bg(0x400));
-            }
-            for &eid in &self.board.entity_order {
-                let other = &self.board.entities[eid];
-                let Point(x, y) = other.pos - offset;
-                slice.set(Point(2 * x, y), other.glyph);
-            }
-            for other in &known.entities {
-                let color = if other.age == 0 { 0x040 } else {
-                    if other.moved { 0x400 } else { 0x440 }
-                };
-                let glyph = other.glyph.with_fg(Color::black()).with_bg(color);
-                let Point(x, y) = other.pos - offset;
-                slice.set(Point(2 * x, y), glyph);
-            };
+            entities = self.board.entity_order.iter().map(|&x| {
+                let other = &self.board.entities[x];
+                (other.pos, other.glyph)
+            }).collect();
         }
-
-        if let Some(rain) = &self.board.rain {
-            let base = Tile::get('~').glyph.fg();
-            for drop in &rain.drops {
-                let index = drop.frame - self.frame;
-                let Some(&delta) = rain.path.get(index) else { continue; };
-
-                let (ground, point) = (index == 0, drop.point - delta);
-                let cell = if ground { known.get(point) } else { known.default() };
-                if ground && !cell.visible() { continue; }
-
-                let Point(x, y) = point - offset;
-                let ch = if index == 0 { 'o' } else { rain.ch };
-                let shade = cell.shade();
-                let color = if shade { base.fade(UI_SHADE_FADE) } else { base };
-                let glyph = Glyph::wdfg(ch, color);
-                slice.set(Point(2 * x, y), glyph);
-            }
-
-            if rain.lightning > 0 {
-                let color = Color::from(0x111 * (rain.lightning / 2));
-                for y in 0..UI_MAP_SIZE_Y {
-                    for x in 0..UI_MAP_SIZE_X {
-                        let point = Point(2 * x, y);
-                        slice.set(point, slice.get(point).with_bg(color));
-                    }
-                }
-            }
-
-            if rain.thunder > 0 {
-                let shift = (rain.thunder - 1) % 4;
-                if shift % 2 == 0 {
-                    let space = Glyph::char(' ');
-                    let delta = Point(shift - 1, 0);
-                    let limit = if delta.1 > 0 { -1 } else { 0 };
-                    for y in 0..UI_MAP_SIZE_Y {
-                        for x in 0..(UI_MAP_SIZE_X + limit) {
-                            let point = Point(2 * x, y);
-                            slice.set(point + delta, slice.get(point));
-                        }
-                        slice.set(Point(0, y), space);
-                        slice.set(Point(2 * UI_MAP_SIZE_X - 1, y), space);
-                    }
-                }
-            }
-        }
+        self.ui.render(buffer, entity, frame, &entities);
     }
 }
 
