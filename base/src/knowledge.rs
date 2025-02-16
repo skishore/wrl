@@ -4,9 +4,9 @@ use std::f64::consts::TAU;
 use thin_vec::{ThinVec, thin_vec};
 
 use crate::static_assert_size;
-use crate::base::{FOV, FOVEndpoint, FOVNode, Glyph, HashMap, Matrix, Point};
+use crate::base::{FOV, FOVEndpoint, FOVNode, Glyph, HashMap, Matrix, Point, clamp};
 use crate::entity::{EID, Entity};
-use crate::game::{Board, Item, Light, Tile};
+use crate::game::{MOVE_TIMER, Board, Item, Light, Tile};
 use crate::list::{Handle, List};
 use crate::pathing::Status;
 
@@ -173,6 +173,13 @@ pub struct EntityKnowledge {
     pub pos: Point,
     pub dir: Point,
     pub glyph: Glyph,
+
+    // Public info about the entity's status.
+    pub name: &'static str,
+    pub hp: f64,
+    pub pp: f64,
+
+    // Small booleans, including some judgments.
     pub alive: bool,
     pub heard: bool,
     pub moved: bool,
@@ -180,7 +187,7 @@ pub struct EntityKnowledge {
     pub friend: bool,
     pub asleep: bool,
 }
-static_assert_size!(EntityKnowledge, 48);
+static_assert_size!(EntityKnowledge, 80);
 
 #[derive(Default)]
 pub struct Knowledge {
@@ -306,6 +313,9 @@ impl Knowledge {
                 age: Default::default(),
                 pos: Default::default(),
                 dir: Default::default(),
+                name: Default::default(),
+                hp: Default::default(),
+                pp: Default::default(),
                 alive: Default::default(),
                 glyph: Default::default(),
                 heard: Default::default(),
@@ -330,6 +340,13 @@ impl Knowledge {
         entry.dir = other.dir;
         entry.alive = other.cur_hp > 0;
         entry.glyph = other.glyph;
+
+        entry.name = if other.player { "skishore" } else {
+            if other.predator { "Rattata" } else { "Pidgey" }
+        };
+        entry.hp = other.cur_hp as f64 / max(other.max_hp, 1) as f64;
+        entry.pp = 1. - clamp(other.move_timer as f64 / MOVE_TIMER as f64, 0., 1.);
+
         entry.heard = heard;
         entry.moved = !seen;
         entry.rival = rival;

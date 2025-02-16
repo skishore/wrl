@@ -9,20 +9,21 @@ use thin_vec::{ThinVec, thin_vec};
 
 use crate::static_assert_size;
 use crate::ai::{AIEnv, AIState};
-use crate::base::{Buffer, Color, Glyph, Rect, Slice};
+use crate::base::{Buffer, Color, Glyph, Slice};
 use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs};
 use crate::effect::{Effect, Event, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
 use crate::knowledge::{Knowledge, Timestamp, Vision, VisionArgs};
 use crate::mapgen::mapgen_with_size;
 use crate::pathing::Status;
+use crate::ui::UI;
 
 //////////////////////////////////////////////////////////////////////////////
 
 // Constants
 
-const MOVE_TIMER: i32 = 960;
-const TURN_TIMER: i32 = 120;
+pub const MOVE_TIMER: i32 = 960;
+pub const TURN_TIMER: i32 = 120;
 
 const FOV_RADIUS_NPC: i32 = 12;
 const FOV_RADIUS_PC_: i32 = 21;
@@ -36,22 +37,18 @@ const WORLD_SIZE: i32 = 100;
 const NUM_PREDATORS: i32 = 2;
 const NUM_PREY: i32 = 18;
 
-const FULL_VIEW: bool = true;
+const FULL_VIEW: bool = false;
 const UI_MAP_SIZE: i32 = if FULL_VIEW { WORLD_SIZE } else { 2 * FOV_RADIUS_PC_ + 1 };
 
 const UI_DAMAGE_FLASH: i32 = 6;
 const UI_DAMAGE_TICKS: i32 = 6;
 
-const UI_COLOR: i32 = 0x430;
-const UI_MAP_SIZE_X: i32 = UI_MAP_SIZE;
-const UI_MAP_SIZE_Y: i32 = UI_MAP_SIZE;
+pub const UI_MAP_SIZE_X: i32 = UI_MAP_SIZE;
+pub const UI_MAP_SIZE_Y: i32 = UI_MAP_SIZE;
 
-const UI_MOVE_ALPHA: f64 = 0.75;
-const UI_MOVE_FRAMES: i32 = 12;
-const UI_MAP_MEMORY: usize = 32;
-
-const UI_SHADE_FADE: f64 = 0.30;
-const UI_REMEMBERED: f64 = 0.15;
+pub const UI_MOVE_FRAMES: i32 = 12;
+pub const UI_MAP_MEMORY: usize = 32;
+pub const UI_SHADE_FADE: f64 = 0.30;
 
 pub const NOISY_RADIUS: i32 = 4;
 
@@ -138,7 +135,7 @@ lazy_static! {
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub enum Item { Berry, Corpse }
 
-fn show_item(item: &Item) -> Glyph {
+pub fn show_item(item: &Item) -> Glyph {
     match item {
         Item::Berry => Glyph::wdfg('*', (192, 128, 0)),
         Item::Corpse => Glyph::wdfg('%', (255, 255, 255)),
@@ -918,25 +915,26 @@ fn update_state(state: &mut State) {
 // State
 
 #[derive(Copy, Clone)]
-struct MoveAnimation {
-    color: Color,
-    frame: i32,
-    limit: i32,
+pub struct MoveAnimation {
+    pub color: Color,
+    pub frame: i32,
+    pub limit: i32,
 }
 
 pub struct State {
     board: Board,
-    frame: usize,
     input: Action,
     inputs: Vec<Input>,
     player: EID,
-    pov: Option<EID>,
-    rng: RNG,
     // Update fields
+    rng: RNG,
     ai: Option<Box<AIState>>,
-    // Animations
-    moves: HashMap<Point, MoveAnimation>,
-    turn_times: VecDeque<Timestamp>,
+    // Rendering state
+    pub frame: usize,
+    pub moves: HashMap<Point, MoveAnimation>,
+    pub turn_times: VecDeque<Timestamp>,
+    pov: Option<EID>,
+    ui: UI,
 }
 
 impl State {
@@ -959,7 +957,7 @@ impl State {
         }
 
         let input = Action::WaitForInput;
-        let glyph = Glyph::wdfg('@', 0x222);
+        let glyph = Glyph::wdfg('@', (255, 255, 255));
         let (player, speed) = (true, SPEED_PC_);
         let args = EntityArgs { glyph, player, predator: false, pos, speed };
         let player = board.add_entity(&args, &mut rng);
@@ -975,19 +973,39 @@ impl State {
             if let Some(x) = pos(&board, &mut rng) {
                 let predator = i < NUM_PREDATORS;
                 let (player, speed) = (false, SPEED_NPC);
-                let glyph = Glyph::wdfg(if predator { 'R' } else { 'P' }, 0x222);
+                let letter = if predator { 'R' } else { 'P' };
+                let glyph = Glyph::wdfg(letter, (255, 255, 255));
                 let args = EntityArgs { glyph, player, predator, pos: x, speed };
                 board.add_entity(&args, &mut rng);
             }
         }
-        board.entities[player].dir = Point::default();
+        board.entities[player].dir = dirs::S;
         board.update_known(player);
 
-        let inputs = vec![];
-        let moves = Default::default();
-        let ai = Some(Box::new(AIState::new(false, &mut rng)));
         let turn_times = [Timestamp::default()].into_iter().collect();
-        Self { board, frame: 0, input, inputs, player, pov: None, rng, ai, moves, turn_times }
+
+        let inputs = Default::default();
+        let moves = Default::default();
+        let frame = Default::default();
+        let pov = Default::default();
+        let ai = Default::default();
+        let ui = Default::default();
+
+        Self {
+            board,
+            input,
+            inputs,
+            player,
+            // Update state
+            rng,
+            ai,
+            // Rendering state
+            frame,
+            moves,
+            turn_times,
+            pov,
+            ui,
+        }
     }
 
     fn get_player(&self) -> &Entity { &self.board.entities[self.player] }
@@ -1002,27 +1020,25 @@ impl State {
 
     pub fn render(&self, buffer: &mut Buffer, debug: &mut String) {
         if buffer.data.is_empty() {
-            let size = Point(2 * UI_MAP_SIZE_X + 2, UI_MAP_SIZE_Y + 3);
-            let _ = std::mem::replace(buffer, Matrix::new(size, ' '.into()));
+            *buffer = Matrix::new(self.ui.bounds, ' '.into());
         }
+        buffer.fill(buffer.default);
+        self.ui.render_frame(buffer);
 
         let entity = self.pov.and_then(
             |x| self.board.get_entity(x)).unwrap_or(self.get_player());
         let offset = entity.pos - Point(UI_MAP_SIZE_X / 2, UI_MAP_SIZE_Y / 2);
         let offset = if FULL_VIEW { Point::default() } else { offset };
 
-        let size = Point(2 * UI_MAP_SIZE_X, UI_MAP_SIZE_Y);
-        let bound = Rect { root: Point(0, size.1 + 2), size: Point(size.0, 1) };
-        let slice = &mut Slice::new(buffer, bound);
-        slice.write_str(&format!("HP: {}/{}", entity.cur_hp, entity.max_hp));
+        self.ui.render_status(buffer, entity, None, None);
+        self.ui.render_rivals(buffer, entity, None);
+        self.ui.render_target(buffer, entity, None);
+        self.ui.render_log(buffer, &[]);
 
-        let bound = Rect { root: Point(1, 1), size };
-        self.render_box(buffer, &bound);
-
-        let frame = self.board.get_frame();
-        let slice = &mut Slice::new(buffer, bound);
-        self.render_map(entity, frame, offset, slice);
         let known = &*entity.known;
+        let frame = self.board.get_frame();
+        let slice = &mut Slice::new(buffer, self.ui.map);
+        self.ui.render_map(&self, entity, frame, offset, slice);
 
         if entity.eid != self.player && frame.is_none() {
             *debug = format!("{:?}", entity.ai);
@@ -1105,134 +1121,6 @@ impl State {
                         slice.set(Point(2 * UI_MAP_SIZE_X - 1, y), space);
                     }
                 }
-            }
-        }
-    }
-
-    fn render_box(&self, buffer: &mut Buffer, rect: &Rect) {
-        let Point(w, h) = rect.size;
-        let color: Color = UI_COLOR.into();
-        buffer.set(rect.root + Point(-1, -1), Glyph::chfg('┌', color));
-        buffer.set(rect.root + Point( w, -1), Glyph::chfg('┐', color));
-        buffer.set(rect.root + Point(-1,  h), Glyph::chfg('└', color));
-        buffer.set(rect.root + Point( w,  h), Glyph::chfg('┘', color));
-
-        let tall = Glyph::chfg('│', color);
-        let flat = Glyph::chfg('─', color);
-        for x in 0..w {
-            buffer.set(rect.root + Point(x, -1), flat);
-            buffer.set(rect.root + Point(x,  h), flat);
-        }
-        for y in 0..h {
-            buffer.set(rect.root + Point(-1, y), tall);
-            buffer.set(rect.root + Point( w, y), tall);
-        }
-    }
-
-    fn render_map(&self, entity: &Entity, frame: Option<&Frame>,
-                  offset: Point, slice: &mut Slice) {
-        // Render each tile's base glyph, if it's known.
-        let (known, player) = (&*entity.known, entity.player);
-        let unseen = Glyph::wide(' ');
-
-        let lookup = |point: Point| -> Glyph {
-            let cell = known.get(point);
-            let Some(tile) = cell.tile() else { return unseen; };
-
-            let age_in_turns = (|| {
-                if !player { return 0; }
-                let age = cell.time_since_seen();
-                for (turn, &turn_time) in self.turn_times.iter().enumerate() {
-                    if age <= known.time - turn_time { return turn; }
-                }
-                return UI_MAP_MEMORY;
-            })();
-            if age_in_turns >= max(UI_MAP_MEMORY, 1) { return unseen; }
-
-            let see_entity = cell.can_see_entity_at();
-            let obscured = tile.limits_vision();
-            let shadowed = cell.shade();
-
-            let glyph = if see_entity && let Some(x) = cell.entity() {
-                if obscured { x.glyph.with_fg(tile.glyph.fg()) } else { x.glyph }
-            } else if let Some(x) = cell.items().last() {
-                show_item(x)
-            } else {
-                tile.glyph
-            };
-            let mut color = glyph.fg();
-
-            if !cell.visible() {
-                let limit = max(UI_MAP_MEMORY, 1) as f64;
-                let delta = (UI_MAP_MEMORY - age_in_turns) as f64;
-                color = Color::white().fade(UI_REMEMBERED * delta / limit);
-            } else if shadowed {
-                color = color.fade(UI_SHADE_FADE);
-            }
-            glyph.with_fg(color)
-        };
-
-        // Render all currently-visible cells.
-        slice.fill(Glyph::wide(' '));
-        for y in 0..UI_MAP_SIZE_Y {
-            for x in 0..UI_MAP_SIZE_X {
-                let glyph = lookup(Point(x, y) + offset);
-                slice.set(Point(2 * x, y), glyph);
-            }
-        }
-
-        // Render ephemeral state: sounds we've heard and moves we've glimpsed.
-        for entity in &known.entities {
-            if !entity.heard { continue; }
-            let Point(x, y) = entity.pos - offset;
-            slice.set(Point(2 * x, y), Glyph::wide('?'));
-        }
-        if player {
-            for (&k, v) in &self.moves {
-                let Point(x, y) = k - offset;
-                let p = Point(2 * x, y);
-                if v.frame < 0 || !slice.contains(p) { continue; }
-
-                let alpha = 1.0 - (v.frame as f64 / v.limit as f64);
-                let color = v.color.fade(UI_MOVE_ALPHA * alpha);
-                slice.set(p, slice.get(p).with_bg(color));
-            }
-        }
-
-        // Render any animation that's currently running.
-        if let Some(frame) = frame {
-            for &effect::Particle { point, glyph } in frame {
-                if !known.get(point).visible() { continue; }
-                let Point(x, y) = point - offset;
-                slice.set(Point(2 * x, y), glyph);
-            }
-        }
-
-        // If we're still playing, render arrows showing NPC facing.
-        if entity.cur_hp > 0 { self.render_arrows(known, offset, slice); }
-    }
-
-    fn render_arrows(&self, known: &Knowledge, offset: Point, slice: &mut Slice) {
-        let arrow_length = 3;
-        let sleep_length = 2;
-        let mut arrows = vec![];
-        for other in &known.entities {
-            if other.friend || other.age > 0 { continue; }
-
-            let (pos, dir) = (other.pos, other.dir);
-            let mut ch = Glyph::ray(dir);
-            let mut diff = dir.normalize(arrow_length as f64);
-            if other.asleep { (ch, diff) = ('Z', Point(0, -sleep_length)); }
-            arrows.push((ch, LOS(pos, pos + diff)));
-        }
-
-        for (ch, arrow) in &arrows {
-            let speed = if *ch == 'Z' { 8 } else { 2 };
-            let denom = if *ch == 'Z' { sleep_length } else { arrow_length };
-            let index = (self.frame / speed) % (8 * denom as usize);
-            if let Some(x) = arrow.get(index + 1) {
-                let point = Point(2 * (x.0 - offset.0), x.1 - offset.1);
-                slice.set(point, Glyph::wide(*ch));
             }
         }
     }
