@@ -20,6 +20,10 @@ pub type RNG = rand::rngs::StdRng;
 pub type HashSet<K> = fxhash::FxHashSet<K>;
 pub type HashMap<K, V> = fxhash::FxHashMap<K, V>;
 
+pub fn clamp<T: PartialOrd>(x: T, min: T, max: T) -> T {
+    if x < min { min } else if x > max { max } else { x }
+}
+
 pub fn sample<'a, T>(xs: &'a [T], rng: &mut RNG) -> &'a T {
     assert!(!xs.is_empty());
     &xs[rng.gen_range(0..xs.len())]
