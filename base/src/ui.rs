@@ -1,15 +1,24 @@
-use std::cmp::max;
+use std::cmp::{max, min};
+use std::collections::VecDeque;
 
-use crate::base::{Buffer, Color, Glyph, LOS, Point, Rect, Slice};
+use rand::Rng;
+
+use crate::base::{HashMap, LOS, Point, RNG};
+use crate::base::{Buffer, Color, Glyph, Matrix, Rect, Slice};
 use crate::effect::{Frame, self};
-use crate::entity::Entity;
-use crate::game::{UI_MAP_SIZE_X, UI_MAP_SIZE_Y, UI_MAP_MEMORY, UI_SHADE_FADE};
-use crate::game::{State, show_item};
-use crate::knowledge::{EntityKnowledge, Knowledge};
+use crate::entity::{EID, Entity};
+use crate::game::{WORLD_SIZE, FOV_RADIUS_PC_, Tile, show_item};
+use crate::knowledge::{EntityKnowledge, Knowledge, Timestamp};
 
 //////////////////////////////////////////////////////////////////////////////
 
 // Constants
+
+const FULL_VIEW: bool = false;
+const UI_MAP_SIZE: i32 = if FULL_VIEW { WORLD_SIZE } else { 2 * FOV_RADIUS_PC_ + 1 };
+
+const UI_MAP_SIZE_X: i32 = UI_MAP_SIZE;
+const UI_MAP_SIZE_Y: i32 = UI_MAP_SIZE;
 
 const UI_COL_SPACE: i32 = 2;
 const UI_ROW_SPACE: i32 = 1;
@@ -21,9 +30,12 @@ const UI_STATUS_SIZE: i32 = 30;
 const UI_COLOR: (u8, u8, u8) = (255, 192, 0);
 
 const UI_MOVE_ALPHA: f64 = 0.75;
+const UI_MOVE_FRAMES: i32 = 12;
 const UI_TARGET_FRAMES: i32 = 20;
 
+const UI_MAP_MEMORY: usize = 32;
 const UI_REMEMBERED: f64 = 0.15;
+const UI_SHADE_FADE: f64 = 0.30;
 
 const PLAYER_KEY: char = 'a';
 const SUMMON_KEYS: [char; 3] = ['s', 'd', 'f'];
@@ -46,40 +58,21 @@ fn rivals<'a>(entity: &'a Entity) -> Vec<&'a EntityKnowledge> {
 
 //////////////////////////////////////////////////////////////////////////////
 
-// UI
+// Layout
 
-pub struct LogLine {
-    color: Color,
-    menu: bool,
-    text: String,
+struct Layout {
+    log: Rect,
+    map: Rect,
+    choice: Rect,
+    rivals: Rect,
+    status: Rect,
+    target: Rect,
+    bounds: Point,
 }
 
-pub struct Menu {
-    index: i32,
-    summon: i32,
-}
-
-pub struct Target {
-    error: String,
-    frame: i32,
-    okay_till: usize,
-    source: Point,
-    target: Point,
-}
-
-pub struct UI {
-    pub log: Rect,
-    pub map: Rect,
-    pub choice: Rect,
-    pub rivals: Rect,
-    pub status: Rect,
-    pub target: Rect,
-    pub bounds: Point,
-}
-
-impl Default for UI {
+impl Default for Layout {
     fn default() -> Self {
-        let kl = Self::render_key('a').chars().count() as i32;
+        let kl = UI::render_key('a').chars().count() as i32;
         assert!(kl == UI_KEY_SPACE);
 
         let ss = UI_STATUS_SIZE;
@@ -126,11 +119,163 @@ impl Default for UI {
     }
 }
 
-impl UI {
-    // Public entry points
+//////////////////////////////////////////////////////////////////////////////
 
-    pub fn render_map(&self, state: &State, entity: &Entity,
-                      frame: Option<&Frame>, offset: Point, slice: &mut Slice) {
+// Effects
+
+#[derive(Copy, Clone)]
+pub struct MoveAnimation {
+    pub color: Color,
+    pub frame: i32,
+    pub limit: i32,
+}
+
+struct RainDrop {
+    frame: usize,
+    point: Point,
+}
+
+struct Rainfall {
+    ch: char,
+    delta: Point,
+    drops: VecDeque<RainDrop>,
+    path: Vec<Point>,
+    lightning: i32,
+    thunder: i32,
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// UI
+
+pub struct LogLine {
+    color: Color,
+    menu: bool,
+    text: String,
+}
+
+pub struct Menu {
+    index: i32,
+    summon: i32,
+}
+
+pub struct Target {
+    error: String,
+    frame: i32,
+    okay_till: usize,
+    source: Point,
+    target: Point,
+}
+
+#[derive(Default)]
+pub struct UI {
+    frame: usize,
+    layout: Layout,
+    moves: HashMap<Point, MoveAnimation>,
+    rainfall: Option<Rainfall>,
+    turn_times: VecDeque<Timestamp>,
+}
+
+impl UI {
+    // Rendering entry point
+
+    pub fn render(&self, buffer: &mut Buffer, entity: &Entity,
+                  frame: Option<&Frame>, extra: &[(Point, Glyph)]) {
+        if buffer.data.is_empty() {
+            *buffer = Matrix::new(self.layout.bounds, ' '.into());
+        }
+        buffer.fill(buffer.default);
+        self.render_layout(buffer);
+
+        self.render_log(buffer, &[]);
+        self.render_rivals(buffer, entity, None);
+        self.render_status(buffer, entity, None, None);
+        self.render_target(buffer, entity, None);
+
+        // Render the base map, then the debug layer, then the weather:
+        self.render_map(buffer, entity, frame);
+        if !entity.player && frame.is_none() {
+            self.render_debug(buffer, entity, extra);
+        }
+        self.render_weather(buffer, entity);
+    }
+
+    // Update entry points
+
+    pub fn add_turn_time(&mut self, time: Timestamp) {
+        if self.turn_times.len() == UI_MAP_MEMORY { self.turn_times.pop_back(); }
+        self.turn_times.push_front(time);
+    }
+
+    pub fn animate_move(&mut self, color: Color, delay: i32, point: Point) {
+        let frame = -delay * UI_MOVE_FRAMES / 2;
+        let manim = MoveAnimation { color, frame, limit: UI_MOVE_FRAMES };
+        self.moves.insert(point, manim);
+    }
+
+    pub fn start_rain(&mut self, delta: Point, count: usize) {
+        let rainfall = Rainfall {
+            ch: Glyph::ray(delta),
+            delta,
+            drops: VecDeque::with_capacity(count),
+            path: LOS(Point::default(), delta),
+            lightning: -1,
+            thunder: 0,
+        };
+        self.rainfall = Some(rainfall);
+    }
+
+    pub fn update(&mut self, pos: Point, rng: &mut RNG) {
+        self.frame += 1;
+        self.update_weather(pos, rng);
+
+        for x in self.moves.values_mut() { x.frame += 1; }
+        self.moves.retain(|_, v| v.frame < v.limit);
+    }
+
+    // Update helpers
+
+    fn update_weather(&mut self, pos: Point, rng: &mut RNG) {
+        let Some(rainfall) = &mut self.rainfall else { return; };
+
+        let frame = self.frame;
+        while let Some(x) = rainfall.drops.front() && x.frame < frame {
+            rainfall.drops.pop_front();
+        }
+        let total = rainfall.drops.capacity();
+        let denom = max(rainfall.delta.1, 1);
+        let delta = denom as usize;
+        let extra = (frame + 1) * total / delta - (frame * total) / delta;
+        for _ in 0..min(extra, total - rainfall.drops.len()) {
+            let x = rng.gen_range(0..denom);
+            let y = rng.gen_range(0..denom);
+            let target_frame = frame + rainfall.path.len() - 1;
+            let target_point = Point(x - denom / 2, y - denom / 2) + pos;
+            rainfall.drops.push_back(RainDrop { frame: target_frame, point: target_point });
+        }
+
+        assert!(rainfall.lightning >= -1);
+        if rainfall.lightning == -1 {
+            if rng.gen::<f32>() < 0.002 { rainfall.lightning = 10; }
+        } else if rainfall.lightning > 0 {
+            rainfall.lightning -= 1;
+        }
+
+        assert!(rainfall.thunder >= 0);
+        if rainfall.thunder == 0 {
+            if rainfall.lightning == 0 && rng.gen::<f32>() < 0.02 { rainfall.thunder = 16; }
+        } else {
+            rainfall.thunder -= 1;
+            if rainfall.thunder == 0 { rainfall.lightning = -1; }
+        }
+    }
+
+    // Rendering the map
+
+    fn render_map(&self, buffer: &mut Buffer, entity: &Entity, frame: Option<&Frame>) {
+        let slice = &mut Slice::new(buffer, self.layout.map);
+        let offset = self.get_map_offset(entity);
+
         // Render each tile's base glyph, if it's known.
         let (known, player) = (&*entity.known, entity.player);
         let unseen = Glyph::wide(' ');
@@ -142,7 +287,7 @@ impl UI {
             let age_in_turns = (|| {
                 if !player { return 0; }
                 let age = cell.time_since_seen();
-                for (turn, &turn_time) in state.turn_times.iter().enumerate() {
+                for (turn, &turn_time) in self.turn_times.iter().enumerate() {
                     if age <= known.time - turn_time { return turn; }
                 }
                 return UI_MAP_MEMORY;
@@ -188,7 +333,7 @@ impl UI {
             slice.set(Point(2 * x, y), Glyph::wide('?'));
         }
         if player {
-            for (&k, v) in &state.moves {
+            for (&k, v) in &self.moves {
                 let Point(x, y) = k - offset;
                 let p = Point(2 * x, y);
                 if v.frame < 0 || !slice.contains(p) { continue; }
@@ -209,11 +354,10 @@ impl UI {
         }
 
         // If we're still playing, render arrows showing NPC facing.
-        if entity.cur_hp > 0 { self.render_arrows(state, known, offset, slice); }
+        if entity.cur_hp > 0 { self.render_arrows(known, offset, slice); }
     }
 
-    fn render_arrows(&self, state: &State, known: &Knowledge,
-                     offset: Point, slice: &mut Slice) {
+    fn render_arrows(&self, known: &Knowledge, offset: Point, slice: &mut Slice) {
         let arrow_length = 3;
         let sleep_length = 2;
         let mut arrows = vec![];
@@ -230,7 +374,7 @@ impl UI {
         for (ch, arrow) in &arrows {
             let speed = if *ch == 'Z' { 8 } else { 2 };
             let denom = if *ch == 'Z' { sleep_length } else { arrow_length };
-            let index = (state.frame / speed) % (8 * denom as usize);
+            let index = (self.frame / speed) % (8 * denom as usize);
             if let Some(x) = arrow.get(index + 1) {
                 let point = Point(2 * (x.0 - offset.0), x.1 - offset.1);
                 slice.set(point, Glyph::wide(*ch));
@@ -238,16 +382,107 @@ impl UI {
         }
     }
 
-    pub fn render_log(&self, buffer: &mut Buffer, log: &[LogLine]) {
-        let slice = &mut Slice::new(buffer, self.log);
+    fn render_debug(&self, buffer: &mut Buffer, entity: &Entity, extra: &[(Point, Glyph)]) {
+        let slice = &mut Slice::new(buffer, self.layout.map);
+        let offset = self.get_map_offset(entity);
+
+        let path = entity.ai.get_path();
+        let utility = if let Some(x) = &entity.debug { x.utility.as_slice() } else { &[] };
+        let slice_point = |p: Point| Point(2 * (p.0 - offset.0), p.1 - offset.1);
+
+        for &p in path.iter().skip(1) {
+            let point = slice_point(p);
+            let mut glyph = slice.get(point);
+            if glyph.ch() == Glyph::wide(' ').ch() { glyph = Glyph::wide('.'); }
+            slice.set(point, glyph.with_fg(0x400));
+        }
+        for &(p, score) in utility {
+            let point = slice_point(p);
+            let glyph = slice.get(point);
+            slice.set(point, glyph.with_bg(Color::gray(score)));
+        }
+        if let Some(&p) = path.first() {
+            let point = slice_point(p);
+            let glyph = slice.get(point);
+            slice.set(point, glyph.with_fg(Color::black()).with_bg(0x400));
+        }
+        for &(point, glyph) in extra {
+            slice.set(slice_point(point), glyph);
+        }
+        for other in &entity.known.entities {
+            let color = if other.age == 0 { 0x040 } else {
+                if other.moved { 0x400 } else { 0x440 }
+            };
+            let glyph = other.glyph.with_fg(Color::black()).with_bg(color);
+            let Point(x, y) = other.pos - offset;
+            slice.set(Point(2 * x, y), glyph);
+        };
+    }
+
+    fn render_weather(&self, buffer: &mut Buffer, entity: &Entity) {
+        let Some(rainfall) = &self.rainfall else { return };
+
+        let slice = &mut Slice::new(buffer, self.layout.map);
+        let offset = self.get_map_offset(entity);
+
+        let base = Tile::get('~').glyph.fg();
+        let known = &*entity.known;
+
+        for drop in &rainfall.drops {
+            let index = drop.frame - self.frame;
+            let Some(&delta) = rainfall.path.get(index) else { continue; };
+
+            let (ground, point) = (index == 0, drop.point - delta);
+            let cell = if ground { known.get(point) } else { known.default() };
+            if ground && !cell.visible() { continue; }
+
+            let Point(x, y) = point - offset;
+            let ch = if index == 0 { 'o' } else { rainfall.ch };
+            let shade = cell.shade();
+            let color = if shade { base.fade(UI_SHADE_FADE) } else { base };
+            let glyph = Glyph::wdfg(ch, color);
+            slice.set(Point(2 * x, y), glyph);
+        }
+
+        if rainfall.lightning > 0 {
+            let color = Color::from(0x111 * (rainfall.lightning / 2));
+            for y in 0..UI_MAP_SIZE_Y {
+                for x in 0..UI_MAP_SIZE_X {
+                    let point = Point(2 * x, y);
+                    slice.set(point, slice.get(point).with_bg(color));
+                }
+            }
+        }
+
+        if rainfall.thunder > 0 {
+            let shift = (rainfall.thunder - 1) % 4;
+            if shift % 2 == 0 {
+                let space = Glyph::char(' ');
+                let delta = Point(shift - 1, 0);
+                let limit = if delta.1 > 0 { -1 } else { 0 };
+                for y in 0..UI_MAP_SIZE_Y {
+                    for x in 0..(UI_MAP_SIZE_X + limit) {
+                        let point = Point(2 * x, y);
+                        slice.set(point + delta, slice.get(point));
+                    }
+                    slice.set(Point(0, y), space);
+                    slice.set(Point(2 * UI_MAP_SIZE_X - 1, y), space);
+                }
+            }
+        }
+    }
+
+    // Rendering each section of the UI
+
+    fn render_log(&self, buffer: &mut Buffer, log: &[LogLine]) {
+        let slice = &mut Slice::new(buffer, self.layout.log);
         for line in log {
             slice.set_fg(Some(line.color)).write_str(&line.text).newline();
         }
     }
 
-    pub fn render_rivals(&self, buffer: &mut Buffer,
-                         entity: &Entity, target: Option<&Target>) {
-        let slice = &mut Slice::new(buffer, self.rivals);
+    fn render_rivals(&self, buffer: &mut Buffer, entity: &Entity, target: Option<&Target>) {
+        let slice = &mut Slice::new(buffer, self.layout.rivals);
         let mut rivals = rivals(entity);
         rivals.truncate(max(slice.size().1, 0) as usize / 2);
 
@@ -277,10 +512,10 @@ impl UI {
         }
     }
 
-    pub fn render_status(&self, buffer: &mut Buffer, entity: &Entity,
-                         menu: Option<&Menu>, summon: Option<&Entity>) {
+    fn render_status(&self, buffer: &mut Buffer, entity: &Entity,
+                     menu: Option<&Menu>, summon: Option<&Entity>) {
         assert!(menu.is_some() == summon.is_some());
-        let slice = &mut Slice::new(buffer, self.status);
+        let slice = &mut Slice::new(buffer, self.layout.status);
         let known = &*entity.known;
         if let Some(view) = known.entity(entity.eid) {
             let key = if menu.is_some() { '-' } else { PLAYER_KEY };
@@ -301,9 +536,8 @@ impl UI {
         }
     }
 
-    pub fn render_target(&self, buffer: &mut Buffer,
-                         entity: &Entity, target: Option<&Target>) {
-        let slice = &mut Slice::new(buffer, self.target);
+    fn render_target(&self, buffer: &mut Buffer, entity: &Entity, target: Option<&Target>) {
+        let slice = &mut Slice::new(buffer, self.layout.target);
         let known = &*entity.known;
         if target.is_none() && known.focus.is_none() {
             let fg = Some(0x111.into());
@@ -371,8 +605,10 @@ impl UI {
 
     //fn render_choice(&self, buffer: &mut Buffer, trainer: &Trainer,
     //                 summons: Vec<&Pokemon>, choice: i32) {
-    //    self.render_dialog(buffer, &self.choice);
+    //    self.render_box(buffer, &self.choice);
     //    let slice = &mut Slice::new(buffer, self.choice);
+    //    slice.fill(buffer.default);
+    //
     //    let options = &trainer.data.pokemon;
     //    for (i, key) in PARTY_KEYS.iter().enumerate() {
     //        let selected = choice == i as i32;
@@ -389,7 +625,7 @@ impl UI {
     //    }
     //}
 
-    // High-level private helpers
+    // High-level private rendering helpers
 
     //fn render_menu(&self, slice: &mut Slice, index: i32, summon: &Pokemon) {
     //    let spaces = UI::render_key('-').chars().count();
@@ -465,7 +701,12 @@ impl UI {
         slice.newline();
     }
 
-    // Private implementation details
+    // Low-level private rendering helpers
+
+    fn get_map_offset(&self, entity: &Entity) -> Point {
+        if FULL_VIEW { return Point::default(); }
+        entity.pos - Point(UI_MAP_SIZE_X / 2, UI_MAP_SIZE_Y / 2)
+    }
 
     fn render_bar(&self, value: f64, color: Color, width: i32, slice: &mut Slice) {
         let count = if value > 0. { max(1, (width as f64 * value) as i32) } else { 0 };
@@ -497,33 +738,24 @@ impl UI {
         }
     }
 
-    fn render_dialog(&self, buffer: &mut Buffer, rect: &Rect) {
-        for x in 0..rect.size.0 {
-            for y in 0..rect.size.1 {
-                buffer.set(rect.root + Point(x, y), buffer.default);
-            }
-        }
-        self.render_box(buffer, rect);
-    }
-
-    pub fn render_frame(&self, buffer: &mut Buffer) {
-        let ml = self.map.root.0 - 1;
-        let mw = self.map.size.0 + 2;
-        let mh = self.map.size.1 + 2;
-        let tt = self.target.root.1;
-        let th = self.target.size.1;
+    fn render_layout(&self, buffer: &mut Buffer) {
+        let ml = self.layout.map.root.0 - 1;
+        let mw = self.layout.map.size.0 + 2;
+        let mh = self.layout.map.size.1 + 2;
+        let tt = self.layout.target.root.1;
+        let th = self.layout.target.size.1;
         let rt = tt + th + UI_ROW_SPACE;
-        let uw = self.bounds.0;
-        let uh = self.bounds.1;
+        let uw = self.layout.bounds.0;
+        let uh = self.layout.bounds.1;
 
         self.render_title(buffer, ml, Point(0, 0), "Party");
         self.render_title(buffer, ml, Point(ml + mw, 0), "Target");
-        self.render_title(buffer, ml, Point(ml + mw, rt), "Wild Pokemon");
+        self.render_title(buffer, ml, Point(ml + mw, rt), "Nearby");
         self.render_title(buffer, ml, Point(0, mh - 1), "Log");
         self.render_title(buffer, ml, Point(ml + mw, mh - 1), "");
         self.render_title(buffer, uw, Point(0, uh - 1), "");
 
-        self.render_box(buffer, &self.map);
+        self.render_box(buffer, &self.layout.map);
     }
 
     fn render_title(&self, buffer: &mut Buffer, width: i32, pos: Point, text: &str) {
