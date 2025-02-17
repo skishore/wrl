@@ -14,7 +14,7 @@ use crate::entity::{EID, Entity, EntityArgs, EntityMap};
 use crate::knowledge::{Knowledge, Vision, VisionArgs};
 use crate::mapgen::mapgen_with_size;
 use crate::pathing::Status;
-use crate::ui::UI;
+use crate::ui::{UI, get_direction};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -40,7 +40,7 @@ const UI_DAMAGE_TICKS: i32 = 6;
 
 pub const NOISY_RADIUS: i32 = 4;
 
-#[derive(Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Input { Escape, BackTab, Char(char) }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -711,21 +711,6 @@ fn apply_effect(mut effect: Effect, what: FT, callback: CB) -> Effect {
 
 // Update
 
-fn get_direction(ch: char) -> Option<Point> {
-    match ch {
-        'h' => Some(dirs::W),
-        'j' => Some(dirs::S),
-        'k' => Some(dirs::N),
-        'l' => Some(dirs::E),
-        'y' => Some(dirs::NW),
-        'u' => Some(dirs::NE),
-        'b' => Some(dirs::SW),
-        'n' => Some(dirs::SE),
-        '.' => Some(dirs::NONE),
-        _ => None,
-    }
-}
-
 fn process_input(state: &mut State, input: Input) {
     if input == Input::Char('q') || input == Input::Char('w') {
         let board = &state.board;
@@ -735,6 +720,9 @@ fn process_input(state: &mut State, input: Input) {
         state.pov = if j == 0 { None } else { Some(board.entity_order[j]) };
         return;
     }
+
+    let player = &state.board.entities[state.player];
+    if state.ui.process_input(player, input) { return; }
 
     let Input::Char(ch) = input else { return; };
     let Some(dir) = get_direction(ch) else { return; };
@@ -758,6 +746,8 @@ fn update_pov_entities(state: &mut State) {
     if let Some(x) = state.pov && state.board.entities.has(x) {
         state.board.update_known(x);
     }
+    let player = &state.board.entities[state.player];
+    state.ui.update_focus(player);
 }
 
 fn update_state(state: &mut State) {
@@ -779,12 +769,14 @@ fn update_state(state: &mut State) {
         state.board.get_active_entity() == state.player
     };
 
+    let mut update = false;
     while !state.inputs.is_empty() && needs_input(state) {
         let input = state.inputs.remove(0);
         process_input(state, input);
+        update = true;
     }
-
-    let mut update = false;
+    let player = &state.board.entities[state.player];
+    if state.ui.update_target(player) { return; }
 
     while game_loop_active(state) {
         let eid = state.board.get_active_entity();
@@ -890,6 +882,7 @@ impl State {
             Weather::Rain(angle, count) => ui.start_rain(angle, count),
             Weather::None => (),
         }
+        ui.log.log("Welcome to WildsRL! Use vikeys (h/j/k/l/y/u/b/n) to move.");
 
         Self { board, input, inputs, player, pov, rng, ai, ui }
     }

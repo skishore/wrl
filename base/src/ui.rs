@@ -3,12 +3,14 @@ use std::collections::VecDeque;
 
 use rand::Rng;
 
-use crate::base::{HashMap, LOS, Point, RNG};
+use crate::base::{HashMap, LOS, Point, RNG, dirs};
 use crate::base::{Buffer, Color, Glyph, Matrix, Rect, Slice};
 use crate::effect::{Frame, self};
 use crate::entity::{EID, Entity};
-use crate::game::{WORLD_SIZE, FOV_RADIUS_PC_, Tile, show_item};
-use crate::knowledge::{EntityKnowledge, Knowledge, Timestamp};
+use crate::game::{WORLD_SIZE, FOV_RADIUS_NPC, FOV_RADIUS_PC_};
+use crate::game::{Input, Tile, show_item};
+use crate::knowledge::{EntityKnowledge, Knowledge, Timestamp, Vision, VisionArgs};
+use crate::pathing::Status;
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -37,12 +39,38 @@ const UI_MAP_MEMORY: usize = 32;
 const UI_REMEMBERED: f64 = 0.15;
 const UI_SHADE_FADE: f64 = 0.30;
 
+const UI_TARGET_SHADE: u8 = 192;
+const UI_TARGET_FOV_SHADE: u8 = 32;
+
+const UI_LOG_MENU: i32 = 0x123;
+const UI_LOG_FAILURE: i32 = 0x322;
+
 const PLAYER_KEY: char = 'a';
 const SUMMON_KEYS: [char; 3] = ['s', 'd', 'f'];
 
 //////////////////////////////////////////////////////////////////////////////
 
 // Helpers
+
+pub fn get_direction(ch: char) -> Option<Point> {
+    match ch {
+        'h' => Some(dirs::W),
+        'j' => Some(dirs::S),
+        'k' => Some(dirs::N),
+        'l' => Some(dirs::E),
+        'y' => Some(dirs::NW),
+        'u' => Some(dirs::NE),
+        'b' => Some(dirs::SW),
+        'n' => Some(dirs::SE),
+        '.' => Some(dirs::NONE),
+        _ => None,
+    }
+}
+
+fn outside_map(ui: &UI, entity: &Entity, point: Point) -> bool {
+    let Point(x, y) = point + ui.get_map_offset(entity);
+    0 <= x && x < UI_MAP_SIZE_X && 0 <= y && y < UI_MAP_SIZE_Y
+}
 
 fn rivals<'a>(entity: &'a Entity) -> Vec<&'a EntityKnowledge> {
     let mut rivals = vec![];
@@ -146,6 +174,224 @@ struct Rainfall {
 
 //////////////////////////////////////////////////////////////////////////////
 
+// Targeting UI
+
+enum TargetData {
+    FarLook,
+    Summon { index: usize, range: i32 },
+}
+
+pub struct Target {
+    data: TargetData,
+    error: String,
+    frame: i32,
+    okay_until: usize,
+    path: Vec<Point>,
+    source: Point,
+    target: Point,
+}
+
+fn can_target(entity: &EntityKnowledge) -> bool {
+    entity.age == 0 && !entity.friend
+}
+
+fn init_target(data: TargetData, source: Point, target: Point) -> Box<Target> {
+    let (error, frame, okay_until, path) = ("".into(), 0, 0, vec![]);
+    Box::new(Target { data, error, frame, okay_until, path, source, target })
+}
+
+//fn init_summon_target(player: &Trainer, data: TargetData) -> Box<Target> {
+//    let (known, pos, dir) = (&*player.known, player.pos, player.dir);
+//    let mut target = init_target(data, pos, pos);
+//
+//    if let Some(x) = defend_at_pos(pos, player) {
+//        let line = LOS(pos, x);
+//        for p in line.iter().skip(1).rev() {
+//            update_target(known, &mut target, *p);
+//            if target.error.is_empty() { return target; }
+//        }
+//    }
+//
+//    let mut okay = |p: Point| {
+//        if !check_follower_square(known, player, p, false) { return false; }
+//        update_target(known, &mut target, p);
+//        target.error.is_empty()
+//    };
+//
+//    let best = pos + dir.scale(2);
+//    let next = pos + dir.scale(1);
+//    if okay(best) { return target; }
+//    if okay(next) { return target; }
+//
+//    let mut options: Vec<Point> = vec![];
+//    for dx in -2..=2 {
+//        for dy in -2..=2 {
+//            let p = pos + Point(dx, dy);
+//            if okay(p) { options.push(p); }
+//        }
+//    }
+//
+//    let update = (|| {
+//        if options.is_empty() { return pos; }
+//        *options.select_nth_unstable_by_key(0, |x| (*x - best).len_l2_squared()).1
+//    })();
+//    update_target(known, &mut target, update);
+//    target
+//}
+
+fn update_target(known: &Knowledge, target: &mut Target, update: Point) {
+    let los = LOS(target.source, update);
+
+    target.error = "".into();
+    target.frame = 0;
+    target.path = los.into_iter().skip(1).collect();
+    target.target = update;
+
+    match &target.data {
+        TargetData::FarLook => {
+            for (i, &x) in target.path.iter().enumerate() {
+                if known.get(x).visible() { target.okay_until = i + 1; }
+            }
+            if target.okay_until < target.path.len() {
+                target.error = "You can't see a clear path there.".into();
+            }
+        }
+        TargetData::Summon { range, .. } => {
+            if target.path.is_empty() {
+                target.error = "There's something in the way.".into();
+            }
+            for (i, &x) in target.path.iter().enumerate() {
+                let cell = known.get(x);
+                let status = cell.status();
+                if status != Status::Free && status != Status::Unknown {
+                    target.error = "There's something in the way.".into();
+                } else if !(x - target.source).in_l2_range(*range) {
+                    target.error = "You can't throw that far.".into();
+                } else if !cell.visible() {
+                    target.error = "You can't see a clear path there.".into();
+                }
+                if !target.error.is_empty() { break; }
+                target.okay_until = i + 1;
+            }
+        }
+    }
+}
+
+fn select_valid_target(ui: &mut UI, known: &Knowledge) -> Option<EID> {
+    let target = ui.target.as_ref()?;
+    let entity = known.get(target.target).entity();
+
+    match &target.data {
+        TargetData::FarLook => {
+            let entity = entity?;
+            if can_target(entity) { Some(entity.eid) } else { None }
+        }
+        TargetData::Summon { index: _index, .. } => {
+            //state.input = Action::Summon(*index, target.target);
+            ui.focus
+        }
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// UI inputs
+
+fn process_ui_input(ui: &mut UI, entity: &Entity, input: Input) -> bool {
+    let known = &*entity.known;
+    let tab = input == Input::Char('\t') || input == Input::BackTab;
+    let enter = input == Input::Char('\n') || input == Input::Char('.');
+
+    let apply_tab = |prev: Option<EID>, off: bool| -> Option<EID> {
+        let rivals = rivals(entity);
+        if rivals.is_empty() { return None; }
+
+        let t = input == Input::Char('\t');
+        let n = rivals.len() + if off { 1 } else { 0 };
+
+        let next = prev.and_then(|x| rivals.iter().position(|y| y.eid == x));
+        let start = next.or_else(|| if off { Some(n - 1) } else { None });
+        let index = start.map(|x| if t { x + n + 1 } else { x + n - 1 } % n)
+                         .unwrap_or_else(|| if t { 0 } else { n - 1 });
+        if index < rivals.len() { Some(rivals[index].eid) } else { None }
+    };
+
+    let get_initial_target = |source: Point| -> Point {
+        let known = &*entity.known;
+        let focus = ui.focus.and_then(|x| known.entity(x));
+        if let Some(target) = focus && target.age == 0 { return target.pos; }
+        let rival = rivals(entity).into_iter().next();
+        if let Some(rival) = rival { return rival.pos; }
+        source
+    };
+
+    let get_updated_target = |target: Point| -> Option<Point> {
+        if tab {
+            let old_eid = known.get(target).entity().map(|x| x.eid);
+            let new_eid = apply_tab( old_eid, false);
+            return Some(known.entity(new_eid?)?.pos);
+        }
+
+        let ch = if let Input::Char(x) = input { Some(x) } else { None }?;
+        let dir = get_direction(ch.to_lowercase().next().unwrap_or(ch))?;
+        let scale = if ch.is_uppercase() { 4 } else { 1 };
+
+        let mut prev = target;
+        for _ in 0..scale {
+            let next = prev + dir;
+            if outside_map(ui, entity, prev + dir) { break; }
+            prev = next;
+        }
+        Some(prev)
+    };
+
+    if let Some(x) = &ui.target {
+        let update = get_updated_target(x.target);
+        if let Some(update) = update && update != x.target {
+            let mut target = ui.target.take();
+            target.as_mut().map(|x| update_target(known, x, update));
+            ui.target = target;
+        } else if enter {
+            if x.error.is_empty() {
+                ui.focus = select_valid_target(ui, known);
+                ui.target = None;
+            } else {
+                ui.log.log_menu(&x.error, UI_LOG_FAILURE);
+            }
+        } else if input == Input::Escape {
+            if let TargetData::FarLook = x.data {
+                let valid = x.error.is_empty();
+                ui.focus = if valid { select_valid_target(ui, known) } else { None };
+            }
+            ui.log.log_menu("Canceled.", UI_LOG_MENU);
+            ui.target = None;
+        }
+        return true;
+    }
+
+    if tab {
+        ui.focus = apply_tab(ui.focus, true);
+        return true;
+    } else if input == Input::Escape {
+        ui.focus = None;
+        return true;
+    }
+
+    if input == Input::Char('x') {
+        let source = entity.pos;
+        let update = get_initial_target(source);
+        let mut target = init_target(TargetData::FarLook, source, update);
+        update_target(known, &mut target, update);
+        ui.log.log_menu("Use the movement keys to examine a location:", UI_LOG_MENU);
+        ui.target = Some(target);
+        return true;
+    }
+
+    false
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 // UI
 
 pub struct LogLine {
@@ -154,26 +400,87 @@ pub struct LogLine {
     text: String,
 }
 
-pub struct Menu {
-    index: i32,
-    summon: i32,
+#[derive(Default)]
+pub struct Log {
+    lines: Vec<LogLine>,
 }
 
-pub struct Target {
-    error: String,
-    frame: i32,
-    okay_till: usize,
-    source: Point,
-    target: Point,
+impl Log {
+    pub fn log<S: Into<String>>(&mut self, text: S) {
+        self.log_color(text, Color::default());
+    }
+
+    pub fn log_color<S: Into<String>, T: Into<Color>>(&mut self, text: S, color: T) {
+        let (color, text) = (color.into(), text.into());
+        self.lines.push(LogLine { color, menu: false, text });
+        if self.lines.len() as i32 > UI_LOG_SIZE { self.lines.remove(0); }
+    }
+
+    pub fn log_menu<S: Into<String>, T: Into<Color>>(&mut self, text: S, color: T) {
+        let (color, text) = (color.into(), text.into());
+        if self.lines.last().map(|x| x.menu).unwrap_or(false) { self.lines.pop(); }
+        self.lines.push(LogLine { color, menu: true, text });
+        if self.lines.len() as i32 > UI_LOG_SIZE { self.lines.remove(0); }
+    }
+
+    pub fn end_menu_logging(&mut self) {
+        self.lines.last_mut().map(|x| x.menu = false);
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// Focus
+
+struct Focused {
+    active: bool,
+    vision: Vision,
+}
+
+impl Default for Focused {
+    fn default() -> Self {
+        Self { active: false, vision: Vision::new(FOV_RADIUS_NPC) }
+    }
+}
+
+impl Focused {
+    fn update(&mut self, entity: &Entity, target: &EntityKnowledge) {
+        let known = &*entity.known;
+        let (player, pos, dir) = (false, target.pos, target.dir);
+        if target.asleep {
+            self.vision.clear(target.pos);
+        } else {
+            let floor = Tile::get('.');
+            let lookup = |p: Point| known.get(p).tile().unwrap_or(floor);
+            self.vision.compute(&VisionArgs { player, pos, dir }, lookup);
+        }
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// UI
+
+struct Menu {
+    index: i32,
+    summon: i32,
 }
 
 #[derive(Default)]
 pub struct UI {
     frame: usize,
     layout: Layout,
+    pub log: Log,
+
+    // Animations
     moves: HashMap<Point, MoveAnimation>,
     rainfall: Option<Rainfall>,
     turn_times: VecDeque<Timestamp>,
+
+    // Modal components
+    focus: Option<EID>,
+    target: Option<Box<Target>>,
+    focused: Focused,
 }
 
 impl UI {
@@ -187,10 +494,10 @@ impl UI {
         buffer.fill(buffer.default);
         self.render_layout(buffer);
 
-        self.render_log(buffer, &[]);
-        self.render_rivals(buffer, entity, None);
+        self.render_log(buffer);
+        self.render_rivals(buffer, entity);
         self.render_status(buffer, entity, None, None);
-        self.render_target(buffer, entity, None);
+        self.render_target(buffer, entity);
 
         // Render the base map, then the debug layer, then the weather:
         self.render_map(buffer, entity, frame);
@@ -213,6 +520,10 @@ impl UI {
         self.moves.insert(point, manim);
     }
 
+    pub fn process_input(&mut self, entity: &Entity, input: Input) -> bool {
+        process_ui_input(self, entity, input)
+    }
+
     pub fn start_rain(&mut self, delta: Point, count: usize) {
         let rainfall = Rainfall {
             ch: Glyph::ray(delta),
@@ -231,6 +542,27 @@ impl UI {
 
         for x in self.moves.values_mut() { x.frame += 1; }
         self.moves.retain(|_, v| v.frame < v.limit);
+    }
+
+    pub fn update_focus(&mut self, entity: &Entity) {
+        let known = &*entity.known;
+        let focus = match &self.target {
+            Some(x) => known.get(x.target).entity(),
+            None => self.focus.and_then(|x| known.entity(x)),
+        };
+        if let Some(target) = focus && can_target(target) {
+            self.focused.update(entity, target);
+            self.focused.active = true;
+        } else {
+            self.focused.active = false;
+        }
+    }
+
+    pub fn update_target(&mut self, entity: &Entity) -> bool {
+        let Some(target) = &mut self.target else { return false };
+        target.frame = (target.frame + 1) % UI_TARGET_FRAMES;
+        self.update_focus(entity);
+        true
     }
 
     // Update helpers
@@ -355,6 +687,55 @@ impl UI {
 
         // If we're still playing, render arrows showing NPC facing.
         if entity.cur_hp > 0 { self.render_arrows(known, offset, slice); }
+
+        // Render the targeting UI on the map.
+        let set = |slice: &mut Slice, point: Point, glyph: Glyph| {
+            let point = Point(2 * (point.0 - offset.0), point.1 - offset.1);
+            slice.set(point, glyph);
+        };
+        let recolor = |slice: &mut Slice, point: Point, fg: Option<Color>, bg: Option<Color>| {
+            let point = Point(2 * (point.0 - offset.0), point.1 - offset.1);
+            if !slice.contains(point) { return; }
+
+            let mut glyph = slice.get(point);
+            if let Some(fg) = fg {
+                glyph = glyph.with_fg(fg);
+            }
+            if glyph.bg() == Color::default() && let Some(bg) = bg {
+                glyph = glyph.with_bg(bg);
+            }
+            slice.set(point, glyph);
+        };
+        if let Some(target) = &self.target {
+            let shade = Color::gray(UI_TARGET_SHADE);
+            let color = if target.error.is_empty() { 0x440 } else { 0x400 };
+            recolor(slice, target.source, Some(Color::black()), Some(shade));
+            recolor(slice, target.target, Some(Color::black()), Some(color.into()));
+
+            let frame = target.frame >> 1;
+            let count = UI_TARGET_FRAMES >> 1;
+            let limit = target.path.len() as i32 - 1;
+            let ch = Glyph::ray(target.target - target.source);
+            for i in 0..limit {
+                if !((i + count - frame) % count < 2) { continue; }
+                let point = target.path[i as usize];
+                let color = if i as usize <= target.okay_until { 0x440 } else { 0x400 };
+                set(slice, point, Glyph::wdfg(ch, color));
+            }
+        }
+
+        // Render an estimate of the focused entity's FOV on the map.
+        if self.focused.active {
+            let shade = Color::gray(UI_TARGET_SHADE);
+            let color = Color::gray(UI_TARGET_FOV_SHADE);
+            for (i, &point) in self.focused.vision.points_seen.iter().enumerate() {
+                if i == 0 {
+                    recolor(slice, point, Some(Color::black()), Some(shade));
+                } else {
+                    recolor(slice, point, None, Some(color));
+                }
+            }
+        }
     }
 
     fn render_arrows(&self, known: &Knowledge, offset: Point, slice: &mut Slice) {
@@ -474,14 +855,14 @@ impl UI {
 
     // Rendering each section of the UI
 
-    fn render_log(&self, buffer: &mut Buffer, log: &[LogLine]) {
+    fn render_log(&self, buffer: &mut Buffer) {
         let slice = &mut Slice::new(buffer, self.layout.log);
-        for line in log {
+        for line in &self.log.lines {
             slice.set_fg(Some(line.color)).write_str(&line.text).newline();
         }
     }
 
-    fn render_rivals(&self, buffer: &mut Buffer, entity: &Entity, target: Option<&Target>) {
+    fn render_rivals(&self, buffer: &mut Buffer, entity: &Entity) {
         let slice = &mut Slice::new(buffer, self.layout.rivals);
         let mut rivals = rivals(entity);
         rivals.truncate(max(slice.size().1, 0) as usize / 2);
@@ -497,13 +878,13 @@ impl UI {
             slice.write_chr(glyph).space().write_str(name);
             slice.spaces(ss).set_fg(Some(hp_color)).write_str(&hp_text).newline();
 
-            let targeted = match &target {
+            let targeted = match &self.target {
                 Some(x) => x.target == rival.pos,
-                None => entity.known.focus == Some(rival.eid),
+                None => self.focus == Some(rival.eid),
             };
             if targeted {
                 let start = slice.get_cursor() - Point(0, 1);
-                let (fg, bg) = (Color::default(), Color::gray(128));
+                let (fg, bg) = (Color::default(), Color::gray(UI_TARGET_FOV_SHADE));
                 for x in 0..UI_STATUS_SIZE {
                     let p = start + Point(x, 0);
                     slice.set(p, Glyph::new(slice.get(p).ch(), fg, bg));
@@ -536,10 +917,10 @@ impl UI {
         }
     }
 
-    fn render_target(&self, buffer: &mut Buffer, entity: &Entity, target: Option<&Target>) {
+    fn render_target(&self, buffer: &mut Buffer, entity: &Entity) {
         let slice = &mut Slice::new(buffer, self.layout.target);
         let known = &*entity.known;
-        if target.is_none() && known.focus.is_none() {
+        if self.target.is_none() && self.focus.is_none() {
             let fg = Some(0x111.into());
             slice.newline();
             slice.set_fg(fg).write_str("No target selected.").newline();
@@ -548,25 +929,25 @@ impl UI {
             return;
         }
 
-        let (cell, view, header, seen) = match &target {
+        let (cell, view, header, seen) = match &self.target {
             Some(x) => {
                 let cell = known.get(x.target);
                 let (seen, view) = (cell.visible(), cell.entity());
-                let header: String = "No target data yet...".into();
-                //let header = match &x.data {
-                //    TargetData::FarLook => "Examining...".into(),
-                //    TargetData::Summon { index, .. } => {
-                //        let name = match &entity.data.pokemon[*index] {
-                //            PokemonEdge::In(y) => name(y),
-                //            PokemonEdge::Out(_) => "?",
-                //        };
-                //        format!("Sending out {}...", name)
-                //    }
-                //};
+                let header = match &x.data {
+                    TargetData::FarLook => "Examining...".into(),
+                    TargetData::Summon { index: _index, .. } => {
+                        //let name = match &entity.data.pokemon[*index] {
+                        //    PokemonEdge::In(y) => name(y),
+                        //    PokemonEdge::Out(_) => "?",
+                        //};
+                        let name = "<unimplemented>";
+                        format!("Sending out {}...", name)
+                    }
+                };
                 (cell, view, header, seen)
             }
             None => {
-                let view = known.focus.and_then(|x| known.entity(x));
+                let view = self.focus.and_then(|x| known.entity(x));
                 let seen = view.map(|x| x.age == 0).unwrap_or(false);
                 let cell = view.map(|x| known.get(x.pos)).unwrap_or(known.default());
                 let header = if seen {
@@ -578,7 +959,7 @@ impl UI {
             },
         };
 
-        let fg = if target.is_some() || seen { None } else { Some(0x111.into()) };
+        let fg = if self.target.is_some() || seen { None } else { Some(0x111.into()) };
         let text = if view.is_some() {
             if seen { "Standing on: " } else { "Stood on: " }
         } else {
