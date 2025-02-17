@@ -9,7 +9,8 @@ use crate::effect::{Frame, self};
 use crate::entity::{EID, Entity};
 use crate::game::{WORLD_SIZE, FOV_RADIUS_NPC, FOV_RADIUS_PC_};
 use crate::game::{Input, Tile, show_item};
-use crate::knowledge::{EntityKnowledge, Knowledge, Timestamp, Vision, VisionArgs};
+use crate::knowledge::{PLAYER_MAP_MEMORY, Timestamp};
+use crate::knowledge::{EntityKnowledge, Knowledge, Vision, VisionArgs};
 use crate::pathing::Status;
 
 //////////////////////////////////////////////////////////////////////////////
@@ -35,7 +36,7 @@ const UI_MOVE_ALPHA: f64 = 0.75;
 const UI_MOVE_FRAMES: i32 = 12;
 const UI_TARGET_FRAMES: i32 = 20;
 
-const UI_MAP_MEMORY: usize = 32;
+const UI_FOV_BRIGHTEN: f64 = 0.1;
 const UI_REMEMBERED: f64 = 0.15;
 const UI_SHADE_FADE: f64 = 0.30;
 
@@ -509,9 +510,10 @@ impl UI {
 
     // Update entry points
 
-    pub fn add_turn_time(&mut self, time: Timestamp) {
-        if self.turn_times.len() == UI_MAP_MEMORY { self.turn_times.pop_back(); }
+    pub fn add_turn_time(&mut self, time: Timestamp) -> Timestamp {
+        if self.turn_times.len() == PLAYER_MAP_MEMORY { self.turn_times.pop_back(); }
         self.turn_times.push_front(time);
+        *self.turn_times.back().unwrap()
     }
 
     pub fn animate_move(&mut self, color: Color, delay: i32, point: Point) {
@@ -622,9 +624,9 @@ impl UI {
                 for (turn, &turn_time) in self.turn_times.iter().enumerate() {
                     if age <= known.time - turn_time { return turn; }
                 }
-                return UI_MAP_MEMORY;
+                return PLAYER_MAP_MEMORY;
             })();
-            if age_in_turns >= max(UI_MAP_MEMORY, 1) { return unseen; }
+            if age_in_turns >= max(PLAYER_MAP_MEMORY, 1) { return unseen; }
 
             let see_entity = cell.can_see_entity_at();
             let obscured = tile.limits_vision();
@@ -640,8 +642,8 @@ impl UI {
             let mut color = glyph.fg();
 
             if !cell.visible() {
-                let limit = max(UI_MAP_MEMORY, 1) as f64;
-                let delta = (UI_MAP_MEMORY - age_in_turns) as f64;
+                let limit = max(PLAYER_MAP_MEMORY, 1) as f64;
+                let delta = (PLAYER_MAP_MEMORY - age_in_turns) as f64;
                 color = Color::white().fade(UI_REMEMBERED * delta / limit);
             } else if shadowed {
                 color = color.fade(UI_SHADE_FADE);
@@ -702,6 +704,15 @@ impl UI {
             if let Some(bg) = bg && glyph.bg() == Color::black() { glyph = glyph.with_bg(bg); }
             slice.set(point, glyph);
         };
+        let brighten = |slice: &mut Slice, point: Point| {
+            let point = Point(2 * (point.0 - offset.0), point.1 - offset.1);
+            if !slice.contains(point) { return; }
+
+            let glyph = slice.get(point);
+            let glyph = glyph.with_fg(glyph.fg().brighten(UI_FOV_BRIGHTEN));
+            let glyph = glyph.with_bg(glyph.bg().brighten(UI_FOV_BRIGHTEN));
+            slice.set(point, glyph);
+        };
 
         // Render the targeting UI on the map.
         if let Some(target) = &self.target {
@@ -725,12 +736,11 @@ impl UI {
         // Render an estimate of the focused entity's FOV on the map.
         if self.focused.active {
             let shade = Color::gray(UI_TARGET_SHADE);
-            let color = Color::gray(UI_TARGET_FOV_SHADE);
             for (i, &point) in self.focused.vision.points_seen.iter().enumerate() {
                 if i == 0 {
                     recolor(slice, point, Some(Color::black()), Some(shade));
                 } else {
-                    recolor(slice, point, None, Some(color));
+                    brighten(slice, point);
                 }
             }
         }
@@ -931,7 +941,8 @@ impl UI {
         let (cell, view, header, seen) = match &self.target {
             Some(x) => {
                 let cell = known.get(x.target);
-                let (seen, view) = (cell.visible(), cell.entity());
+                let seen = cell.visible();
+                let view = if cell.can_see_entity_at() { cell.entity() } else { None };
                 let header = match &x.data {
                     TargetData::FarLook => "Examining...".into(),
                     TargetData::Summon { index: _index, .. } => {

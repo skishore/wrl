@@ -11,7 +11,7 @@ use crate::base::{Buffer, Color, Glyph};
 use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs};
 use crate::effect::{Effect, Event, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
-use crate::knowledge::{Knowledge, Vision, VisionArgs};
+use crate::knowledge::{Knowledge, Timestamp, Vision, VisionArgs};
 use crate::mapgen::mapgen_with_size;
 use crate::pathing::Status;
 use crate::ui::{UI, get_direction};
@@ -397,6 +397,10 @@ impl Board {
 
         swap(&mut known, &mut self.entities[eid].known);
         self.known = Some(known);
+    }
+
+    fn forget_player_known(&mut self, eid: EID, limit: Timestamp) {
+        self.entities[eid].known.forget_cells_before(limit);
     }
 
     fn remove_known_entity(&mut self, eid: EID, oid: EID) {
@@ -800,7 +804,8 @@ fn update_state(state: &mut State) {
         if player && !result.success { break; }
 
         if player && state.get_player().pos != pos {
-            state.ui.add_turn_time(state.get_player().known.time);
+            let limit = state.ui.add_turn_time(state.get_player().known.time);
+            state.board.forget_player_known(state.player, limit);
         }
 
         //state.board.update_known(eid);
