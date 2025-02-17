@@ -25,6 +25,8 @@ const VISION_COSINE: f64 = 0.5;
 const _PC_VISION_RADIUS: i32 = 4;
 const NPC_VISION_RADIUS: i32 = 3;
 
+pub const PLAYER_MAP_MEMORY: usize = 32;
+
 //////////////////////////////////////////////////////////////////////////////
 
 // Timestamp
@@ -353,6 +355,12 @@ impl Knowledge {
         entry.asleep = other.asleep;
 
         handle
+    }
+
+    pub fn forget_cells_before(&mut self, limit: Timestamp) {
+        while let Some(x) = self.cells.back() && x.last_seen.0 < limit.0 {
+            self.forget_last_cell();
+        }
     }
 
     pub fn remove_entity(&mut self, oid: EID) {
