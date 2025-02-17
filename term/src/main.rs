@@ -16,8 +16,8 @@ struct Screen {
     output: termion::raw::RawTerminal<io::Stdout>,
     next: Matrix<Glyph>,
     prev: Matrix<Glyph>,
-    fg: Color,
-    bg: Color,
+    fg: Option<Color>,
+    bg: Option<Color>,
 }
 
 impl Screen {
@@ -26,7 +26,7 @@ impl Screen {
         let next = Matrix::new(size, ' '.into());
         let (x, y) = termion::terminal_size().unwrap();
         let output = io::stdout().into_raw_mode().unwrap();
-        let (fg, bg) = (Color::default(), Color::default());
+        let (fg, bg) = (None, None);
         Self { extent: Point(x as i32, y as i32), output, next, prev, fg, bg }
     }
 
@@ -92,36 +92,36 @@ impl Screen {
     }
 
     fn reset_colors(&mut self) -> io::Result<()> {
-        self.set_foreground(Color::black())?;
-        self.set_background(Color::black())?;
-        self.set_foreground(Color::default())?;
-        self.set_background(Color::default())
+        self.clear_foreground()?;
+        self.clear_background()
+    }
+
+    fn clear_foreground(&mut self) -> io::Result<()> {
+        self.fg = None;
+        write!(self.output, "{}", color::Fg(color::Reset))
+    }
+
+    fn clear_background(&mut self) -> io::Result<()> {
+        self.bg = None;
+        write!(self.output, "{}", color::Bg(color::Reset))
     }
 
     fn set_foreground(&mut self, color: Color) -> io::Result<()> {
-        if color == self.fg { return Ok(()); }
-        self.fg = color;
-        if color != Color::default() {
-            let r = ((color.0 >> 16) & 0xff) as u8;
-            let g = ((color.0 >> 8) & 0xff) as u8;
-            let b = (color.0 & 0xff) as u8;
-            write!(self.output, "{}", color::Fg(color::Rgb(r, g, b)))
-        } else {
-            write!(self.output, "{}", color::Fg(color::Reset))
-        }
+        if self.fg == Some(color) { return Ok(()); }
+        self.fg = Some(color);
+        let r = ((color.0 >> 16) & 0xff) as u8;
+        let g = ((color.0 >> 8) & 0xff) as u8;
+        let b = (color.0 & 0xff) as u8;
+        write!(self.output, "{}", color::Fg(color::Rgb(r, g, b)))
     }
 
     fn set_background(&mut self, color: Color) -> io::Result<()> {
-        if color == self.bg { return Ok(()); }
-        self.bg = color;
-        if color != Color::default() {
-            let r = ((color.0 >> 16) & 0xff) as u8;
-            let g = ((color.0 >> 8) & 0xff) as u8;
-            let b = (color.0 & 0xff) as u8;
-            write!(self.output, "{}", color::Bg(color::Rgb(r, g, b)))
-        } else {
-            write!(self.output, "{}", color::Bg(color::Reset))
-        }
+        if self.bg == Some(color) { return Ok(()); }
+        self.bg = Some(color);
+        let r = ((color.0 >> 16) & 0xff) as u8;
+        let g = ((color.0 >> 8) & 0xff) as u8;
+        let b = (color.0 & 0xff) as u8;
+        write!(self.output, "{}", color::Bg(color::Rgb(r, g, b)))
     }
 
     fn write_char(&mut self, ch: Char) -> io::Result<i32> {
@@ -135,8 +135,8 @@ impl Screen {
     }
 
     fn write_debug_message(&mut self, msg: &str) -> io::Result<()> {
-        self.set_foreground(Color::default())?;
-        self.set_background(Color::default())?;
+        self.clear_foreground()?;
+        self.clear_background()?;
         let n = 5;
         for i in 0..n {
             let y = self.extent.1 as u16 - i - 1;
@@ -147,8 +147,8 @@ impl Screen {
     }
 
     fn write_status_message(&mut self, msg: &str) -> io::Result<()> {
-        self.set_foreground(Color::default())?;
-        self.set_background(Color::default())?;
+        self.clear_foreground()?;
+        self.clear_background()?;
         let x = (self.extent.0 - msg.len() as i32) as u16;
         let y = self.extent.1 as u16;
         write!(self.output, "{}{}{}", Goto(x, y), clear::CurrentLine, msg)

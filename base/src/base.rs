@@ -57,10 +57,6 @@ impl Char {
 pub struct Color(pub u32);
 static_assert_size!(Color, 4);
 
-impl Default for Color {
-    fn default() -> Self { Self(1) }
-}
-
 impl From<i32> for Color {
     fn from(val: i32) -> Self {
         let scale = 84;
@@ -110,21 +106,21 @@ impl Glyph {
     }
 
     pub fn char(ch: char) -> Self {
-        Self::new(Char(ch as u16), Color::default(), Color::default())
+        Self::new(Char(ch as u16), Color::white(), Color::black())
     }
 
     pub fn chfg<T: Into<Color>>(ch: char, fg: T) -> Self {
-        Self::new(Char(ch as u16), fg.into(), Color::default())
+        Self::new(Char(ch as u16), fg.into(), Color::black())
     }
 
     pub fn wide(ch: char) -> Self {
         let ch = Char((ch as u16) + (0xff00 - 0x20));
-        Self::new(ch, Color::default(), Color::default())
+        Self::new(ch, Color::white(), Color::black())
     }
 
     pub fn wdfg<T: Into<Color>>(ch: char, fg: T) -> Self {
         let ch = Char((ch as u16) + (0xff00 - 0x20));
-        Self::new(ch, fg.into(), Color::default())
+        Self::new(ch, fg.into(), Color::black())
     }
 
     pub fn with_fg<T: Into<Color>>(&self, color: T) -> Self {
