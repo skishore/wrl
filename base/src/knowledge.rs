@@ -54,7 +54,7 @@ pub struct Vision {
     center: Point,
     offset: Point,
     visibility: Matrix<i32>,
-    points_seen: Vec<Point>,
+    pub points_seen: Vec<Point>,
 }
 
 impl Vision {
@@ -195,7 +195,6 @@ pub struct Knowledge {
     entity_by_eid: HashMap<EID, EntityHandle>,
     pub cells: List<CellKnowledge>,
     pub entities: List<EntityKnowledge>,
-    pub focus: Option<EID>,
     pub time: Timestamp,
 }
 
@@ -293,7 +292,7 @@ impl Knowledge {
             }
         }
 
-        self.forget();
+        self.forget(me.player);
     }
 
     pub fn update_entity(&mut self, entity: &Entity, other: &Entity,
@@ -374,7 +373,7 @@ impl Knowledge {
         self.time.0 += TURN_AGE as u32;
     }
 
-    fn forget(&mut self) {
+    fn forget(&mut self, player: bool) {
         for entity in &mut self.entities {
             if !entity.heard { continue; }
             let lookup = self.cell_by_point.get(&entity.pos);
@@ -382,6 +381,7 @@ impl Knowledge {
             if self.cells[h].last_see_entity_at != self.time { continue; }
             entity.heard = false;
         }
+        if player { return; }
 
         while self.cell_by_point.len() > MAX_TILE_MEMORY {
             // We don't need to check age, here; we can only see a bounded
