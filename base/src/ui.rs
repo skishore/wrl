@@ -42,8 +42,8 @@ const UI_SHADE_FADE: f64 = 0.30;
 const UI_TARGET_SHADE: u8 = 192;
 const UI_TARGET_FOV_SHADE: u8 = 32;
 
-const UI_LOG_MENU: i32 = 0x123;
-const UI_LOG_FAILURE: i32 = 0x322;
+const UI_LOG_MENU: (u8, u8, u8) = (128, 192, 255);
+const UI_LOG_FAILURE: (u8, u8, u8) = (255, 160, 160);
 
 const PLAYER_KEY: char = 'a';
 const SUMMON_KEYS: [char; 3] = ['s', 'd', 'f'];
@@ -407,7 +407,7 @@ pub struct Log {
 
 impl Log {
     pub fn log<S: Into<String>>(&mut self, text: S) {
-        self.log_color(text, Color::default());
+        self.log_color(text, Color::white());
     }
 
     pub fn log_color<S: Into<String>, T: Into<Color>>(&mut self, text: S, color: T) {
@@ -688,7 +688,7 @@ impl UI {
         // If we're still playing, render arrows showing NPC facing.
         if entity.cur_hp > 0 { self.render_arrows(known, offset, slice); }
 
-        // Render the targeting UI on the map.
+        // Helpers used for the map overlay UIs.
         let set = |slice: &mut Slice, point: Point, glyph: Glyph| {
             let point = Point(2 * (point.0 - offset.0), point.1 - offset.1);
             slice.set(point, glyph);
@@ -698,19 +698,17 @@ impl UI {
             if !slice.contains(point) { return; }
 
             let mut glyph = slice.get(point);
-            if let Some(fg) = fg {
-                glyph = glyph.with_fg(fg);
-            }
-            if glyph.bg() == Color::default() && let Some(bg) = bg {
-                glyph = glyph.with_bg(bg);
-            }
+            if let Some(fg) = fg { glyph = glyph.with_fg(fg); }
+            if let Some(bg) = bg && glyph.bg() == Color::black() { glyph = glyph.with_bg(bg); }
             slice.set(point, glyph);
         };
+
+        // Render the targeting UI on the map.
         if let Some(target) = &self.target {
             let shade = Color::gray(UI_TARGET_SHADE);
             let color = if target.error.is_empty() { 0x440 } else { 0x400 };
-            recolor(slice, target.source, Some(Color::black()), Some(shade));
             recolor(slice, target.target, Some(Color::black()), Some(color.into()));
+            recolor(slice, target.source, Some(Color::black()), Some(shade));
 
             let frame = target.frame >> 1;
             let count = UI_TARGET_FRAMES >> 1;
@@ -719,7 +717,7 @@ impl UI {
             for i in 0..limit {
                 if !((i + count - frame) % count < 2) { continue; }
                 let point = target.path[i as usize];
-                let color = if i as usize <= target.okay_until { 0x440 } else { 0x400 };
+                let color = if (i as usize) < target.okay_until { 0x440 } else { 0x400 };
                 set(slice, point, Glyph::wdfg(ch, color));
             }
         }
@@ -753,12 +751,13 @@ impl UI {
         }
 
         for (ch, arrow) in &arrows {
+            let glyph = Glyph::wide(*ch);
             let speed = if *ch == 'Z' { 8 } else { 2 };
             let denom = if *ch == 'Z' { sleep_length } else { arrow_length };
             let index = (self.frame / speed) % (8 * denom as usize);
             if let Some(x) = arrow.get(index + 1) {
                 let point = Point(2 * (x.0 - offset.0), x.1 - offset.1);
-                slice.set(point, Glyph::wide(*ch));
+                slice.set(point, glyph);
             }
         }
     }
@@ -884,7 +883,7 @@ impl UI {
             };
             if targeted {
                 let start = slice.get_cursor() - Point(0, 1);
-                let (fg, bg) = (Color::default(), Color::gray(UI_TARGET_FOV_SHADE));
+                let (fg, bg) = (Color::white(), Color::gray(UI_TARGET_FOV_SHADE));
                 for x in 0..UI_STATUS_SIZE {
                     let p = start + Point(x, 0);
                     slice.set(p, Glyph::new(slice.get(p).ch(), fg, bg));
