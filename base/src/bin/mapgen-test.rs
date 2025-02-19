@@ -1,12 +1,18 @@
 use wrl_base::base::{Point, RNG};
 use wrl_base::game::Tile;
-use wrl_base::mapgen::mapgen;
+use wrl_base::mapgen::{legacy_mapgen, mapgen};
 
 use rand::SeedableRng;
 
 fn main() {
+    let args: Vec<_> = std::env::args().collect();
+    if args.len() != 2 || (args[1] != "old" && args[1] != "new") {
+        panic!("Usage: mapgen-test (old|new)");
+    }
+
+    let f = if args[1] == "old" { legacy_mapgen } else { mapgen };
     let mut rng = RNG::from_entropy();
-    let map = mapgen(&mut rng);
+    let map = f(&mut rng);
 
     for y in 0..map.size.1 {
         let mut line = String::default();
