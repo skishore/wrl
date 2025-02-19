@@ -763,8 +763,8 @@ impl UI {
         for (ch, arrow) in &arrows {
             let glyph = Glyph::wide(*ch);
             let speed = if *ch == 'Z' { 8 } else { 2 };
-            let denom = if *ch == 'Z' { sleep_length } else { arrow_length };
-            let index = (self.frame / speed) % (8 * denom as usize);
+            let denom = if *ch == 'Z' { 4 * sleep_length } else { 8 * arrow_length };
+            let index = (self.frame / speed) % (denom as usize);
             if let Some(x) = arrow.get(index + 1) {
                 let point = Point(2 * (x.0 - offset.0), x.1 - offset.1);
                 slice.set(point, glyph);
