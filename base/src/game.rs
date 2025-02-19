@@ -150,7 +150,7 @@ pub struct Cell {
     pub tile: &'static Tile,
 }
 #[cfg(target_pointer_width = "32")]
-static_assert_size!(Cell, 20);
+static_assert_size!(Cell, 24);
 #[cfg(target_pointer_width = "64")]
 static_assert_size!(Cell, 32);
 

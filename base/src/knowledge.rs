@@ -189,6 +189,9 @@ pub struct EntityKnowledge {
     pub friend: bool,
     pub asleep: bool,
 }
+#[cfg(target_pointer_width = "32")]
+static_assert_size!(EntityKnowledge, 72);
+#[cfg(target_pointer_width = "64")]
 static_assert_size!(EntityKnowledge, 80);
 
 #[derive(Default)]
