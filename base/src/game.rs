@@ -832,8 +832,14 @@ pub struct State {
     ui: UI,
 }
 
+impl Default for State {
+    fn default() -> Self {
+        Self::new(/*seed=*/None, /*full=*/false)
+    }
+}
+
 impl State {
-    pub fn new(seed: Option<u64>) -> Self {
+    pub fn new(seed: Option<u64>, full: bool) -> Self {
         let size = Point(WORLD_SIZE, WORLD_SIZE);
         let pos = Point(size.0 / 2, size.1 / 2);
         let rng = seed.map(|x| RNG::seed_from_u64(x));
@@ -888,6 +894,7 @@ impl State {
             Weather::None => (),
         }
         ui.log.log("Welcome to WildsRL! Use vikeys (h/j/k/l/y/u/b/n) to move.");
+        if full { ui.show_full_view(); }
 
         Self { board, input, inputs, player, pov, rng, ai, ui }
     }
@@ -934,7 +941,9 @@ mod tests {
     fn bench_state_update(b: &mut test::Bencher) {
         let mut index = 0;
         let mut states = vec![];
-        for i in 0..NUM_SEEDS { states.push(State::new(Some(BASE_SEED + i))); }
+        for i in 0..NUM_SEEDS {
+            states.push(State::new(Some(BASE_SEED + i), /*full=*/false));
+        }
 
         b.iter(|| {
             let i = index % states.len();

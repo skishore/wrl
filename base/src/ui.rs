@@ -17,12 +17,6 @@ use crate::pathing::Status;
 
 // Constants
 
-const FULL_VIEW: bool = false;
-const UI_MAP_SIZE: i32 = if FULL_VIEW { WORLD_SIZE } else { 2 * FOV_RADIUS_PC_ + 1 };
-
-const UI_MAP_SIZE_X: i32 = UI_MAP_SIZE;
-const UI_MAP_SIZE_Y: i32 = UI_MAP_SIZE;
-
 const UI_COL_SPACE: i32 = 2;
 const UI_ROW_SPACE: i32 = 1;
 const UI_KEY_SPACE: i32 = 4;
@@ -36,9 +30,9 @@ const UI_MOVE_ALPHA: f64 = 0.75;
 const UI_MOVE_FRAMES: i32 = 12;
 const UI_TARGET_FRAMES: i32 = 20;
 
-const UI_FOV_BRIGHTEN: f64 = 0.1;
-const UI_REMEMBERED: f64 = 0.15;
-const UI_SHADE_FADE: f64 = 0.30;
+const UI_FOV_BRIGHTEN: f64 = 0.12;
+const UI_REMEMBERED: f64 = 0.25;
+const UI_SHADE_FADE: f64 = 0.50;
 
 const UI_TARGET_SHADE: u8 = 192;
 const UI_TARGET_FOV_SHADE: u8 = 32;
@@ -68,11 +62,6 @@ pub fn get_direction(ch: char) -> Option<Point> {
     }
 }
 
-fn outside_map(ui: &UI, entity: &Entity, point: Point) -> bool {
-    let Point(x, y) = point + ui.get_map_offset(entity);
-    0 <= x && x < UI_MAP_SIZE_X && 0 <= y && y < UI_MAP_SIZE_Y
-}
-
 fn rivals<'a>(entity: &'a Entity) -> Vec<&'a EntityKnowledge> {
     let mut rivals = vec![];
     for other in &entity.known.entities {
@@ -83,6 +72,12 @@ fn rivals<'a>(entity: &'a Entity) -> Vec<&'a EntityKnowledge> {
     rivals.sort_by_cached_key(
         |x| ((x.pos - pos).len_l2_squared(), x.pos.0, x.pos.1));
     rivals
+}
+
+fn within_map_bounds(ui: &UI, entity: &Entity, point: Point) -> bool {
+    let size = ui.get_map_size();
+    let Point(x, y) = point - ui.get_map_offset(entity);
+    0 <= x && x < size.0 && 0 <= y && y < size.1
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -101,11 +96,18 @@ struct Layout {
 
 impl Default for Layout {
     fn default() -> Self {
+        let side = 2 * FOV_RADIUS_PC_ + 1;
+        Self::new(Point(side, side))
+    }
+}
+
+impl Layout {
+    fn new(size: Point) -> Self {
         let kl = UI::render_key('a').chars().count() as i32;
         assert!(kl == UI_KEY_SPACE);
 
+        let Point(x, y) = size;
         let ss = UI_STATUS_SIZE;
-        let (x, y) = (UI_MAP_SIZE_X, UI_MAP_SIZE_Y);
         let (col, row) = (UI_COL_SPACE, UI_ROW_SPACE);
         let w = 2 * x + 2 + 2 * (ss + kl + 2 * col);
         let h = y + 2 + row + UI_LOG_SIZE + row + 1;
@@ -340,7 +342,7 @@ fn process_ui_input(ui: &mut UI, entity: &Entity, input: Input) -> bool {
         let mut prev = target;
         for _ in 0..scale {
             let next = prev + dir;
-            if outside_map(ui, entity, prev + dir) { break; }
+            if !within_map_bounds(ui, entity, prev + dir) { break; }
             prev = next;
         }
         Some(prev)
@@ -472,6 +474,7 @@ pub struct UI {
     frame: usize,
     layout: Layout,
     pub log: Log,
+    full: bool,
 
     // Animations
     moves: HashMap<Point, MoveAnimation>,
@@ -524,6 +527,12 @@ impl UI {
 
     pub fn process_input(&mut self, entity: &Entity, input: Input) -> bool {
         process_ui_input(self, entity, input)
+    }
+
+    pub fn show_full_view(&mut self) {
+        let side = WORLD_SIZE;
+        self.layout = Layout::new(Point(side, side));
+        self.full = true;
     }
 
     pub fn start_rain(&mut self, delta: Point, count: usize) {
@@ -653,8 +662,9 @@ impl UI {
 
         // Render all currently-visible cells.
         slice.fill(Glyph::wide(' '));
-        for y in 0..UI_MAP_SIZE_Y {
-            for x in 0..UI_MAP_SIZE_X {
+        let size = self.get_map_size();
+        for y in 0..size.1 {
+            for x in 0..size.0 {
                 let glyph = lookup(Point(x, y) + offset);
                 slice.set(Point(2 * x, y), glyph);
             }
@@ -815,6 +825,7 @@ impl UI {
         let slice = &mut Slice::new(buffer, self.layout.map);
         let offset = self.get_map_offset(entity);
 
+        let size = self.get_map_size();
         let base = Tile::get('~').glyph.fg();
         let known = &*entity.known;
 
@@ -836,8 +847,8 @@ impl UI {
 
         if rainfall.lightning > 0 {
             let color = Color::from(0x111 * (rainfall.lightning / 2));
-            for y in 0..UI_MAP_SIZE_Y {
-                for x in 0..UI_MAP_SIZE_X {
+            for y in 0..size.1 {
+                for x in 0..size.0 {
                     let point = Point(2 * x, y);
                     slice.set(point, slice.get(point).with_bg(color));
                 }
@@ -850,13 +861,13 @@ impl UI {
                 let space = Glyph::char(' ');
                 let delta = Point(shift - 1, 0);
                 let limit = if delta.1 > 0 { -1 } else { 0 };
-                for y in 0..UI_MAP_SIZE_Y {
-                    for x in 0..(UI_MAP_SIZE_X + limit) {
+                for y in 0..size.1 {
+                    for x in 0..(size.0 + limit) {
                         let point = Point(2 * x, y);
                         slice.set(point + delta, slice.get(point));
                     }
                     slice.set(Point(0, y), space);
-                    slice.set(Point(2 * UI_MAP_SIZE_X - 1, y), space);
+                    slice.set(Point(2 * size.0 - 1, y), space);
                 }
             }
         }
@@ -1094,9 +1105,14 @@ impl UI {
 
     // Low-level private rendering helpers
 
+    fn get_map_size(&self) -> Point {
+        Point(self.layout.map.size.0 / 2, self.layout.map.size.1)
+    }
+
     fn get_map_offset(&self, entity: &Entity) -> Point {
-        if FULL_VIEW { return Point::default(); }
-        entity.pos - Point(UI_MAP_SIZE_X / 2, UI_MAP_SIZE_Y / 2)
+        if self.full { return Point::default(); }
+        let size = self.get_map_size();
+        entity.pos - Point(size.0 / 2, size.1 / 2)
     }
 
     fn render_bar(&self, value: f64, color: Color, width: i32, slice: &mut Slice) {

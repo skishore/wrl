@@ -6,7 +6,7 @@ use wrl_base::base::{Glyph, Matrix};
 use wrl_base::game::{Input, State};
 
 thread_local! {
-    static STATE: RefCell<State> = State::new(None).into();
+    static STATE: RefCell<State> = Default::default()
 }
 
 #[wasm_bindgen(module = "/web/bindings.js")]
