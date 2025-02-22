@@ -188,7 +188,13 @@ fn input(key: Key) -> Option<Input> {
 }
 
 fn main() {
-    let game = State::new(None);
+    let args: Vec<_> = std::env::args().collect();
+    if !(args.len() == 1 || (args.len() == 2 && args[1] == "full")) {
+        panic!("Usage: wrl-term (full)?");
+    }
+
+    let full = args.len() == 2;
+    let game = State::new(/*seed=*/None, full);
     let mut output = Matrix::default();
     let mut debug = String::default();
     game.render(&mut output, &mut debug);
