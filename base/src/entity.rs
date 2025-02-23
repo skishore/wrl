@@ -4,7 +4,7 @@ use std::ops::{Index, IndexMut};
 use slotmap::{DefaultKey, Key, KeyData, SlotMap};
 
 use crate::static_assert_size;
-use crate::ai::{AIDebug, AIState};
+use crate::ai::AIState;
 use crate::base::{dirs, sample, Glyph, Point, RNG};
 use crate::knowledge::Knowledge;
 
@@ -30,7 +30,6 @@ pub struct Entity {
     pub glyph: Glyph,
     pub known: Box<Knowledge>,
     pub ai: Box<AIState>,
-    pub debug: Option<Box<AIDebug>>,
     pub asleep: bool,
     pub player: bool,
     pub predator: bool,
@@ -83,7 +82,6 @@ impl EntityMap {
             glyph: args.glyph,
             known: Default::default(),
             ai: Box::new(AIState::new(args.predator, rng)),
-            debug: Some(Box::default()),
             asleep: false,
             player: args.player,
             predator: args.predator,

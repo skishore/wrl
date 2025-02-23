@@ -74,7 +74,7 @@ pub struct AIDebug {
 
 pub struct AIEnv<'a> {
     pub rng: &'a mut RNG,
-    pub debug: Option<Box<AIDebug>>,
+    pub debug: Option<&'a mut AIDebug>,
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -938,7 +938,7 @@ fn select_target(scores: &[(Point, f64)], env: &mut AIEnv) -> Option<Point> {
     }).collect();
     if values.is_empty() { return None; }
 
-    if let Some(x) = &mut env.debug {
+    if let Some(x) = env.debug.as_deref_mut() {
         x.utility.clear();
         for &(score, point) in &values {
             x.utility.push((point, (score >> 8) as u8));

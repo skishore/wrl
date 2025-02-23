@@ -6,7 +6,7 @@ use rand::{Rng, SeedableRng};
 use thin_vec::{ThinVec, thin_vec};
 
 use crate::static_assert_size;
-use crate::ai::{AIEnv, AIState};
+use crate::ai::{AIDebug, AIEnv, AIState};
 use crate::base::{Buffer, Color, Glyph};
 use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs};
 use crate::effect::{Effect, Event, Frame, FT, self};
@@ -499,18 +499,16 @@ fn plan(state: &mut State, eid: EID) -> Action {
     if player { return replace(&mut state.input, Action::WaitForInput); }
 
     let entity = &mut state.board.entities[eid];
-    let mut debug = None;
     let mut ai = state.ai.take().unwrap_or_else(
         || Box::new(AIState::new(false, &mut state.rng)));
-    swap(&mut debug, &mut entity.debug);
     swap(&mut ai, &mut entity.ai);
 
+    let debug = if state.pov == Some(eid) { Some(&mut state.ui.debug) } else { None };
     let mut env = AIEnv { rng: &mut state.rng, debug };
     let entity = &state.board.entities[eid];
     let action = ai.plan(entity, &mut env);
 
     let entity = &mut state.board.entities[eid];
-    swap(&mut env.debug, &mut entity.debug);
     swap(&mut ai, &mut entity.ai);
     state.ai = Some(ai);
     action
@@ -722,6 +720,7 @@ fn process_input(state: &mut State, input: Input) {
         let l = board.entity_order.len();
         let j = (i + if input == Input::Char('q') { l - 1 } else { 1 }) % l;
         state.pov = if j == 0 { None } else { Some(board.entity_order[j]) };
+        state.ui.debug = Default::default();
         return;
     }
 
