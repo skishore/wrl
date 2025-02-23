@@ -3,6 +3,7 @@ use std::collections::VecDeque;
 
 use rand::Rng;
 
+use crate::ai::AIDebug;
 use crate::base::{HashMap, LOS, Point, RNG, dirs};
 use crate::base::{Buffer, Color, Glyph, Matrix, Rect, Slice};
 use crate::effect::{Frame, self};
@@ -473,8 +474,11 @@ struct Menu {
 pub struct UI {
     frame: usize,
     layout: Layout,
-    pub log: Log,
     full: bool,
+
+    // Public members
+    pub debug: AIDebug,
+    pub log: Log,
 
     // Animations
     moves: HashMap<Point, MoveAnimation>,
@@ -787,7 +791,6 @@ impl UI {
         let offset = self.get_map_offset(entity);
 
         let path = entity.ai.get_path();
-        let utility = if let Some(x) = &entity.debug { x.utility.as_slice() } else { &[] };
         let slice_point = |p: Point| Point(2 * (p.0 - offset.0), p.1 - offset.1);
 
         for &p in path.iter().skip(1) {
@@ -796,7 +799,7 @@ impl UI {
             if glyph.ch() == Glyph::wide(' ').ch() { glyph = Glyph::wide('.'); }
             slice.set(point, glyph.with_fg(0x400));
         }
-        for &(p, score) in utility {
+        for &(p, score) in &self.debug.utility {
             let point = slice_point(p);
             let glyph = slice.get(point);
             slice.set(point, glyph.with_bg(Color::gray(score)));
