@@ -62,6 +62,14 @@ struct SlopeRanges {
     items: Vec<SlopeRange>,
 }
 
+// Partial transparency parameters. Selected so that we see a roughly-circular
+// area if standing in a field of tall grass:
+//   - Loss of 75 -> circle of radius 2
+//   - Loss of 45 -> circle of radius 3
+//   - Loss of 30 -> circle of radius 4
+//   - Loss of 24 -> circle of radius 5
+//   - Loss of 19 -> circle of radius 6
+//   - Loss of 15 -> circle of radius 7
 const INITIAL_VISIBILITY: i32 = 100;
 const VISIBILITY_LOSS: i32 = 45;
 
@@ -107,7 +115,7 @@ fn fov(eye: Point, map: &Matrix<char>, radius: i32) -> Matrix<bool> {
                 let next_visibility = (|| {
                     if !nearby || tile == '#' { return 0; }
                     if tile != ',' { return visibility; }
-                    let r = 1.0 + (0.8 * y.abs() as f64) / (x as f64);
+                    let r = 1.0 + (0.5 * y.abs() as f64) / (x as f64);
                     std::cmp::max(visibility - (r * VISIBILITY_LOSS as f64) as i32, 0)
                 })();
 
