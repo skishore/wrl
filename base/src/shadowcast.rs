@@ -48,6 +48,9 @@ const TRANSFORMS: [Transform; 4] = [
     [[ 0, -1], [ 1,  0]],
 ];
 
+const ROT_LEFT_: Transform = [[33, 56], [-56, 33]];
+const ROT_RIGHT: Transform = [[33, -56], [56, 33]];
+
 #[derive(Clone, Copy, Debug)]
 struct SlopeRange {
     min: Slope,
@@ -73,9 +76,9 @@ struct SlopeRanges {
 const INITIAL_VISIBILITY: i32 = 100;
 const VISIBILITY_LOSS: i32 = 45;
 
-fn fov(eye: Point, map: &Matrix<char>, radius: i32) -> Matrix<bool> {
+fn fov(eye: Point, dir: Point, map: &Matrix<char>, radius: i32) -> Matrix<bool> {
     let mut shadowcast = Shadowcast::new(radius);
-    shadowcast.compute(eye, |p: Point| {
+    shadowcast.compute(eye, dir, |p: Point| {
         let tile = if map.contains(p) { map.get(p) } else { '#' };
         if tile == '#' { return INITIAL_VISIBILITY; }
         if tile == ',' { return VISIBILITY_LOSS; }
@@ -139,17 +142,58 @@ impl Shadowcast {
         self.next.items.clear();
     }
 
-    pub fn compute<F: Fn(Point) -> i32>(&mut self, pos: Point, f: F) {
+    pub fn compute<F: Fn(Point) -> i32>(&mut self, pos: Point, dir: Point, f: F) {
         self.clear(pos);
+
+        let visibility = INITIAL_VISIBILITY;
+
+        if dir == Point::default() {
+            for transform in &TRANSFORMS {
+                let (min, max) = (Slope::new(-1, 1), Slope::new(1, 1));
+                self.prev.items.push(SlopeRange { min, max, transform, visibility });
+            }
+        } else {
+            for transform in &TRANSFORMS {
+                // Use the inverse to map dir into the right 90-degree quadrant.
+                let [[a00, a01], [a10, a11]] = *transform;
+                let [[b00, b01], [b10, b11]] = [[a00, -a01], [-a10, a11]];
+                let (x, y) = (dir.0 * b00 + dir.1 * b10, dir.0 * b01 + dir.1 * b11);
+                debug_assert!(x != 0 || y != 0);
+
+                let [[l00, l01], [l10, l11]] = ROT_LEFT_;
+                let [[r00, r01], [r10, r11]] = ROT_RIGHT;
+                let (lx, ly) = (x * l00 + y * l10, x * l01 + y * l11);
+                let (rx, ry) = (x * r00 + y * r10, x * r01 + y * r11);
+
+                // Casework to figure out how the dir constrains slope ranges.
+                // Here, we rely on the fact that the window is <= 180 degrees.
+                let (mut min, mut max) = (Slope::new(-1, 1), Slope::new(1, 1));
+                if x < 0 {
+                    if y == 0 { continue; }
+                    if y > 0 {
+                        if rx <= 0 { continue; }
+                        min = std::cmp::max(min, Slope::new(ry, rx));
+                    } else {
+                        if lx <= 0 { continue; }
+                        max = std::cmp::min(max, Slope::new(ly, lx));
+                    }
+                } else {
+                    if lx > 0 { max = std::cmp::min(max, Slope::new(ly, lx)); }
+                    if rx > 0 { min = std::cmp::max(min, Slope::new(ry, rx)); }
+                }
+
+                if max <= min { continue; }
+                self.prev.items.push(SlopeRange { min, max, transform, visibility });
+            }
+        }
+
+        self.execute(pos, f);
+    }
+
+    fn execute<F: Fn(Point) -> i32>(&mut self, pos: Point, f: F) {
         let radius = self.radius;
         let center = Point(radius, radius);
         let r2 = radius * radius + radius;
-
-        for transform in &TRANSFORMS {
-            let visibility = INITIAL_VISIBILITY;
-            let (min, max) = (Slope::new(-1, 1), Slope::new(1, 1));
-            self.prev.items.push(SlopeRange { min, max, transform, visibility });
-        }
 
         let push = |next: &mut SlopeRanges, s: SlopeRange| {
             if let Some(x) = next.items.last_mut() &&
@@ -235,21 +279,27 @@ mod tests {
         let width = input[0].len();
         let mut map = Matrix::new(Point(width as i32, height as i32), '#');
         let mut eye = None;
+        let mut target = None;
 
         for (y, row) in input.iter().enumerate() {
             for (x, c) in row.chars().enumerate() {
                 let point = Point(x as i32, y as i32);
                 map.set(point, c);
-                if c != '@' { continue; }
 
-                assert!(eye.is_none());
-                eye = Some(point);
+                if c == '@' {
+                    assert!(eye.is_none());
+                    eye = Some(point);
+                } else if c == 'X' {
+                    assert!(target.is_none());
+                    target = Some(point);
+                }
             }
         }
 
         // Get the FOV result and compare it to the expected value.
         let eye = eye.unwrap();
-        let visible = fov(eye, &map, map.size.0 + map.size.1);
+        let dir = if let Some(x) = target { x - eye } else { Point::default() };
+        let visible = fov(eye, dir, &map, map.size.0 + map.size.1);
         let result = show_fov(eye, &map, &visible);
         if expected != result {
             panic!("\nExpected:\n&{:#?}\n\nGot:\n&{:#?}", expected, result);
@@ -540,11 +590,31 @@ mod tests {
         ]);
     }
 
+    #[test]
+    fn test_directional() {
+        test_fov(&[
+            ".............",
+            ".............",
+            ".............",
+            ".............",
+            ".............",
+            ".............",
+            "......@......",
+            ".............",
+            ".............",
+            ".............",
+            ".............",
+            ".............",
+            "X............",
+        ], &[
+        ]);
+    }
+
     #[bench]
     fn bench_fov_shadowcast(b: &mut test::Bencher) {
         let (eye, map) = generate_fov_input();
         b.iter(|| {
-            let visible = fov(eye, &map, eye.0);
+            let visible = fov(eye, Point::default(), &map, eye.0);
             debug_fov_output(eye, &map, &visible);
         });
     }
