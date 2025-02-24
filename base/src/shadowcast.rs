@@ -74,73 +74,130 @@ const INITIAL_VISIBILITY: i32 = 100;
 const VISIBILITY_LOSS: i32 = 45;
 
 fn fov(eye: Point, map: &Matrix<char>, radius: i32) -> Matrix<bool> {
-    let r2 = radius * radius + radius;
+    let mut shadowcast = Shadowcast::new(radius);
+    shadowcast.compute(eye, |p: Point| {
+        let tile = if map.contains(p) { map.get(p) } else { '#' };
+        if tile == '#' { return INITIAL_VISIBILITY; }
+        if tile == ',' { return VISIBILITY_LOSS; }
+        return 0;
+    });
     let mut result = Matrix::new(map.size, false);
-    result.set(eye, true);
-
-    let seeds = TRANSFORMS.iter().map(|x| {
-        let (min, max) = (Slope::new(-1, 1), Slope::new(1, 1));
-        SlopeRange { min, max, transform: x, visibility: INITIAL_VISIBILITY }
-    }).collect();
-    let mut prev = SlopeRanges { depth: 1, items: seeds };
-    let mut next = SlopeRanges { depth: 2, items: vec![] };
-
-    let push = |next: &mut SlopeRanges, s: SlopeRange| {
-        if let Some(x) = next.items.last_mut() &&
-            x.max == s.min && x.visibility == s.visibility &&
-            x.transform.as_ptr() == s.transform.as_ptr() {
-                x.max = s.max;
-        } else {
-            next.items.push(s);
+    for y in 0..map.size.1 {
+        for x in 0..map.size.0 {
+            let p = Point(x, y);
+            result.set(p, shadowcast.get_visibility_at(p) >= 0);
         }
-    };
-
-    while !prev.items.is_empty() {
-        let depth = prev.depth;
-
-        for range in &prev.items {
-            let mut prev_visibility = -1;
-            let [[a00, a01], [a10, a11]] = range.transform;
-            let SlopeRange { mut min, max, transform, visibility } = *range;
-            let start = (2 * min.num * depth + min.den).div_floor(2 * min.den);
-            let limit = (2 * max.num * depth - max.den).div_ceil(2 * max.den);
-
-            for width in start..=limit {
-                let (x, y) = (depth, width);
-                let nearby = x * x + y * y <= r2;
-                let point = Point(x * a00 + y * a10, x * a01 + y * a11) + eye;
-                if nearby { result.set(point, true); }
-
-                let tile = map.get(point);
-                let next_visibility = (|| {
-                    if !nearby || tile == '#' { return 0; }
-                    if tile != ',' { return visibility; }
-                    let r = 1.0 + (0.5 * y.abs() as f64) / (x as f64);
-                    std::cmp::max(visibility - (r * VISIBILITY_LOSS as f64) as i32, 0)
-                })();
-
-                if prev_visibility != next_visibility && prev_visibility >= 0 {
-                    let slope = Slope::new(2 * width - 1, 2 * depth);
-                    if prev_visibility > 0 {
-                        let (max, visibility) = (slope, prev_visibility);
-                        push(&mut next, SlopeRange { min, max, transform, visibility });
-                    }
-                    min = slope;
-                }
-                prev_visibility = next_visibility;
-            }
-
-            if prev_visibility > 0 {
-                let visibility = prev_visibility;
-                push(&mut next, SlopeRange { min, max, transform, visibility });
-            }
-        }
-
-        std::mem::swap(&mut prev, &mut next);
-        next.items.clear();
-        next.depth += 2;
     }
     result
+}
+
+pub struct Shadowcast {
+    radius: i32,
+    offset: Point,
+    points_seen: Vec<Point>,
+    visibility: Matrix<i32>,
+}
+
+impl Shadowcast {
+    pub fn new(radius: i32) -> Self {
+        let side = 2 * radius + 1;
+        let visibility = Matrix::new(Point(side, side), -1);
+        Self { radius, offset: Point::default(), points_seen: vec![], visibility }
+    }
+
+    pub fn get_points_seen(&self) -> &[Point] {
+        &self.points_seen
+    }
+
+    pub fn get_visibility_at(&self, p: Point) -> i32 {
+        self.visibility.get(p + self.offset)
+    }
+
+    pub fn clear(&mut self, pos: Point) {
+        let center = Point(self.radius, self.radius);
+        self.offset = center - pos;
+        self.visibility.fill(-1);
+        self.points_seen.clear();
+
+        self.visibility.set(center, INITIAL_VISIBILITY);
+        self.points_seen.push(pos);
+    }
+
+    fn compute<F: Fn(Point) -> i32>(&mut self, pos: Point, f: F) {
+        self.clear(pos);
+        let radius = self.radius;
+        let center = Point(radius, radius);
+        let r2 = radius * radius + radius;
+
+        let seeds = TRANSFORMS.iter().map(|x| {
+            let (min, max) = (Slope::new(-1, 1), Slope::new(1, 1));
+            SlopeRange { min, max, transform: x, visibility: INITIAL_VISIBILITY }
+        }).collect();
+        let mut prev = SlopeRanges { depth: 1, items: seeds };
+        let mut next = SlopeRanges { depth: 2, items: vec![] };
+
+        let push = |next: &mut SlopeRanges, s: SlopeRange| {
+            if let Some(x) = next.items.last_mut() &&
+                x.max == s.min && x.visibility == s.visibility &&
+                x.transform.as_ptr() == s.transform.as_ptr() {
+                    x.max = s.max;
+            } else {
+                next.items.push(s);
+            }
+        };
+
+        while !prev.items.is_empty() {
+            let depth = prev.depth;
+
+            for range in &prev.items {
+                let mut prev_visibility = -1;
+                let [[a00, a01], [a10, a11]] = range.transform;
+                let SlopeRange { mut min, max, transform, visibility } = *range;
+                let start = (2 * min.num * depth + min.den).div_floor(2 * min.den);
+                let limit = (2 * max.num * depth - max.den).div_ceil(2 * max.den);
+
+                for width in start..=limit {
+                    let (x, y) = (depth, width);
+                    let nearby = x * x + y * y <= r2;
+                    let point = Point(x * a00 + y * a10, x * a01 + y * a11);
+
+                    let next_visibility = (|| {
+                        if !nearby { return -1; }
+                        let loss = f(point + pos);
+                        if loss == 0 { return visibility; }
+                        if loss == INITIAL_VISIBILITY { return 0; }
+                        let r = 1.0 + (0.5 * y.abs() as f64) / (x as f64);
+                        std::cmp::max(visibility - (r * loss as f64) as i32, 0)
+                    })();
+
+                    if next_visibility >= 0 {
+                        let entry = self.visibility.entry_mut(point + center).unwrap();
+                        if *entry < 0 { self.points_seen.push(point + pos); }
+                        *entry = std::cmp::max(*entry, next_visibility);
+                    }
+
+                    if prev_visibility != next_visibility && prev_visibility >= 0 {
+                        let slope = Slope::new(2 * width - 1, 2 * depth);
+                        if prev_visibility > 0 {
+                            let (max, visibility) = (slope, prev_visibility);
+                            push(&mut next, SlopeRange { min, max, transform, visibility });
+                        }
+                        min = slope;
+                    }
+                    prev_visibility = next_visibility;
+                }
+
+                if prev_visibility > 0 {
+                    let visibility = prev_visibility;
+                    push(&mut next, SlopeRange { min, max, transform, visibility });
+                }
+            }
+
+            std::mem::swap(&mut prev, &mut next);
+            next.items.clear();
+            next.depth += 2;
+        }
+    }
 }
 
 //////////////////////////////////////////////////////////////////////////////
