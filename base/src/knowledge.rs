@@ -4,11 +4,12 @@ use std::f64::consts::TAU;
 use thin_vec::{ThinVec, thin_vec};
 
 use crate::static_assert_size;
-use crate::base::{FOV, FOVEndpoint, FOVNode, Glyph, HashMap, Matrix, Point, clamp};
+use crate::base::{Glyph, HashMap, Point, clamp};
 use crate::entity::{EID, Entity};
 use crate::game::{MOVE_TIMER, Board, Item, Light, Tile};
 use crate::list::{Handle, List};
 use crate::pathing::Status;
+use crate::shadowcast::Shadowcast;
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -52,97 +53,33 @@ pub struct VisionArgs {
 }
 
 pub struct Vision {
-    fov: FOV,
-    center: Point,
-    offset: Point,
-    visibility: Matrix<i32>,
-    pub points_seen: Vec<Point>,
+    fov: Shadowcast,
 }
 
 impl Vision {
     pub fn new(radius: i32) -> Self {
-        assert!((VISION_COSINE - (0.5 * VISION_ANGLE).cos()).abs() < 0.01);
-        let vision_side = 2 * radius + 1;
-        let vision_size = Point(vision_side, vision_side);
-        Self {
-            fov: FOV::new(radius),
-            center: Point(radius, radius),
-            offset: Point::default(),
-            visibility: Matrix::new(vision_size, -1),
-            points_seen: vec![],
-        }
+        Self { fov: Shadowcast::new(radius) }
     }
 
-    fn get_visibility_at(&self, p: Point) -> i32 {
-        self.visibility.get(p + self.offset)
+    pub fn get_points_seen(&self) -> &[Point] {
+        self.fov.get_points_seen()
+    }
+
+    pub fn get_visibility_at(&self, p: Point) -> i32 {
+        self.fov.get_visibility_at(p)
     }
 
     pub fn clear(&mut self, pos: Point) {
-        self.offset = self.center - pos;
-        self.visibility.fill(-1);
-        self.points_seen.clear();
-
-        self.visibility.set(self.center, 0);
-        self.points_seen.push(pos);
+        self.fov.clear(pos);
     }
 
     pub fn compute<F: Fn(Point) -> &'static Tile>(&mut self, args: &VisionArgs, f: F) {
-        let VisionArgs { player, pos, dir } = *args;
-        let inv_l2 = if !player && dir != Point::default() {
-            1. / (dir.len_l2_squared() as f64).sqrt()
-        } else {
-            1.
-        };
-        let cone = FOVEndpoint { pos: dir, inv_l2 };
-        let radius = if player { _PC_VISION_RADIUS } else { NPC_VISION_RADIUS };
-
-        self.offset = self.center - pos;
-        self.visibility.fill(-1);
-        self.points_seen.clear();
-
-        let blocked = |node: &FOVNode| {
-            let p = node.next;
-            let first = p == Point::default();
-            if !player && !first && !Self::include_ray(&cone, &node.ends) { return true; }
-
-            let lookup = p + self.center;
-            let cached = self.visibility.get(lookup);
-
-            let visibility = (|| {
-                // These constant values come from Point.distanceNethack.
-                // They are chosen such that, in a field of tall grass, we'll
-                // only see cells at a distanceNethack <= kVisionRadius.
-                if first { return 100 * (radius + 1) - 95 - 46 - 25; }
-
-                let tile = f(p + pos);
-                if tile.blocks_vision() { return 0; }
-
-                let parent = node.prev;
-                let obscure = tile.limits_vision();
-                let diagonal = p.0 != parent.0 && p.1 != parent.1;
-                let loss = if obscure { 95 + if diagonal { 46 } else { 0 } } else { 0 };
-                let prev = self.visibility.get(parent + self.center);
-                max(prev - loss, 0)
-            })();
-
-            if visibility > cached {
-                self.visibility.set(lookup, visibility);
-                if cached < 0 && 0 <= visibility {
-                    self.points_seen.push(p + pos);
-                }
-            }
-            visibility <= 0
-        };
-        self.fov.apply(blocked);
-    }
-
-    fn include_ray(cone: &FOVEndpoint, ends: &[FOVEndpoint]) -> bool {
-        if cone.pos == Point::default() { return true; }
-        for &FOVEndpoint { pos, inv_l2 } in ends {
-            let cos = (cone.pos.dot(pos) as f64) * cone.inv_l2 * inv_l2;
-            if cos >= VISION_COSINE { return true; }
-        }
-        false
+        self.fov.compute(args.pos, |p: Point| {
+            let tile = f(p);
+            if tile.blocks_vision() { return 100; }
+            if tile.limits_vision() { return 45; }
+            return 0;
+        });
     }
 }
 
@@ -250,7 +187,7 @@ impl Knowledge {
         // Within the loop here, we repeatedly move cells to the front of
         // self.cells. Because points_seen is sorted by distance, we iterate
         // over it in reverse order to get the ordering above.
-        for &point in vision.points_seen.iter().rev() {
+        for &point in vision.get_points_seen().iter().rev() {
             let visibility = vision.get_visibility_at(point);
             assert!(visibility >= 0);
 
