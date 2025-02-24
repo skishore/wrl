@@ -750,7 +750,7 @@ impl UI {
         // Render an estimate of the focused entity's FOV on the map.
         if self.focused.active {
             let shade = Color::gray(UI_TARGET_SHADE);
-            for (i, &point) in self.focused.vision.points_seen.iter().enumerate() {
+            for (i, &point) in self.focused.vision.get_points_seen().iter().enumerate() {
                 if i == 0 {
                     recolor(slice, point, Some(Color::black()), Some(shade));
                 } else {

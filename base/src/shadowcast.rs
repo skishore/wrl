@@ -123,7 +123,7 @@ impl Shadowcast {
         self.points_seen.push(pos);
     }
 
-    fn compute<F: Fn(Point) -> i32>(&mut self, pos: Point, f: F) {
+    pub fn compute<F: Fn(Point) -> i32>(&mut self, pos: Point, f: F) {
         self.clear(pos);
         let radius = self.radius;
         let center = Point(radius, radius);
