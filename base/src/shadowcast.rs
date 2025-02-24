@@ -56,7 +56,7 @@ struct SlopeRange {
     visibility: i32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct SlopeRanges {
     depth: i32,
     items: Vec<SlopeRange>,
@@ -96,13 +96,24 @@ pub struct Shadowcast {
     offset: Point,
     points_seen: Vec<Point>,
     visibility: Matrix<i32>,
+
+    // Allocations used in compute
+    prev: SlopeRanges,
+    next: SlopeRanges,
 }
 
 impl Shadowcast {
     pub fn new(radius: i32) -> Self {
         let side = 2 * radius + 1;
-        let visibility = Matrix::new(Point(side, side), -1);
-        Self { radius, offset: Point::default(), points_seen: vec![], visibility }
+        let size = Point(side, side);
+        Self {
+            radius,
+            offset: Point::default(),
+            points_seen: vec![],
+            visibility: Matrix::new(size, -1),
+            prev: SlopeRanges::default(),
+            next: SlopeRanges::default(),
+        }
     }
 
     pub fn get_points_seen(&self) -> &[Point] {
@@ -121,6 +132,11 @@ impl Shadowcast {
 
         self.visibility.set(center, INITIAL_VISIBILITY);
         self.points_seen.push(pos);
+
+        self.prev.depth = 1;
+        self.next.depth = 2;
+        self.prev.items.clear();
+        self.next.items.clear();
     }
 
     pub fn compute<F: Fn(Point) -> i32>(&mut self, pos: Point, f: F) {
@@ -129,12 +145,11 @@ impl Shadowcast {
         let center = Point(radius, radius);
         let r2 = radius * radius + radius;
 
-        let seeds = TRANSFORMS.iter().map(|x| {
+        for transform in &TRANSFORMS {
+            let visibility = INITIAL_VISIBILITY;
             let (min, max) = (Slope::new(-1, 1), Slope::new(1, 1));
-            SlopeRange { min, max, transform: x, visibility: INITIAL_VISIBILITY }
-        }).collect();
-        let mut prev = SlopeRanges { depth: 1, items: seeds };
-        let mut next = SlopeRanges { depth: 2, items: vec![] };
+            self.prev.items.push(SlopeRange { min, max, transform, visibility });
+        }
 
         let push = |next: &mut SlopeRanges, s: SlopeRange| {
             if let Some(x) = next.items.last_mut() &&
@@ -146,10 +161,10 @@ impl Shadowcast {
             }
         };
 
-        while !prev.items.is_empty() {
-            let depth = prev.depth;
+        while self.prev.depth <= radius && !self.prev.items.is_empty() {
+            let depth = self.prev.depth;
 
-            for range in &prev.items {
+            for range in &self.prev.items {
                 let mut prev_visibility = -1;
                 let [[a00, a01], [a10, a11]] = range.transform;
                 let SlopeRange { mut min, max, transform, visibility } = *range;
@@ -180,7 +195,8 @@ impl Shadowcast {
                         let slope = Slope::new(2 * width - 1, 2 * depth);
                         if prev_visibility > 0 {
                             let (max, visibility) = (slope, prev_visibility);
-                            push(&mut next, SlopeRange { min, max, transform, visibility });
+                            let range = SlopeRange { min, max, transform, visibility };
+                            push(&mut self.next, range);
                         }
                         min = slope;
                     }
@@ -189,13 +205,14 @@ impl Shadowcast {
 
                 if prev_visibility > 0 {
                     let visibility = prev_visibility;
-                    push(&mut next, SlopeRange { min, max, transform, visibility });
+                    let range = SlopeRange { min, max, transform, visibility };
+                    push(&mut self.next, range);
                 }
             }
 
-            std::mem::swap(&mut prev, &mut next);
-            next.items.clear();
-            next.depth += 2;
+            std::mem::swap(&mut self.prev, &mut self.next);
+            self.next.items.clear();
+            self.next.depth += 2;
         }
     }
 }
