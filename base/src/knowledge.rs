@@ -74,7 +74,8 @@ impl Vision {
     }
 
     pub fn compute<F: Fn(Point) -> &'static Tile>(&mut self, args: &VisionArgs, f: F) {
-        self.fov.compute(args.pos, |p: Point| {
+        let dir = if args.player { Point::default() } else { args.dir };
+        self.fov.compute(args.pos, dir, |p: Point| {
             let tile = f(p);
             if tile.blocks_vision() { return 100; }
             if tile.limits_vision() { return 45; }
