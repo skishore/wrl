@@ -18,17 +18,26 @@ use crate::base::{Matrix, Point};
 const INITIAL_VISIBILITY: i32 = 100;
 const VISIBILITY_LOSSES: [i32; 7] = [100, 75, 45, 30, 24, 19, 15];
 
-type Transform = [[i32; 2]; 2];
+#[derive(Clone, Copy, Debug)]
+struct Transform([[i32; 2]; 2]);
 
 const TRANSFORMS: [Transform; 4] = [
-    [[ 1,  0], [ 0,  1]],
-    [[ 0,  1], [-1,  0]],
-    [[-1,  0], [ 0, -1]],
-    [[ 0, -1], [ 1,  0]],
+    Transform([[ 1,  0], [ 0,  1]]),
+    Transform([[ 0,  1], [-1,  0]]),
+    Transform([[-1,  0], [ 0, -1]]),
+    Transform([[ 0, -1], [ 1,  0]]),
 ];
 
-const ROT_LEFT_: Transform = [[33, 56], [-56, 33]];
-const ROT_RIGHT: Transform = [[33, -56], [56, 33]];
+const ROT_LEFT_: Transform = Transform([[33, 56], [-56, 33]]);
+const ROT_RIGHT: Transform = Transform([[33, -56], [56, 33]]);
+
+impl std::ops::Mul<Point> for Transform {
+    type Output = Point;
+    fn mul(self, rhs: Point) -> Self::Output {
+        let Transform([[a00, a01], [a10, a11]]) = self;
+        Point(rhs.0 * a00 + rhs.1 * a10, rhs.0 * a01 + rhs.1 * a11)
+    }
+}
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -156,15 +165,12 @@ impl Vision {
         } else {
             for transform in &TRANSFORMS {
                 // Use the inverse to map dir into the right 90-degree quadrant.
-                let [[a00, a01], [a10, a11]] = *transform;
-                let [[b00, b01], [b10, b11]] = [[a00, -a01], [-a10, a11]];
-                let (x, y) = (dir.0 * b00 + dir.1 * b10, dir.0 * b01 + dir.1 * b11);
+                let Transform([[a00, a01], [a10, a11]]) = *transform;
+                let inverse = Transform([[a00, -a01], [-a10, a11]]);
+                let Point(x, y) = inverse * dir;
+                let Point(lx, ly) = ROT_LEFT_ * Point(x, y);
+                let Point(rx, ry) = ROT_RIGHT * Point(x, y);
                 debug_assert!(x != 0 || y != 0);
-
-                let [[l00, l01], [l10, l11]] = ROT_LEFT_;
-                let [[r00, r01], [r10, r11]] = ROT_RIGHT;
-                let (lx, ly) = (x * l00 + y * l10, x * l01 + y * l11);
-                let (rx, ry) = (x * r00 + y * r10, x * r01 + y * r11);
 
                 // Casework to figure out how the dir constrains slope ranges.
                 // Here, we rely on the fact that the window is <= 180 degrees.
@@ -199,7 +205,7 @@ impl Vision {
         let push = |next: &mut SlopeRanges, s: SlopeRange| {
             if let Some(x) = next.items.last_mut() &&
                 x.max == s.min && x.visibility == s.visibility &&
-                x.transform.as_ptr() == s.transform.as_ptr() {
+                x.transform as *const Transform == s.transform as *const Transform {
                     x.max = s.max;
             } else {
                 next.items.push(s);
@@ -211,7 +217,6 @@ impl Vision {
 
             for range in &self.prev.items {
                 let mut prev_visibility = -1;
-                let [[a00, a01], [a10, a11]] = range.transform;
                 let SlopeRange { mut min, max, transform, visibility } = *range;
                 let start = (2 * min.num * depth + min.den).div_floor(2 * min.den);
                 let limit = (2 * max.num * depth - max.den).div_ceil(2 * max.den);
@@ -219,7 +224,7 @@ impl Vision {
                 for width in start..=limit {
                     let (x, y) = (depth, width);
                     let nearby = x * x + y * y <= r2;
-                    let point = Point(x * a00 + y * a10, x * a01 + y * a11);
+                    let point = *transform * Point(x, y);
 
                     let next_visibility = (|| {
                         if !nearby { return -1; }
