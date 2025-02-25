@@ -132,17 +132,11 @@ impl CachedPath {
     }
 
     fn go(&mut self, ctx: &Context, path: Vec<Point>, turns: f64) -> Option<Action> {
-        // TODO: AStar could be strict about neighbor statuses instead.
-        // Alternatively, we could add this test to our check lambdas.
-        let Context { known, pos, .. } = *ctx;
-        let next = *path.first()?;
-        let status = known.get(next).status();
-        if status != Status::Free && status != Status::Unknown { return None; }
-
-        self.pos = pos;
+        self.pos = ctx.pos;
         self.steps = path;
         self.steps.reverse();
-        self.follow(ctx, turns)
+
+        if self.check(ctx)  { self.follow(ctx, turns) } else { None }
     }
 
     fn follow(&mut self, ctx: &Context, turns: f64) -> Option<Action> {
@@ -307,18 +301,41 @@ impl BasicNeedsStrategy {
             BasicNeed::Drink => &mut ctx.shared.till_thirst,
         }
     }
+
+    fn update_last(&mut self, ctx: &Context) {
+        // If we just saw a cell that satisfies our need, save the closest one.
+        for cell in &ctx.observations {
+            if !self.satisfies_need(Some(cell)) { continue; }
+            self.last = Some(cell.point);
+            break;
+        }
+        let Some(last) = self.last else { return };
+
+        // If we can see `last` and it no longer satisfies our need, drop it.
+        let Context { known, pos, .. } = *ctx;
+        let cell = known.get(last);
+        if cell.visible() && !self.satisfies_need(cell.get_cell()) {
+            self.last = None;
+            return;
+        }
+
+        // If `last` is a strict improvement over our current path, re-plan.
+        if let Some(&target) = self.path.steps.first() &&
+           (last - pos).len_l2_squared() < (target - pos).len_l2_squared() {
+            let los = LOS(pos, last);
+            let free = (1..los.len() - 1).all(
+                |i| known.get(los[i]).status() == Status::Free);
+            if free { self.path.reset(); }
+        }
+    }
 }
 
 impl Strategy for BasicNeedsStrategy {
     fn get_path(&self) -> &[Point] { &self.path.steps }
 
     fn bid(&mut self, ctx: &mut Context, last: bool) -> (Priority, i32) {
-        // Update our state, which stores up to one tile that meets this need.
-        for cell in &ctx.observations {
-            if !self.satisfies_need(Some(cell)) { continue; }
-            self.last = Some(cell.point);
-            break;
-        }
+        // Keep track of the the last-seen cell that satisfies our need.
+        self.update_last(ctx);
 
         // Clear the cached path, if it's no longer good.
         let known = ctx.known;
