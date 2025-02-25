@@ -6,14 +6,15 @@ use rand::{Rng, SeedableRng};
 use thin_vec::{ThinVec, thin_vec};
 
 use crate::static_assert_size;
-use crate::ai::{AIDebug, AIEnv, AIState};
+use crate::ai::{AIEnv, AIState};
 use crate::base::{Buffer, Color, Glyph};
 use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs};
 use crate::effect::{Effect, Event, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
-use crate::knowledge::{Knowledge, Timestamp, Vision, VisionArgs};
+use crate::knowledge::{Knowledge, Timestamp};
 use crate::mapgen::mapgen_with_size;
 use crate::pathing::Status;
+use crate::shadowcast::{TileVision, Vision};
 use crate::ui::{UI, get_direction};
 
 //////////////////////////////////////////////////////////////////////////////
@@ -26,6 +27,8 @@ pub const WORLD_SIZE: i32 = 100;
 
 pub const FOV_RADIUS_NPC: i32 = 12;
 pub const FOV_RADIUS_PC_: i32 = 21;
+pub const FOV_FALLOFF_NPC: i32 = 3;
+pub const FOV_FALLOFF_PC_: i32 = 4;
 
 const SPEED_PC_: f64 = 0.1;
 const SPEED_NPC: f64 = 0.1;
@@ -81,6 +84,12 @@ impl Tile {
 
     // Derived predicates.
     pub fn casts_shadow(&self) -> bool { self.blocks_vision() }
+
+    pub fn vision(&self) -> TileVision {
+        if self.blocks_vision() { return TileVision::Blocked; }
+        if self.limits_vision() { return TileVision::Partial; }
+        TileVision::Full
+    }
 }
 
 impl Debug for Tile {
@@ -187,8 +196,8 @@ impl Board {
             _effect: Effect::default(),
             // Knowledge state
             known: Some(Box::default()),
-            npc_vision: Vision::new(FOV_RADIUS_NPC),
-            _pc_vision: Vision::new(FOV_RADIUS_PC_),
+            npc_vision: Vision::new(FOV_RADIUS_NPC, FOV_FALLOFF_NPC),
+            _pc_vision: Vision::new(FOV_RADIUS_PC_, FOV_FALLOFF_PC_),
             // Environmental effects
             light,
             shadow,
@@ -377,8 +386,8 @@ impl Board {
         if asleep {
             vision.clear(pos);
         } else {
-            let args = VisionArgs { player, pos, dir };
-            vision.compute(&args, |x| self.map.get(x).tile);
+            let dir = if player { Point::default() } else { dir };
+            vision.compute(pos, dir, |x| self.map.get(x).tile.vision());
         }
         let vision = if player { &self._pc_vision } else { &self.npc_vision };
         known.update(me, &self, vision);

@@ -911,7 +911,7 @@ fn assess_directions(dirs: &[Point], turns: i32, rng: &mut RNG) -> Vec<Point> {
     result.reserve((ASSESS_STEPS * turns) as usize);
 
     for i in 0..ASSESS_STEPS {
-        let scale = 1000;
+        let scale = 100;
         let steps = rng.gen_range(0..turns) + 1;
         let angle = Normal::new(0., ASSESS_ANGLE).unwrap().sample(rng);
         let (sin, cos) = (angle.sin(), angle.cos());

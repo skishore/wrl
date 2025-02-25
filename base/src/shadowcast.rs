@@ -4,6 +4,36 @@ use crate::base::{Matrix, Point};
 
 //////////////////////////////////////////////////////////////////////////////
 
+// Constants
+
+// Partial transparency parameters. Selected so that we see a roughly-circular
+// area if standing in a field of tall grass:
+//   - Loss of 100 -> circle of radius 1
+//   - Loss of 75  -> circle of radius 2
+//   - Loss of 45  -> circle of radius 3
+//   - Loss of 30  -> circle of radius 4
+//   - Loss of 24  -> circle of radius 5
+//   - Loss of 19  -> circle of radius 6
+//   - Loss of 15  -> circle of radius 7
+const INITIAL_VISIBILITY: i32 = 100;
+const VISIBILITY_LOSSES: [i32; 7] = [100, 75, 45, 30, 24, 19, 15];
+
+type Transform = [[i32; 2]; 2];
+
+const TRANSFORMS: [Transform; 4] = [
+    [[ 1,  0], [ 0,  1]],
+    [[ 0,  1], [-1,  0]],
+    [[-1,  0], [ 0, -1]],
+    [[ 0, -1], [ 1,  0]],
+];
+
+const ROT_LEFT_: Transform = [[33, 56], [-56, 33]];
+const ROT_RIGHT: Transform = [[33, -56], [56, 33]];
+
+//////////////////////////////////////////////////////////////////////////////
+
+// Rational slopes
+
 // Invariant (enforced by new): den > 0
 #[derive(Copy, Clone, Debug)]
 struct Slope { num: i32, den: i32 }
@@ -39,17 +69,7 @@ impl PartialEq for Slope {
 
 //////////////////////////////////////////////////////////////////////////////
 
-type Transform = [[i32; 2]; 2];
-
-const TRANSFORMS: [Transform; 4] = [
-    [[ 1,  0], [ 0,  1]],
-    [[ 0,  1], [-1,  0]],
-    [[-1,  0], [ 0, -1]],
-    [[ 0, -1], [ 1,  0]],
-];
-
-const ROT_LEFT_: Transform = [[33, 56], [-56, 33]];
-const ROT_RIGHT: Transform = [[33, -56], [56, 33]];
+// State tracking
 
 #[derive(Clone, Copy, Debug)]
 struct SlopeRange {
@@ -65,36 +85,15 @@ struct SlopeRanges {
     items: Vec<SlopeRange>,
 }
 
-// Partial transparency parameters. Selected so that we see a roughly-circular
-// area if standing in a field of tall grass:
-//   - Loss of 75 -> circle of radius 2
-//   - Loss of 45 -> circle of radius 3
-//   - Loss of 30 -> circle of radius 4
-//   - Loss of 24 -> circle of radius 5
-//   - Loss of 19 -> circle of radius 6
-//   - Loss of 15 -> circle of radius 7
-const INITIAL_VISIBILITY: i32 = 100;
-const VISIBILITY_LOSS: i32 = 45;
+//////////////////////////////////////////////////////////////////////////////
 
-fn fov(eye: Point, dir: Point, map: &Matrix<char>, radius: i32) -> Matrix<bool> {
-    let mut shadowcast = Shadowcast::new(radius);
-    shadowcast.compute(eye, dir, |p: Point| {
-        let tile = if map.contains(p) { map.get(p) } else { '#' };
-        if tile == '#' { return INITIAL_VISIBILITY; }
-        if tile == ',' { return VISIBILITY_LOSS; }
-        return 0;
-    });
-    let mut result = Matrix::new(map.size, false);
-    for y in 0..map.size.1 {
-        for x in 0..map.size.0 {
-            let p = Point(x, y);
-            result.set(p, shadowcast.get_visibility_at(p) >= 0);
-        }
-    }
-    result
-}
+// Public API
 
-pub struct Shadowcast {
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum TileVision { Full, Partial, Blocked }
+
+pub struct Vision {
+    dropoff: i32,
     radius: i32,
     offset: Point,
     points_seen: Vec<Point>,
@@ -105,11 +104,13 @@ pub struct Shadowcast {
     next: SlopeRanges,
 }
 
-impl Shadowcast {
-    pub fn new(radius: i32) -> Self {
+impl Vision {
+    pub fn new(radius: i32, radius_obscured: i32) -> Self {
         let side = 2 * radius + 1;
         let size = Point(side, side);
+        let dropoff = VISIBILITY_LOSSES[(radius_obscured - 1) as usize];
         Self {
+            dropoff,
             radius,
             offset: Point::default(),
             points_seen: vec![],
@@ -142,7 +143,7 @@ impl Shadowcast {
         self.next.items.clear();
     }
 
-    pub fn compute<F: Fn(Point) -> i32>(&mut self, pos: Point, dir: Point, f: F) {
+    pub fn compute<F: Fn(Point) -> TileVision>(&mut self, pos: Point, dir: Point, f: F) {
         self.clear(pos);
 
         let visibility = INITIAL_VISIBILITY;
@@ -190,7 +191,7 @@ impl Shadowcast {
         self.execute(pos, f);
     }
 
-    fn execute<F: Fn(Point) -> i32>(&mut self, pos: Point, f: F) {
+    fn execute<F: Fn(Point) -> TileVision>(&mut self, pos: Point, f: F) {
         let radius = self.radius;
         let center = Point(radius, radius);
         let r2 = radius * radius + radius;
@@ -222,11 +223,11 @@ impl Shadowcast {
 
                     let next_visibility = (|| {
                         if !nearby { return -1; }
-                        let loss = f(point + pos);
-                        if loss == 0 { return visibility; }
-                        if loss == INITIAL_VISIBILITY { return 0; }
+                        let vision = f(point + pos);
+                        if vision == TileVision::Full { return visibility; }
+                        if vision == TileVision::Blocked { return 0; }
                         let r = 1.0 + (0.5 * y.abs() as f64) / (x as f64);
-                        std::cmp::max(visibility - (r * loss as f64) as i32, 0)
+                        std::cmp::max(visibility - (r * self.dropoff as f64) as i32, 0)
                     })();
 
                     if next_visibility >= 0 {
@@ -272,6 +273,25 @@ mod tests {
     extern crate test;
 
     const DEBUG: bool = false;
+
+    fn fov(eye: Point, dir: Point, map: &Matrix<char>, radius: i32) -> Matrix<bool> {
+        // Wrapper around vision to make it easier to test.
+        let mut vision = Vision::new(radius, 3);
+        vision.compute(eye, dir, |p: Point| {
+            let tile = if map.contains(p) { map.get(p) } else { '#' };
+            if tile == '#' { return TileVision::Blocked; }
+            if tile == ',' { return TileVision::Partial; }
+            TileVision::Full
+        });
+        let mut result = Matrix::new(map.size, false);
+        for y in 0..map.size.1 {
+            for x in 0..map.size.0 {
+                let p = Point(x, y);
+                result.set(p, vision.get_visibility_at(p) >= 0);
+            }
+        }
+        result
+    }
 
     fn test_fov(input: &[&str], expected: &[&str]) {
         // Convert the input grid into a map.
@@ -591,7 +611,40 @@ mod tests {
     }
 
     #[test]
-    fn test_directional() {
+    fn test_directional_s() {
+        test_fov(&[
+            ".............",
+            ".............",
+            ".............",
+            ".............",
+            ".............",
+            ".............",
+            "......@......",
+            ".............",
+            ".............",
+            ".............",
+            ".............",
+            ".............",
+            "......X......",
+        ], &[
+            "%%%%%%%%%%%%%",
+            "%%%%%%%%%%%%%",
+            "%%%%%%%%%%%%%",
+            "%%%%%%%%%%%%%",
+            "%%%%%%%%%%%%%",
+            "%%%%%%%%%%%%%",
+            "%%%%%%@%%%%%%",
+            "%%%%.....%%%%",
+            "%%.........%%",
+            "%...........%",
+            ".............",
+            ".............",
+            "......X......",
+        ]);
+    }
+
+    #[test]
+    fn test_directional_sw() {
         test_fov(&[
             ".............",
             ".............",
@@ -607,8 +660,55 @@ mod tests {
             ".............",
             "X............",
         ], &[
+            "%%%%%%%%%%%%%",
+            "%%%%%%%%%%%%%",
+            "%%%%%%%%%%%%%",
+            "%%%%%%%%%%%%%",
+            ".%%%%%%%%%%%%",
+            ".....%%%%%%%%",
+            "......@%%%%%%",
+            ".......%%%%%%",
+            "........%%%%%",
+            "........%%%%%",
+            "........%%%%%",
+            "........%%%%%",
+            "X........%%%%",
         ]);
     }
+
+    #[test]
+    fn test_directional_ssw() {
+        test_fov(&[
+            ".............",
+            ".............",
+            ".............",
+            ".............",
+            ".............",
+            ".............",
+            "......@......",
+            ".............",
+            ".............",
+            ".............",
+            ".............",
+            ".............",
+            "...X.........",
+        ], &[
+            "%%%%%%%%%%%%%",
+            "%%%%%%%%%%%%%",
+            "%%%%%%%%%%%%%",
+            "%%%%%%%%%%%%%",
+            "%%%%%%%%%%%%%",
+            "%%%%%%%%%%%%%",
+            "......@%%%%%%",
+            "........%%%%%",
+            "........%%%%%",
+            ".........%%%%",
+            "..........%%%",
+            "..........%%%",
+            "...X.......%%",
+        ]);
+    }
+
 
     #[bench]
     fn bench_fov_shadowcast(b: &mut test::Bencher) {
@@ -636,7 +736,7 @@ mod tests {
                     if tile == '.' { return prev_visibility; }
                     let diagonal = next.0 != prev.0 && next.1 != prev.1;
                     let factor = if diagonal { 2.5 } else { 1.25 };
-                    let loss = (factor * VISIBILITY_LOSS as f64) as i32;
+                    let loss = (factor * VISIBILITY_LOSSES[2] as f64) as i32;
                     std::cmp::max(prev_visibility - loss, 0)
                 })();
                 visible.set(next, true);
@@ -670,13 +770,15 @@ mod tests {
                 tiles.set(p, crate::game::Tile::get(c));
             }
         }
-        let mut vision = crate::knowledge::Vision::new(eye.0);
-        let args = crate::knowledge::VisionArgs {
-            player,
-            pos: eye,
-            dir: crate::base::dirs::S,
+        let lookup = |p: Point| {
+            let tile = tiles.get(p);
+            if tile.blocks_vision() { return TileVision::Blocked; }
+            if tile.limits_vision() { return TileVision::Partial; }
+            TileVision::Full
         };
-        b.iter(|| { vision.compute(&args, |x| tiles.get(x)); });
+        let mut vision = Vision::new(eye.0, 3);
+        let dir = if player { Point::default() } else { Point(1, 1) };
+        b.iter(|| { vision.compute(eye, dir, lookup) });
     }
 
     fn debug_fov_output(eye: Point, map: &Matrix<char>, visible: &Matrix<bool>) {

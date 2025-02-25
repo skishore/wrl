@@ -1,5 +1,4 @@
 use std::cmp::max;
-use std::f64::consts::TAU;
 
 use thin_vec::{ThinVec, thin_vec};
 
@@ -9,7 +8,7 @@ use crate::entity::{EID, Entity};
 use crate::game::{MOVE_TIMER, Board, Item, Light, Tile};
 use crate::list::{Handle, List};
 use crate::pathing::Status;
-use crate::shadowcast::Shadowcast;
+use crate::shadowcast::Vision;
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -19,12 +18,6 @@ const TURN_AGE: i32 = 2;
 
 const MAX_ENTITY_MEMORY: usize = 64;
 const MAX_TILE_MEMORY: usize = 4096;
-
-// VISION_COSINE should be (0.5 * VISION_ANGLE).cos(), checked at runtime.
-const VISION_ANGLE: f64 = TAU / 3.;
-const VISION_COSINE: f64 = 0.5;
-const _PC_VISION_RADIUS: i32 = 4;
-const NPC_VISION_RADIUS: i32 = 3;
 
 pub const PLAYER_MAP_MEMORY: usize = 32;
 
@@ -39,48 +32,6 @@ impl std::ops::Sub for Timestamp {
     type Output = i32;
     fn sub(self, other: Timestamp) -> Self::Output {
         self.0.wrapping_sub(other.0) as Self::Output
-    }
-}
-
-//////////////////////////////////////////////////////////////////////////////
-
-// Vision
-
-pub struct VisionArgs {
-    pub player: bool,
-    pub pos: Point,
-    pub dir: Point,
-}
-
-pub struct Vision {
-    fov: Shadowcast,
-}
-
-impl Vision {
-    pub fn new(radius: i32) -> Self {
-        Self { fov: Shadowcast::new(radius) }
-    }
-
-    pub fn get_points_seen(&self) -> &[Point] {
-        self.fov.get_points_seen()
-    }
-
-    pub fn get_visibility_at(&self, p: Point) -> i32 {
-        self.fov.get_visibility_at(p)
-    }
-
-    pub fn clear(&mut self, pos: Point) {
-        self.fov.clear(pos);
-    }
-
-    pub fn compute<F: Fn(Point) -> &'static Tile>(&mut self, args: &VisionArgs, f: F) {
-        let dir = if args.player { Point::default() } else { args.dir };
-        self.fov.compute(args.pos, dir, |p: Point| {
-            let tile = f(p);
-            if tile.blocks_vision() { return 100; }
-            if tile.limits_vision() { return 45; }
-            return 0;
-        });
     }
 }
 
