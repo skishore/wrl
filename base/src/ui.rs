@@ -562,11 +562,14 @@ impl UI {
 
     pub fn update_focus(&mut self, entity: &Entity) {
         let known = &*entity.known;
-        let focus = match &self.target {
+        let focus = self.focus.and_then(|x| known.entity(x));
+        if focus.is_none() { self.focus = None; }
+
+        let target = match &self.target {
             Some(x) => known.get(x.target).entity(),
-            None => self.focus.and_then(|x| known.entity(x)),
+            None => focus,
         };
-        if let Some(target) = focus && can_target(target) {
+        if let Some(target) = target && can_target(target) {
             self.focused.update(entity, target);
             self.focused.active = true;
         } else {
@@ -693,6 +696,34 @@ impl UI {
             }
         }
 
+        // Helpers used for the map overlay UIs.
+        let set = |slice: &mut Slice, point: Point, glyph: Glyph| {
+            let point = Point(2 * (point.0 - offset.0), point.1 - offset.1);
+            slice.set(point, glyph);
+        };
+        let highlight = |slice: &mut Slice, point: Point, bg: Color| {
+            let point = Point(2 * (point.0 - offset.0), point.1 - offset.1);
+            if !slice.contains(point) { return; }
+
+            let glyph = slice.get(point);
+            slice.set(point, glyph.with_fg(Color::black()).with_bg(bg));
+        };
+        let brighten = |slice: &mut Slice, point: Point| {
+            let point = Point(2 * (point.0 - offset.0), point.1 - offset.1);
+            if !slice.contains(point) { return; }
+
+            let glyph = slice.get(point);
+            let glyph = glyph.with_fg(glyph.fg().brighten(UI_FOV_BRIGHTEN));
+            let glyph = glyph.with_bg(glyph.bg().brighten(UI_FOV_BRIGHTEN));
+            slice.set(point, glyph);
+        };
+
+        // Render the focused entity on the map.
+        let focused_vision = self.focused.vision.get_points_seen();
+        if self.focused.active && let Some(&point) = focused_vision.first() {
+            highlight(slice, point, Color::gray(UI_TARGET_SHADE));
+        }
+
         // Render any animation that's currently running.
         if let Some(frame) = frame {
             for &effect::Particle { point, glyph } in frame {
@@ -705,36 +736,12 @@ impl UI {
         // If we're still playing, render arrows showing NPC facing.
         if entity.cur_hp > 0 { self.render_arrows(known, offset, slice); }
 
-        // Helpers used for the map overlay UIs.
-        let set = |slice: &mut Slice, point: Point, glyph: Glyph| {
-            let point = Point(2 * (point.0 - offset.0), point.1 - offset.1);
-            slice.set(point, glyph);
-        };
-        let recolor = |slice: &mut Slice, point: Point, fg: Option<Color>, bg: Option<Color>| {
-            let point = Point(2 * (point.0 - offset.0), point.1 - offset.1);
-            if !slice.contains(point) { return; }
-
-            let mut glyph = slice.get(point);
-            if let Some(fg) = fg { glyph = glyph.with_fg(fg); }
-            if let Some(bg) = bg && glyph.bg() == Color::black() { glyph = glyph.with_bg(bg); }
-            slice.set(point, glyph);
-        };
-        let brighten = |slice: &mut Slice, point: Point| {
-            let point = Point(2 * (point.0 - offset.0), point.1 - offset.1);
-            if !slice.contains(point) { return; }
-
-            let glyph = slice.get(point);
-            let glyph = glyph.with_fg(glyph.fg().brighten(UI_FOV_BRIGHTEN));
-            let glyph = glyph.with_bg(glyph.bg().brighten(UI_FOV_BRIGHTEN));
-            slice.set(point, glyph);
-        };
-
         // Render the targeting UI on the map.
         if let Some(target) = &self.target {
             let shade = Color::gray(UI_TARGET_SHADE);
             let color = if target.error.is_empty() { 0x440 } else { 0x400 };
-            recolor(slice, target.target, Some(Color::black()), Some(color.into()));
-            recolor(slice, target.source, Some(Color::black()), Some(shade));
+            highlight(slice, target.source, shade);
+            highlight(slice, target.target, color.into());
 
             let frame = target.frame >> 1;
             let count = UI_TARGET_FRAMES >> 1;
@@ -750,13 +757,8 @@ impl UI {
 
         // Render an estimate of the focused entity's FOV on the map.
         if self.focused.active {
-            let shade = Color::gray(UI_TARGET_SHADE);
-            for (i, &point) in self.focused.vision.get_points_seen().iter().enumerate() {
-                if i == 0 {
-                    recolor(slice, point, Some(Color::black()), Some(shade));
-                } else {
-                    brighten(slice, point);
-                }
+            for &point in focused_vision.iter().skip(1) {
+                brighten(slice, point);
             }
         }
     }
@@ -803,7 +805,7 @@ impl UI {
         for &(p, score) in &self.debug.utility {
             let point = slice_point(p);
             let glyph = slice.get(point);
-            slice.set(point, glyph.with_bg(Color::gray(score)));
+            slice.set(point, glyph.with_bg((score, score, score / 2 + 128)));
         }
         if let Some(&p) = path.first() {
             let point = slice_point(p);
