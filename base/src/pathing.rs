@@ -1,7 +1,8 @@
 use std::cell::RefCell;
 use std::cmp::{max, min};
 
-use crate::base::{HashMap, FOV, FOVNode, LOS, Matrix, Point, dirs};
+use crate::base::{HashMap, LOS, Matrix, Point, dirs};
+use crate::shadowcast::{TileVision, Vision};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -333,10 +334,10 @@ pub fn Dijkstra<F: Fn(Point) -> bool, G: Fn(Point) -> Status, H: Fn(Point) -> i3
             if test == Status::Blocked { continue; }
 
             let diagonal = dir.0 != 0 && dir.1 != 0;
-            let occipied = test == Status::Occupied;
+            let occupied = test == Status::Occupied;
             let distance = prev_distance + ASTAR_UNIT_COST +
                            if diagonal { ASTAR_DIAGONAL_PENALTY } else { 0 } +
-                           if occipied { ASTAR_OCCUPIED_PENALTY } else { 0 };
+                           if occupied { ASTAR_OCCUPIED_PENALTY } else { 0 };
 
             map.entry(next).and_modify(|x| {
                 // index != NOT_IN_HEAP checks if we've already extracted next
@@ -400,7 +401,7 @@ impl DijkstraState {
 }
 
 thread_local! {
-    static CACHE: RefCell<(DijkstraState, Vec<Option<FOV>>)> = {
+    static CACHE: RefCell<(DijkstraState, Vec<Option<Vision>>)> = {
         let map = Matrix::new(Point::default(), DijkstraNode::default());
         (DijkstraState { dirty: vec![], lists: vec![], map }, vec![]).into()
     };
@@ -430,11 +431,11 @@ pub fn DijkstraMap<F: Fn(Point) -> Status>(
             state.map = Matrix::new(Point(n, n), DijkstraNode::default());
         }
 
-        // Get a precomputed FOV of the right size.
+        // Get a precomputed Vision of the right size.
         let r = radius as usize;
         while cache.1.len() <= r { cache.1.push(None); }
         let cached_fov = &mut cache.1[r];
-        if cached_fov.is_none() { *cached_fov = Some(FOV::new(radius)); }
+        if cached_fov.is_none() { *cached_fov = Some(Vision::new(radius, 1)); }
         let fov = cached_fov.as_mut().unwrap();
 
         let result = CachedDijkstraMap(state, fov, source, check, cells, limit);
@@ -451,7 +452,7 @@ pub fn DijkstraMap<F: Fn(Point) -> Status>(
 
 #[allow(non_snake_case)]
 fn CachedDijkstraMap<F: Fn(Point) -> Status>(
-        state: &mut DijkstraState, fov: &mut FOV,
+        state: &mut DijkstraState, fov: &mut Vision,
         source: Point, check: F, cells: i32, limit: i32) -> Neighborhood {
     let cells = cells as usize;
     let mut result = Neighborhood::default();
@@ -482,12 +483,10 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
         entry.status = Some(status);
     };
 
-    // Returns true if the cell is blocked, so we can short-circuit populating
-    // the initial FOV-based seed for the Dijkstra iteration.
     let step = |state: &mut DijkstraState,
-                dir: Point, prev_point: Point, prev_score: i32| -> bool {
+                dir: Point, prev_point: Point, prev_score: i32| {
         let point = prev_point + dir;
-        let Some(index) = state.map.index(point) else { return true; };
+        let Some(index) = state.map.index(point) else { return; };
 
         let entry = &mut state.map.data[index];
         let visited = entry.status.is_some();
@@ -495,14 +494,13 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
 
         entry.status = Some(status);
         if !visited { state.dirty.push(point); }
-        let blocked = status == Status::Blocked;
 
         let diagonal = dir.0 != 0 && dir.1 != 0;
-        let occipied = status == Status::Occupied;
+        let occupied = status == Status::Occupied;
         let score = prev_score + DIJKSTRA_COST +
                     if diagonal { DIJKSTRA_DIAGONAL_PENALTY } else { 0 } +
-                    if occipied { DIJKSTRA_OCCUPIED_PENALTY } else { 0 };
-        if visited && score >= entry.score { return blocked; }
+                    if occupied { DIJKSTRA_OCCUPIED_PENALTY } else { 0 };
+        if visited && score >= entry.score { return; }
 
         if visited {
             let score = entry.score;
@@ -511,18 +509,15 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
             state.link(prev, score).next = next;
         }
         init(state, index, point, score, status);
-        blocked
     };
 
     let index = state.map.index(initial).unwrap();
     init(state, index, initial, 0, Status::Free);
 
-    fov.apply(|n: &FOVNode| {
-        if n.next == Point::default() { return false; }
-
-        let node = &state.map.entry_ref(n.prev + initial);
-        let (prev_point, prev_score) = (node.point, node.score);
-        step(state, n.next - n.prev, prev_point, prev_score)
+    let origin = Point::default();
+    fov.compute(origin, origin, |point: Point| {
+        let blocked = check(point + source) == Status::Blocked;
+        if blocked { TileVision::Blocked } else { TileVision::Full }
     });
 
     let mut current = 0;
@@ -540,8 +535,8 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
         next.prev = 0;
 
         let node = &state.map.data[prev];
-        let (prev_point, prev_score) = (node.point, node.score);
-        let value = (prev_point + offset, prev_score);
+        let DijkstraNode { point, score, .. } = *node;
+        let value = (point + offset, score);
 
         let status = node.status.unwrap();
         if status == Status::Blocked {
@@ -551,9 +546,14 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
             if result.visited.len() >= (cells as usize) { break; }
         }
 
-        if matches!(status, Status::Free | Status::Occupied) {
-            for dir in &dirs::ALL {
-                step(state, *dir, prev_point, prev_score);
+        let proceed = match status {
+            Status::Free | Status::Occupied => true,
+            Status::Unknown => fov.get_visibility_at(point - initial) > 0,
+            Status::Blocked => false,
+        };
+        if proceed {
+            for &dir in &dirs::ALL {
+                step(state, dir, point, score);
             }
         }
     }
