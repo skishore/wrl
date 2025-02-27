@@ -138,9 +138,20 @@ impl Vision {
     }
 
     pub fn clear(&mut self, pos: Point) {
+        // Sparse clear optimization. The dense clear has much better constant
+        // factors so we only switch over when it's sufficiently sparse.
+        if self.visibility.data.len() < 16 * self.points_seen.len() {
+            self.visibility.fill(-1);
+        } else {
+            for &point in &self.points_seen {
+                debug_assert!(self.visibility.get(point + self.offset) >= 0);
+                self.visibility.set(point + self.offset, -1);
+            }
+            debug_assert!(self.visibility.data.iter().all(|&x| x == -1));
+        }
+
         let center = Point(self.radius, self.radius);
         self.offset = center - pos;
-        self.visibility.fill(-1);
         self.points_seen.clear();
 
         self.visibility.set(center, INITIAL_VISIBILITY);
@@ -295,6 +306,7 @@ mod tests {
                 result.set(p, vision.get_visibility_at(p) >= 0);
             }
         }
+        vision.clear(eye);
         result
     }
 
