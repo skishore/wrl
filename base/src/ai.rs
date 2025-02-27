@@ -105,10 +105,9 @@ impl CachedPath {
         if pos != self.pos { return false; }
 
         let valid = |p: Point| match known.get(p).status() {
+            Status::Free | Status::Unknown => true,
             Status::Occupied => p != next,
             Status::Blocked  => false,
-            Status::Free     => true,
-            Status::Unknown  => true,
         };
         self.steps.iter().skip(self.skipped).all(|&x| valid(x))
     }
@@ -146,9 +145,8 @@ impl CachedPath {
 
         let mut target = next;
         for &point in self.steps.iter().rev().take(8) {
-            if LOS(pos, point).iter().all(|&x| !known.get(x).blocked()) {
-                target = point;
-            }
+            let los = LOS(pos, point);
+            if los.iter().all(|&x| !known.get(x).blocked()) { target = point; }
         }
         let look = if target == pos { dir } else { target - pos };
         Some(Action::Move(MoveAction { look, step: next - pos, turns }))
