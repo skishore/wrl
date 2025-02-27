@@ -163,14 +163,51 @@ impl Vision {
         self.next.items.clear();
     }
 
-    pub fn compute<F: Fn(Point) -> TileVision>(&mut self, pos: Point, dir: Point, f: F) {
-        self.clear(pos);
+    pub fn can_see<F: Fn(Point) -> TileVision>(
+            &mut self, pos: Point, dir: Point, target: Point, f: F) -> bool {
+        if pos == target { return true; }
 
+        let radius = self.radius;
+        let r2 = radius * radius + radius;
+        let Point(x, y) = target - pos;
+        if x * x + y * y > r2 { return false; }
+
+        let limit = std::cmp::max(x.abs(), y.abs());
+
+        self.clear(pos);
+        self.seed_ranges(dir, Some(target - pos));
+        self.execute(pos, limit, f);
+
+        self.get_visibility_at(target) >= 0
+    }
+
+    pub fn compute<F: Fn(Point) -> TileVision>(
+            &mut self, pos: Point, dir: Point, f: F) {
+        self.clear(pos);
+        self.seed_ranges(dir, None);
+        self.execute(pos, self.radius, f);
+    }
+
+    fn seed_ranges(&mut self, dir: Point, target: Option<Point>) {
         let visibility = INITIAL_VISIBILITY;
 
         if dir == Point::default() {
             for transform in &TRANSFORMS {
-                let (min, max) = (Slope::new(-1, 1), Slope::new(1, 1));
+                let (mut min, mut max) = (Slope::new(-1, 1), Slope::new(1, 1));
+
+                // Skip this quadrant if the target outside it; else, filter.
+                if let Some(target) = target {
+                    let Transform([[a00, a01], [a10, a11]]) = *transform;
+                    let inverse = Transform([[a00, -a01], [-a10, a11]]);
+
+                    let Point(x, y) = inverse * target;
+                    if x == 0 || x < y.abs() { continue; }
+                    min = std::cmp::max(min, Slope::new(2 * y - 1, 2 * x));
+                    max = std::cmp::min(max, Slope::new(2 * y + 1, 2 * x));
+                }
+
+                // If the range is still non-empty, scan it.
+                if max <= min { continue; }
                 self.prev.items.push(SlopeRange { min, max, transform, visibility });
             }
         } else {
@@ -200,15 +237,22 @@ impl Vision {
                     if rx > 0 { min = std::cmp::max(min, Slope::new(ry, rx)); }
                 }
 
+                // Skip this quadrant if the target outside it; else, filter.
+                if let Some(target) = target {
+                    let Point(x, y) = inverse * target;
+                    if x == 0 || x < y.abs() { continue; }
+                    min = std::cmp::max(min, Slope::new(2 * y - 1, 2 * x));
+                    max = std::cmp::min(max, Slope::new(2 * y + 1, 2 * x));
+                }
+
+                // If the range is still non-empty, scan it.
                 if max <= min { continue; }
                 self.prev.items.push(SlopeRange { min, max, transform, visibility });
             }
         }
-
-        self.execute(pos, f);
     }
 
-    fn execute<F: Fn(Point) -> TileVision>(&mut self, pos: Point, f: F) {
+    fn execute<F: Fn(Point) -> TileVision>(&mut self, pos: Point, limit: i32, f: F) {
         let radius = self.radius;
         let center = Point(radius, radius);
         let r2 = radius * radius + radius;
@@ -223,7 +267,7 @@ impl Vision {
             }
         };
 
-        while self.prev.depth <= radius && !self.prev.items.is_empty() {
+        while self.prev.depth <= limit && !self.prev.items.is_empty() {
             let depth = self.prev.depth;
 
             for range in &self.prev.items {
@@ -290,15 +334,19 @@ mod tests {
 
     const DEBUG: bool = false;
 
-    fn fov(eye: Point, dir: Point, map: &Matrix<char>, radius: i32) -> Matrix<bool> {
-        // Wrapper around vision to make it easier to test.
-        let mut vision = Vision::new(radius, 3);
-        vision.compute(eye, dir, |p: Point| {
+    fn run_fov(eye: Point, dir: Point, map: &Matrix<char>,
+               radius: i32, check_point_lookups: bool) -> Matrix<bool> {
+        // Wrapper around Vision to make it easier to test.
+        let lookup = |p: Point| {
             let tile = if map.contains(p) { map.get(p) } else { '#' };
             if tile == '#' { return TileVision::Blocked; }
             if tile == ',' { return TileVision::Partial; }
             TileVision::Full
-        });
+        };
+
+        let mut vision = Vision::new(radius, 3);
+        vision.compute(eye, dir, lookup);
+
         let mut result = Matrix::new(map.size, false);
         for y in 0..map.size.1 {
             for x in 0..map.size.0 {
@@ -306,7 +354,16 @@ mod tests {
                 result.set(p, vision.get_visibility_at(p) >= 0);
             }
         }
-        vision.clear(eye);
+
+        // Check that point lookups are consistent with the full computation.
+        if check_point_lookups {
+            for y in 0..map.size.1 {
+                for x in 0..map.size.0 {
+                    let p = Point(x, y);
+                    assert!(result.get(p) == vision.can_see(eye, dir, p, lookup));
+                }
+            }
+        }
         result
     }
 
@@ -336,7 +393,7 @@ mod tests {
         // Get the FOV result and compare it to the expected value.
         let eye = eye.unwrap();
         let dir = if let Some(x) = target { x - eye } else { Point::default() };
-        let visible = fov(eye, dir, &map, map.size.0 + map.size.1);
+        let visible = run_fov(eye, dir, &map, map.size.0 + map.size.1, true);
         let result = show_fov(eye, &map, &visible);
         if expected != result {
             panic!("\nExpected:\n&{:#?}\n\nGot:\n&{:#?}", expected, result);
@@ -731,22 +788,33 @@ mod tests {
     fn bench_fov_shadowcast(b: &mut test::Bencher) {
         let (eye, map) = generate_fov_input();
         b.iter(|| {
-            let visible = fov(eye, Point::default(), &map, eye.0);
+            let visible = run_fov(eye, Point::default(), &map, eye.0, false);
             debug_fov_output(eye, &map, &visible);
         });
     }
 
     #[bench]
     fn bench_fov_pc_vision(b: &mut test::Bencher) {
-        run_vision_benchmark(b, true);
+        run_vision_benchmark(b, true, false);
     }
 
     #[bench]
     fn bench_fov_npc_vision(b: &mut test::Bencher) {
-        run_vision_benchmark(b, false);
+        run_vision_benchmark(b, false, false);
     }
 
-    fn run_vision_benchmark(b: &mut test::Bencher, player: bool) {
+    #[bench]
+    fn bench_fov_pc_point_lookups(b: &mut test::Bencher) {
+        run_vision_benchmark(b, true, true);
+    }
+
+    #[bench]
+    fn bench_fov_npc_point_lookups(b: &mut test::Bencher) {
+        run_vision_benchmark(b, false, true);
+    }
+
+
+    fn run_vision_benchmark(b: &mut test::Bencher, player: bool, point_lookups: bool) {
         let (eye, map) = generate_fov_input();
         let mapping: crate::base::HashMap<_, _> =
                 [('.', '.'), ('#', '#'), (',', '"')].into_iter().collect();
@@ -766,7 +834,16 @@ mod tests {
         };
         let mut vision = Vision::new(eye.0, 3);
         let dir = if player { Point::default() } else { Point(1, 1) };
-        b.iter(|| { vision.compute(eye, dir, lookup) });
+        if point_lookups {
+            let mut rng = crate::base::RNG::seed_from_u64(17);
+            b.iter(|| {
+                let Point(x, y) = map.size;
+                let target = Point(rng.gen_range(0..x), rng.gen_range(0..y));
+                vision.can_see(eye, dir, target, lookup);
+            });
+        } else {
+            b.iter(|| { vision.compute(eye, dir, lookup) });
+        }
     }
 
     fn debug_fov_output(eye: Point, map: &Matrix<char>, visible: &Matrix<bool>) {
