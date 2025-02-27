@@ -391,7 +391,7 @@ impl<'a> Slice<'a> {
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Field-of-vision helpers
+// Bresenham line-of-sight
 
 #[allow(non_snake_case)]
 pub fn LOS(a: Point, b: Point) -> Vec<Point> {
@@ -434,79 +434,4 @@ pub fn LOS(a: Point, b: Point) -> Vec<Point> {
 
     assert!(result.len() == size);
     result
-}
-
-#[derive(Clone, Copy)]
-pub struct FOVEndpoint {
-    pub pos: Point,
-    pub inv_l2: f64,
-}
-
-#[derive(Default)]
-pub struct FOVNode {
-    pub next: Point,
-    pub prev: Point,
-    pub ends: Vec<FOVEndpoint>,
-    children: Vec<i32>,
-}
-
-pub struct FOV {
-    radius: i32,
-    nodes: Vec<FOVNode>,
-    cache: Vec<i32>,
-}
-
-impl FOV {
-    pub fn new(radius: i32) -> Self {
-        let mut result = Self { radius, nodes: vec![], cache: vec![] };
-        result.nodes.push(FOVNode::default());
-        for x in -radius..=radius {
-            for y in -radius..=radius {
-                result.add_ray(Point(x, y));
-            }
-        }
-        result
-    }
-
-    pub fn apply<F: FnMut(&FOVNode) -> bool>(&mut self, mut blocked: F) {
-        let mut index = 0;
-        self.cache.push(0);
-        while index < self.cache.len() {
-            // SAFETY: We ensure cache indices are valid when we push below.
-            let next = unsafe { *self.cache.get_unchecked(index) as usize };
-            let node = unsafe { self.nodes.get_unchecked(next) };
-            if blocked(node) { index += 1; continue; }
-            for x in &node.children { self.cache.push(*x); }
-            index += 1;
-        }
-        self.cache.clear();
-    }
-
-    fn add_ray(&mut self, target: Point) {
-        if target == Point::default() { return; }
-        let inv_l2 = 1. / (target.len_l2_squared() as f64).sqrt();
-        let endpoint = FOVEndpoint { pos: target, inv_l2  };
-        self.add_trie_nodes(0, &LOS(Point::default(), target), &endpoint, 0);
-    }
-
-    fn add_trie_nodes(&mut self, node: usize, los: &[Point], endpoint: &FOVEndpoint, i: usize) {
-        let prev = los[i];
-        assert!(self.nodes[node].next == prev);
-        if prev != Point::default() { self.nodes[node].ends.push(*endpoint); }
-        if !prev.in_l2_range(self.radius) { return; }
-        if i + 1 >= los.len() { return; }
-
-        let next = los[i + 1];
-        let child = (|| {
-            for x in &self.nodes[node].children {
-                if self.nodes[*x as usize].next == next { return *x as usize; }
-            }
-            let result = self.nodes.len();
-            let (children, ends) = (vec![], vec![]);
-            self.nodes.push(FOVNode { next, prev, children, ends });
-            self.nodes[node].children.push(result as i32);
-            result
-        })();
-        self.add_trie_nodes(child, los, endpoint, i + 1);
-    }
 }
