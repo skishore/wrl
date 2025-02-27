@@ -720,35 +720,6 @@ mod tests {
     }
 
     #[bench]
-    fn bench_fov_visibility_trie(b: &mut test::Bencher) {
-        let (eye, map) = generate_fov_input();
-        let mut fov = crate::base::FOV::new(eye.0);
-        b.iter(|| {
-            let mut visible = Matrix::new(map.size, false);
-            let mut visibility = Matrix::new(map.size, -1);
-            fov.apply(|x| {
-                let (next, prev) = (x.next + eye, x.prev + eye);
-                let next_visibility = (|| {
-                    if next == eye { return INITIAL_VISIBILITY; }
-                    let tile = map.get(next);
-                    if tile == '#' { return 0; }
-                    let prev_visibility = visibility.get(prev);
-                    if tile == '.' { return prev_visibility; }
-                    let diagonal = next.0 != prev.0 && next.1 != prev.1;
-                    let factor = if diagonal { 2.5 } else { 1.25 };
-                    let loss = (factor * VISIBILITY_LOSSES[2] as f64) as i32;
-                    std::cmp::max(prev_visibility - loss, 0)
-                })();
-                visible.set(next, true);
-                let entry = visibility.entry_mut(next).unwrap();
-                *entry = std::cmp::max(*entry, next_visibility);
-                next_visibility == 0
-            });
-            debug_fov_output(eye, &map, &visible);
-        });
-    }
-
-    #[bench]
     fn bench_fov_pc_vision(b: &mut test::Bencher) {
         run_vision_benchmark(b, true);
     }
