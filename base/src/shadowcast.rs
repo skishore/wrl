@@ -15,8 +15,8 @@ use crate::base::{Matrix, Point};
 //   - Loss of 24  -> circle of radius 5
 //   - Loss of 19  -> circle of radius 6
 //   - Loss of 15  -> circle of radius 7
-const INITIAL_VISIBILITY: i32 = 100;
-const VISIBILITY_LOSSES: [i32; 7] = [100, 75, 45, 30, 24, 19, 15];
+pub const INITIAL_VISIBILITY: i32 = 100;
+pub const VISIBILITY_LOSSES: [i32; 7] = [100, 75, 45, 30, 24, 19, 15];
 
 #[derive(Clone, Copy, Debug)]
 struct Transform([[i32; 2]; 2]);
@@ -98,12 +98,15 @@ struct SlopeRanges {
 
 // Public API
 
-#[derive(Clone, Copy, Eq, PartialEq)]
-pub enum TileVision { Full, Partial, Blocked }
+pub struct VisionArgs<F: Fn(Point) -> i32> {
+    pub pos: Point,
+    pub dir: Point,
+    pub opacity_lookup: F,
+}
 
 pub struct Vision {
-    dropoff: i32,
     radius: i32,
+    initial_visibility: i32,
     offset: Point,
     points_seen: Vec<Point>,
     visibility: Matrix<i32>,
@@ -114,19 +117,26 @@ pub struct Vision {
 }
 
 impl Vision {
-    pub fn new(radius: i32, radius_obscured: i32) -> Self {
+    pub fn new(radius: i32) -> Self {
+        Self::new_with_visibility(radius, INITIAL_VISIBILITY)
+    }
+
+    pub fn new_with_visibility(radius: i32, initial_visibility: i32) -> Self {
         let side = 2 * radius + 1;
         let size = Point(side, side);
-        let dropoff = VISIBILITY_LOSSES[(radius_obscured - 1) as usize];
         Self {
-            dropoff,
             radius,
+            initial_visibility,
             offset: Point::default(),
             points_seen: vec![],
             visibility: Matrix::new(size, -1),
             prev: SlopeRanges::default(),
             next: SlopeRanges::default(),
         }
+    }
+
+    pub fn can_see(&self, p: Point) -> bool {
+        self.get_visibility_at(p) >= 0
     }
 
     pub fn get_points_seen(&self) -> &[Point] {
@@ -150,11 +160,14 @@ impl Vision {
             debug_assert!(self.visibility.data.iter().all(|&x| x == -1));
         }
 
-        let center = Point(self.radius, self.radius);
+        let radius = self.radius;
+        let center = Point(radius, radius);
+        let visibility = self.initial_visibility;
+
         self.offset = center - pos;
         self.points_seen.clear();
 
-        self.visibility.set(center, INITIAL_VISIBILITY);
+        self.visibility.set(center, visibility);
         self.points_seen.push(pos);
 
         self.prev.depth = 1;
@@ -163,33 +176,31 @@ impl Vision {
         self.next.items.clear();
     }
 
-    pub fn can_see<F: Fn(Point) -> TileVision>(
-            &mut self, pos: Point, dir: Point, target: Point, f: F) -> bool {
-        if pos == target { return true; }
+    pub fn check_point<F: Fn(Point) -> i32>(
+            &mut self, args: &VisionArgs<F>, target: Point) -> bool {
+        if args.pos == target { return true; }
 
         let radius = self.radius;
         let r2 = radius * radius + radius;
-        let Point(x, y) = target - pos;
+        let Point(x, y) = target - args.pos;
         if x * x + y * y > r2 { return false; }
 
         let limit = std::cmp::max(x.abs(), y.abs());
 
-        self.clear(pos);
-        self.seed_ranges(dir, Some(target - pos));
-        self.execute(pos, limit, f);
-
-        self.get_visibility_at(target) >= 0
+        self.clear(args.pos);
+        self.seed_ranges(args.dir, Some(target - args.pos));
+        self.execute(args.pos, limit, &args.opacity_lookup);
+        self.can_see(target)
     }
 
-    pub fn compute<F: Fn(Point) -> TileVision>(
-            &mut self, pos: Point, dir: Point, f: F) {
-        self.clear(pos);
-        self.seed_ranges(dir, None);
-        self.execute(pos, self.radius, f);
+    pub fn compute<F: Fn(Point) -> i32>(&mut self, args: &VisionArgs<F>) {
+        self.clear(args.pos);
+        self.seed_ranges(args.dir, None);
+        self.execute(args.pos, self.radius, &args.opacity_lookup);
     }
 
     fn seed_ranges(&mut self, dir: Point, target: Option<Point>) {
-        let visibility = INITIAL_VISIBILITY;
+        let visibility = self.initial_visibility;
 
         if dir == Point::default() {
             for transform in &TRANSFORMS {
@@ -252,7 +263,8 @@ impl Vision {
         }
     }
 
-    fn execute<F: Fn(Point) -> TileVision>(&mut self, pos: Point, limit: i32, f: F) {
+    fn execute<F: Fn(Point) -> i32>(
+            &mut self, pos: Point, limit: i32, opacity_lookup: F) {
         let radius = self.radius;
         let center = Point(radius, radius);
         let r2 = radius * radius + radius;
@@ -283,11 +295,11 @@ impl Vision {
 
                     let next_visibility = (|| {
                         if !nearby { return -1; }
-                        let vision = f(point + pos);
-                        if vision == TileVision::Full { return visibility; }
-                        if vision == TileVision::Blocked { return 0; }
+                        let opacity = opacity_lookup(point + pos);
+                        if opacity == 0 { return visibility; }
+                        if opacity >= visibility { return 0; }
                         let r = 1.0 + (0.5 * y.abs() as f64) / (x as f64);
-                        std::cmp::max(visibility - (r * self.dropoff as f64) as i32, 0)
+                        std::cmp::max(visibility - (r * opacity as f64) as i32, 0)
                     })();
 
                     if next_visibility >= 0 {
@@ -333,25 +345,27 @@ mod tests {
     extern crate test;
 
     const DEBUG: bool = false;
+    const VISIBILITY_LOSS: i32 = VISIBILITY_LOSSES[2];
 
-    fn run_fov(eye: Point, dir: Point, map: &Matrix<char>,
+    fn run_fov(pos: Point, dir: Point, map: &Matrix<char>,
                radius: i32, check_point_lookups: bool) -> Matrix<bool> {
         // Wrapper around Vision to make it easier to test.
-        let lookup = |p: Point| {
+        let opacity_lookup = |p: Point| {
             let tile = if map.contains(p) { map.get(p) } else { '#' };
-            if tile == '#' { return TileVision::Blocked; }
-            if tile == ',' { return TileVision::Partial; }
-            TileVision::Full
+            if tile == '#' { return INITIAL_VISIBILITY; }
+            if tile == ',' { return VISIBILITY_LOSS; }
+            0
         };
+        let args = VisionArgs { pos, dir, opacity_lookup };
 
-        let mut vision = Vision::new(radius, 3);
-        vision.compute(eye, dir, lookup);
+        let mut vision = Vision::new(radius);
+        vision.compute(&args);
 
         let mut result = Matrix::new(map.size, false);
         for y in 0..map.size.1 {
             for x in 0..map.size.0 {
                 let p = Point(x, y);
-                result.set(p, vision.get_visibility_at(p) >= 0);
+                result.set(p, vision.can_see(p));
             }
         }
 
@@ -360,7 +374,7 @@ mod tests {
             for y in 0..map.size.1 {
                 for x in 0..map.size.0 {
                     let p = Point(x, y);
-                    assert!(result.get(p) == vision.can_see(eye, dir, p, lookup));
+                    assert!(result.get(p) == vision.check_point(&args, p));
                 }
             }
         }
@@ -783,7 +797,6 @@ mod tests {
         ]);
     }
 
-
     #[bench]
     fn bench_fov_shadowcast(b: &mut test::Bencher) {
         let (eye, map) = generate_fov_input();
@@ -794,28 +807,27 @@ mod tests {
     }
 
     #[bench]
-    fn bench_fov_pc_vision(b: &mut test::Bencher) {
-        run_vision_benchmark(b, true, false);
+    fn bench_fov_360_vision(b: &mut test::Bencher) {
+        run_vision_benchmark(b, /*directional=*/false, /*point_lookups=*/false);
     }
 
     #[bench]
-    fn bench_fov_npc_vision(b: &mut test::Bencher) {
-        run_vision_benchmark(b, false, false);
+    fn bench_fov_directional_vision(b: &mut test::Bencher) {
+        run_vision_benchmark(b, /*directional=*/true, /*point_lookups=*/false);
     }
 
     #[bench]
-    fn bench_fov_pc_point_lookups(b: &mut test::Bencher) {
-        run_vision_benchmark(b, true, true);
+    fn bench_fov_360_point_lookups(b: &mut test::Bencher) {
+        run_vision_benchmark(b, /*directional=*/false, /*point_lookups=*/true);
     }
 
     #[bench]
-    fn bench_fov_npc_point_lookups(b: &mut test::Bencher) {
-        run_vision_benchmark(b, false, true);
+    fn bench_fov_directional_point_lookups(b: &mut test::Bencher) {
+        run_vision_benchmark(b, /*directional=*/true, /*point_lookups=*/true);
     }
 
-
-    fn run_vision_benchmark(b: &mut test::Bencher, player: bool, point_lookups: bool) {
-        let (eye, map) = generate_fov_input();
+    fn run_vision_benchmark(b: &mut test::Bencher, directional: bool, point_lookups: bool) {
+        let (pos, map) = generate_fov_input();
         let mapping: crate::base::HashMap<_, _> =
                 [('.', '.'), ('#', '#'), (',', '"')].into_iter().collect();
         let mut tiles = Matrix::new(map.size, crate::game::Tile::get('#'));
@@ -826,23 +838,25 @@ mod tests {
                 tiles.set(p, crate::game::Tile::get(c));
             }
         }
-        let lookup = |p: Point| {
+        let opacity_lookup = |p: Point| {
             let tile = tiles.get(p);
-            if tile.blocks_vision() { return TileVision::Blocked; }
-            if tile.limits_vision() { return TileVision::Partial; }
-            TileVision::Full
+            if tile.blocks_vision() { return INITIAL_VISIBILITY; }
+            if tile.limits_vision() { return VISIBILITY_LOSS; }
+            0
         };
-        let mut vision = Vision::new(eye.0, 3);
-        let dir = if player { Point::default() } else { Point(1, 1) };
+        let dir = if directional { Point(1, 1) } else { Point::default() };
+        let args = VisionArgs { pos, dir, opacity_lookup };
+
+        let mut vision = Vision::new(pos.0);
         if point_lookups {
             let mut rng = crate::base::RNG::seed_from_u64(17);
             b.iter(|| {
                 let Point(x, y) = map.size;
                 let target = Point(rng.gen_range(0..x), rng.gen_range(0..y));
-                vision.can_see(eye, dir, target, lookup);
+                vision.check_point(&args, target);
             });
         } else {
-            b.iter(|| { vision.compute(eye, dir, lookup) });
+            b.iter(|| { vision.compute(&args) });
         }
     }
 

@@ -140,9 +140,6 @@ impl Knowledge {
         // self.cells. Because points_seen is sorted by distance, we iterate
         // over it in reverse order to get the ordering above.
         for &point in vision.get_points_seen().iter().rev() {
-            let visibility = vision.get_visibility_at(point);
-            assert!(visibility >= 0);
-
             let cell = board.get_cell(point);
             let (eid, items, tile) = (cell.eid, &cell.items, cell.tile);
 

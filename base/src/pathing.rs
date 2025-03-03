@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::cmp::{max, min};
 
 use crate::base::{HashMap, LOS, Matrix, Point, dirs};
-use crate::shadowcast::{TileVision, Vision};
+use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -435,7 +435,7 @@ pub fn DijkstraMap<F: Fn(Point) -> Status>(
         let r = radius as usize;
         while cache.1.len() <= r { cache.1.push(None); }
         let cached_fov = &mut cache.1[r];
-        if cached_fov.is_none() { *cached_fov = Some(Vision::new(radius, 1)); }
+        if cached_fov.is_none() { *cached_fov = Some(Vision::new(radius)); }
         let fov = cached_fov.as_mut().unwrap();
 
         let result = CachedDijkstraMap(state, fov, source, check, cells, limit);
@@ -461,6 +461,14 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
 
     let initial = Point(limit, limit);
     let offset = source - initial;
+
+    let origin = Point::default();
+    let opacity_lookup = |point: Point| {
+        let blocked = check(point + source) == Status::Blocked;
+        if blocked { INITIAL_VISIBILITY } else { 0 }
+    };
+    let args = VisionArgs { pos: origin, dir: origin, opacity_lookup, };
+    fov.compute(&args);
 
     let init = |state: &mut DijkstraState,
                 index: usize, point: Point, score: i32, status: Status| {
@@ -495,6 +503,8 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
         entry.status = Some(status);
         if !visited { state.dirty.push(point); }
 
+        if status == Status::Unknown && !fov.can_see(point - initial) { return; }
+
         let diagonal = dir.0 != 0 && dir.1 != 0;
         let occupied = status == Status::Occupied;
         let score = prev_score + DIJKSTRA_COST +
@@ -513,12 +523,6 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
 
     let index = state.map.index(initial).unwrap();
     init(state, index, initial, 0, Status::Free);
-
-    let origin = Point::default();
-    fov.compute(origin, origin, |point: Point| {
-        let blocked = check(point + source) == Status::Blocked;
-        if blocked { TileVision::Blocked } else { TileVision::Full }
-    });
 
     let mut current = 0;
     loop {
@@ -546,12 +550,7 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
             if result.visited.len() >= (cells as usize) { break; }
         }
 
-        let proceed = match status {
-            Status::Free | Status::Occupied => true,
-            Status::Unknown => fov.get_visibility_at(point - initial) > 0,
-            Status::Blocked => false,
-        };
-        if proceed {
+        if status != Status::Blocked {
             for &dir in &dirs::ALL {
                 step(state, dir, point, score);
             }
