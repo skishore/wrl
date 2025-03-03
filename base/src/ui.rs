@@ -8,12 +8,12 @@ use crate::base::{HashMap, LOS, Point, RNG, dirs};
 use crate::base::{Buffer, Color, Glyph, Matrix, Rect, Slice};
 use crate::effect::{Frame, self};
 use crate::entity::{EID, Entity};
-use crate::game::{WORLD_SIZE, FOV_RADIUS_NPC, FOV_RADIUS_PC_, FOV_FALLOFF_NPC};
+use crate::game::{WORLD_SIZE, FOV_RADIUS_NPC, FOV_RADIUS_PC_};
 use crate::game::{Input, Tile, show_item};
 use crate::knowledge::{PLAYER_MAP_MEMORY, Timestamp};
 use crate::knowledge::{EntityKnowledge, Knowledge};
 use crate::pathing::Status;
-use crate::shadowcast::Vision;
+use crate::shadowcast::{Vision, VisionArgs};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -444,7 +444,7 @@ struct Focused {
 
 impl Default for Focused {
     fn default() -> Self {
-        Self { active: false, vision: Vision::new(FOV_RADIUS_NPC, FOV_FALLOFF_NPC) }
+        Self { active: false, vision: Vision::new(FOV_RADIUS_NPC) }
     }
 }
 
@@ -456,8 +456,8 @@ impl Focused {
             self.vision.clear(target.pos);
         } else {
             let floor = Tile::get('.');
-            let lookup = |x| known.get(x).tile().unwrap_or(floor).vision();
-            self.vision.compute(pos, dir, lookup);
+            let opacity_lookup = |x| known.get(x).tile().unwrap_or(floor).opacity();
+            self.vision.compute(&VisionArgs { pos, dir, opacity_lookup });
         }
     }
 }
