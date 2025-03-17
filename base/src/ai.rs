@@ -1,5 +1,4 @@
 use std::cmp::{max, min};
-use std::collections::VecDeque;
 use std::f64::consts::TAU;
 use std::fmt::Debug;
 
@@ -11,7 +10,7 @@ use crate::base::{LOS, Point, RNG, dirs, sample, weighted};
 use crate::entity::Entity;
 use crate::game::{NOISY_RADIUS, Item, move_ready};
 use crate::game::{Action, EatAction, MoveAction};
-use crate::knowledge::{CellKnowledge, Knowledge, Timestamp};
+use crate::knowledge::{CellKnowledge, Knowledge};
 use crate::pathing::{AStar, BFS, DijkstraLength, DijkstraMap, Neighborhood, Status};
 
 //////////////////////////////////////////////////////////////////////////////
@@ -42,7 +41,6 @@ const MIN_FLIGHT_TURNS: i32 = 16;
 const MAX_FLIGHT_TURNS: i32 = 64;
 const MIN_SEARCH_TURNS: i32 = 16;
 const MAX_SEARCH_TURNS: i32 = 32;
-const TURN_TIMES_LIMIT: usize = 64;
 
 const SLOWED_TURNS: f64 = 2.;
 const WANDER_TURNS: f64 = 2.;
@@ -162,8 +160,6 @@ struct SharedAIState {
     till_hunger: i32,
     till_thirst: i32,
     till_rested: i32,
-    time: Timestamp,
-    turn_times: VecDeque<Timestamp>,
 }
 
 impl Debug for SharedAIState {
@@ -173,7 +169,6 @@ impl Debug for SharedAIState {
          .field("till_hunger", &self.till_hunger)
          .field("till_rested", &self.till_rested)
          .field("till_thirst", &self.till_thirst)
-         .field("time", &self.time)
          .finish()
     }
 }
@@ -186,27 +181,16 @@ impl SharedAIState {
             till_hunger: rng.gen_range(0..max_hunger),
             till_rested: rng.gen_range(0..MAX_RESTED),
             till_thirst: rng.gen_range(0..MAX_THIRST),
-            time: Default::default(),
-            turn_times: Default::default(),
         }
     }
 
-    fn age_at_turn(&self, turn: i32) -> i32 {
-        if self.turn_times.is_empty() { return 0; }
-        self.time - self.turn_times[min(self.turn_times.len() - 1, turn as usize)]
-    }
-
-    fn update(&mut self, entity: &Entity, known: &Knowledge) {
+    fn update(&mut self, entity: &Entity) {
         if !entity.asleep {
             self.till_assess = max(self.till_assess - 1, 0);
             self.till_hunger = max(self.till_hunger - 1, 0);
             self.till_thirst = max(self.till_thirst - 1, 0);
             self.till_rested = max(self.till_rested - 1, 0);
         }
-
-        if self.turn_times.len() == TURN_TIMES_LIMIT { self.turn_times.pop_back(); }
-        self.turn_times.push_front(self.time);
-        self.time = known.time;
     }
 }
 
@@ -503,16 +487,10 @@ impl Strategy for ExploreStrategy {
 
         ensure_neighborhood(ctx);
 
-        let mut min_age = std::i32::MAX;
-        for &(point, _) in &ctx.neighborhood.visited {
-            let age = known.get(point).time_since_seen();
-            if age > 0 { min_age = min(min_age, age); }
-        }
-        if min_age == std::i32::MAX { min_age = 1; }
-
         let score = |p: Point, distance: i32| -> f64 {
             if distance == 0 { return 0.; }
-            let age = known.get(p).time_since_seen();
+
+            let age = known.get(p).turns_since_seen();
 
             let delta = p - pos;
             let inv_delta_l2 = safe_inv_l2(delta);
@@ -520,7 +498,7 @@ impl Strategy for ExploreStrategy {
             let unblocked_neighbors = dirs::ALL.iter().filter(
                     |&&x| !known.get(p + x).blocked()).count();
 
-            let bonus0 = 1. / 65536. * ((age as f64 / min_age as f64) + 1. / 16.);
+            let bonus0 = 1. / 65536. * (age as f64 + 1. / 16.);
             let bonus1 = unblocked_neighbors == dirs::ALL.len();
             let bonus2 = unblocked_neighbors > 0;
 
@@ -546,7 +524,6 @@ struct ChaseTarget {
     age: i32,
     bias: Point,
     last: Point,
-    search_turns: i32,
 }
 
 #[derive(Debug, Default)]
@@ -568,39 +545,36 @@ impl Strategy for ChaseStrategy {
         if turns_left >= cutoff { return (Priority::Skip, 0); }
 
         let Context { known, pos, .. } = *ctx;
-        let last_turn_age = ctx.shared.age_at_turn(1);
-        let limit = ctx.shared.age_at_turn(MAX_SEARCH_TURNS);
-
         let mut targets: Vec<_> = known.entities.iter().filter(
-            |x| x.age < limit && x.rival).collect();
+            |x| x.age < MAX_SEARCH_TURNS && x.rival).collect();
         if targets.is_empty() { return (Priority::Skip, 0); }
 
         let target = *targets.select_nth_unstable_by_key(
                 0, |x| (x.age, (x.pos - pos).len_l2_squared())).1;
-        let reset = target.age < last_turn_age;
+        let reset = target.age == 0;
         if reset || !self.path.check(ctx) { self.path.reset(); }
 
         let (age, last) = (target.age, target.pos);
-        let (bias, search_turns) = if !reset && let Some(x) = prev {
-            (x.bias, x.search_turns + 1)
+        let bias = if !reset && let Some(x) = prev {
+            x.bias
         } else {
-            (target.pos - pos, 0)
+            target.pos - pos
         };
-        self.target = Some(ChaseTarget { age, bias, last, search_turns });
+        self.target = Some(ChaseTarget { age, bias, last });
         (Priority::Hunt, 0)
     }
 
     fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
-        let ChaseTarget { age, bias, last, search_turns } = *self.target.as_ref()?;
+        let ChaseTarget { age, bias, last } = *self.target.as_ref()?;
         if age == 0 { return Some(attack_target(ctx, last)); }
 
         let turns = {
             if !move_ready(ctx.entity) { SLOWED_TURNS }
-            else if search_turns >= MIN_SEARCH_TURNS { WANDER_TURNS } else { 1. }
+            else if age >= MIN_SEARCH_TURNS { WANDER_TURNS } else { 1. }
         };
         if let Some(x) = self.path.follow(ctx, turns) { return Some(x); }
 
-        let search_nearby = search_turns > bias.len_l1();
+        let search_nearby = age > bias.len_l1();
         let center = if search_nearby { ctx.pos } else { last };
         search_around(ctx, &mut self.path, age, bias, center, turns)
     }
@@ -667,12 +641,9 @@ impl Strategy for FlightStrategy {
         if ctx.entity.predator { return (Priority::Skip, 0); }
 
         let Context { entity, known, pos, .. } = *ctx;
-        let last_turn_age = ctx.shared.age_at_turn(1);
-        let limit = ctx.shared.age_at_turn(MAX_FLIGHT_TURNS);
-
-        let reset = known.entities.iter().any(|x| x.age < last_turn_age && x.rival);
+        let reset = known.entities.iter().any(|x| x.age == 0 && x.rival);
         let mut threats: Vec<_> = known.entities.iter().filter_map(|x| {
-            if x.age >= limit || !x.rival { return None; }
+            if x.age >= MAX_FLIGHT_TURNS || !x.rival { return None; }
             Some(Threat { asleep: x.asleep, pos: x.pos })
         }).collect();
         threats.sort_unstable_by_key(|x| (x.pos.0, x.pos.1));
@@ -829,8 +800,10 @@ fn search_around(ctx: &mut Context, path: &mut CachedPath,
 
     let score = |p: Point, distance: i32| -> f64 {
         if distance == 0 { return 0.; }
+
         let cell = known.get(p);
-        if cell.time_since_entity_visible() < age || cell.blocked() { return 0. }
+        assert!(!cell.blocked());
+        if cell.turns_since_entity_visible() <= age { return 0. }
 
         let delta = p - pos;
         let inv_delta_l2 = safe_inv_l2(delta);
@@ -1000,10 +973,10 @@ impl AIState {
         let known = &*entity.known;
         let mut observations = vec![];
         for cell in &known.cells {
-            if (self.shared.time - cell.last_seen) >= 0 { break; }
+            if known.time - cell.last_seen > 0 { break; }
             observations.push(cell);
         }
-        self.shared.update(entity, known);
+        self.shared.update(entity);
 
         // Step 1: build a context object with all strategies' mutable state.
         let shared = &mut self.shared;
