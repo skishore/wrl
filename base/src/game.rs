@@ -11,7 +11,7 @@ use crate::base::{Buffer, Color, Glyph};
 use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs};
 use crate::effect::{Effect, Event, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
-use crate::knowledge::{Knowledge, Timestamp};
+use crate::knowledge::Knowledge;
 use crate::mapgen::mapgen_with_size;
 use crate::pathing::Status;
 use crate::shadowcast::{INITIAL_VISIBILITY, VISIBILITY_LOSSES, Vision, VisionArgs};
@@ -410,8 +410,9 @@ impl Board {
         self.known = Some(known);
     }
 
-    fn forget_player_known(&mut self, eid: EID, limit: Timestamp) {
-        self.entities[eid].known.forget_cells_before(limit);
+    fn start_next_turn(&mut self, eid: EID) {
+        let Some(entity) = self.entities.get_mut(eid) else { return; };
+        entity.known.start_next_turn(entity.player);
     }
 
     fn remove_known_entity(&mut self, eid: EID, oid: EID) {
@@ -813,9 +814,8 @@ fn update_state(state: &mut State) {
         let result = act(state, eid, action);
         if player && !result.success { break; }
 
-        if player && state.get_player().pos != pos {
-            let limit = state.ui.add_turn_time(state.get_player().known.time);
-            state.board.forget_player_known(state.player, limit);
+        if !player || state.get_player().pos != pos {
+            state.board.start_next_turn(eid);
         }
 
         //state.board.update_known(eid);
@@ -898,7 +898,6 @@ impl State {
         let pov = None;
 
         let mut ui = UI::default();
-        ui.add_turn_time(Default::default());
         match WEATHER {
             Weather::Rain(angle, count) => ui.start_rain(angle, count),
             Weather::None => (),
