@@ -59,7 +59,7 @@ impl Eq for Slope {}
 impl Ord for Slope {
     fn cmp(&self, other: &Self) -> Ordering {
         // a/b < c/d  <=>  ad < bc  (valid since b, d > 0)
-        (self.num * other.den).cmp(&(other.num * self.den))
+        (self.num as i64 * other.den as i64).cmp(&(other.num as i64 * self.den as i64))
     }
 }
 
@@ -72,7 +72,7 @@ impl PartialOrd for Slope {
 impl PartialEq for Slope {
     fn eq(&self, other: &Self) -> bool {
         // a/b == c/d <=> ad == bc (valid since b, d != 0)
-        self.num * other.den == other.num * self.den
+        self.num as i64 * other.den as i64 == other.num as i64 * self.den as i64
     }
 }
 
