@@ -10,7 +10,7 @@ use crate::effect::{Frame, self};
 use crate::entity::{EID, Entity};
 use crate::game::{WORLD_SIZE, FOV_RADIUS_NPC, FOV_RADIUS_PC_};
 use crate::game::{Input, Tile, show_item};
-use crate::knowledge::{PLAYER_MAP_MEMORY, Timestamp};
+use crate::knowledge::PLAYER_MAP_MEMORY;
 use crate::knowledge::{EntityKnowledge, Knowledge};
 use crate::pathing::Status;
 use crate::shadowcast::{Vision, VisionArgs};
@@ -67,7 +67,7 @@ pub fn get_direction(ch: char) -> Option<Point> {
 fn rivals<'a>(entity: &'a Entity) -> Vec<&'a EntityKnowledge> {
     let mut rivals = vec![];
     for other in &entity.known.entities {
-        if other.age > 0 { break; }
+        if !other.visible { break; }
         if other.eid != entity.eid { rivals.push(other); }
     }
     let pos = entity.pos;
@@ -197,7 +197,7 @@ pub struct Target {
 }
 
 fn can_target(entity: &EntityKnowledge) -> bool {
-    entity.age == 0 && !entity.friend
+    entity.visible && !entity.friend
 }
 
 fn init_target(data: TargetData, source: Point, target: Point) -> Box<Target> {
@@ -324,7 +324,7 @@ fn process_ui_input(ui: &mut UI, entity: &Entity, input: Input) -> bool {
     let get_initial_target = |source: Point| -> Point {
         let known = &*entity.known;
         let focus = ui.focus.and_then(|x| known.entity(x));
-        if let Some(target) = focus && target.age == 0 { return target.pos; }
+        if let Some(target) = focus && can_target(target) { return target.pos; }
         let rival = rivals(entity).into_iter().next();
         if let Some(rival) = rival { return rival.pos; }
         source
@@ -484,7 +484,6 @@ pub struct UI {
     // Animations
     moves: HashMap<Point, MoveAnimation>,
     rainfall: Option<Rainfall>,
-    turn_times: VecDeque<Timestamp>,
 
     // Modal components
     focus: Option<EID>,
@@ -517,12 +516,6 @@ impl UI {
     }
 
     // Update entry points
-
-    pub fn add_turn_time(&mut self, time: Timestamp) -> Timestamp {
-        if self.turn_times.len() == PLAYER_MAP_MEMORY { self.turn_times.pop_back(); }
-        self.turn_times.push_front(time);
-        *self.turn_times.back().unwrap()
-    }
 
     pub fn animate_move(&mut self, color: Color, delay: i32, point: Point) {
         let frame = -delay * UI_MOVE_FRAMES / 2;
@@ -635,16 +628,6 @@ impl UI {
             let cell = known.get(point);
             let Some(tile) = cell.tile() else { return unseen; };
 
-            let age_in_turns = (|| {
-                if !player { return 0; }
-                let age = cell.time_since_seen();
-                for (turn, &turn_time) in self.turn_times.iter().enumerate() {
-                    if age <= known.time - turn_time { return turn; }
-                }
-                return PLAYER_MAP_MEMORY;
-            })();
-            if age_in_turns >= max(PLAYER_MAP_MEMORY, 1) { return unseen; }
-
             let see_entity = cell.can_see_entity_at();
             let obscured = tile.limits_vision();
             let shadowed = cell.shade();
@@ -659,8 +642,9 @@ impl UI {
             let mut color = glyph.fg();
 
             if !cell.visible() {
+                let turns = if player { cell.turns_since_seen() } else  { 0 };
+                let delta = (PLAYER_MAP_MEMORY - turns) as f64;
                 let limit = max(PLAYER_MAP_MEMORY, 1) as f64;
-                let delta = (PLAYER_MAP_MEMORY - age_in_turns) as f64;
                 color = Color::white().fade(UI_REMEMBERED * delta / limit);
             } else if shadowed {
                 color = color.fade(UI_SHADE_FADE);
@@ -768,7 +752,7 @@ impl UI {
         let sleep_length = 2;
         let mut arrows = vec![];
         for other in &known.entities {
-            if other.friend || other.age > 0 { continue; }
+            if !can_target(other) { continue; }
 
             let (pos, dir) = (other.pos, other.dir);
             let mut ch = Glyph::ray(dir);
@@ -816,7 +800,7 @@ impl UI {
             slice.set(slice_point(point), glyph);
         }
         for other in &entity.known.entities {
-            let color = if other.age == 0 { 0x040 } else {
+            let color = if other.visible { 0x040 } else {
                 if other.moved { 0x400 } else { 0x440 }
             };
             let glyph = other.glyph.with_fg(Color::black()).with_bg(color);
@@ -975,7 +959,7 @@ impl UI {
             }
             None => {
                 let view = self.focus.and_then(|x| known.entity(x));
-                let seen = view.map(|x| x.age == 0).unwrap_or(false);
+                let seen = view.map(|x| x.visible).unwrap_or(false);
                 let cell = view.map(|x| known.get(x.pos)).unwrap_or(known.default());
                 let header = if seen {
                     "Last target:"
