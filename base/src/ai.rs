@@ -491,6 +491,7 @@ impl Strategy for ExploreStrategy {
             if distance == 0 { return 0.; }
 
             let age = known.get(p).turns_since_seen();
+            let age_scale = 1. / (1 << 24) as f64;
 
             let delta = p - pos;
             let inv_delta_l2 = safe_inv_l2(delta);
@@ -498,7 +499,7 @@ impl Strategy for ExploreStrategy {
             let unblocked_neighbors = dirs::ALL.iter().filter(
                     |&&x| !known.get(p + x).blocked()).count();
 
-            let bonus0 = 1. / 65536. * (age as f64 + 1. / 16.);
+            let bonus0 = age_scale * (age as f64 + 1. / 16.);
             let bonus1 = unblocked_neighbors == dirs::ALL.len();
             let bonus2 = unblocked_neighbors > 0;
 
