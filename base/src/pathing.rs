@@ -503,8 +503,6 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
         entry.status = Some(status);
         if !visited { state.dirty.push(point); }
 
-        if status == Status::Unknown && !fov.can_see(point - initial) { return; }
-
         let diagonal = dir.0 != 0 && dir.1 != 0;
         let occupied = status == Status::Occupied;
         let score = prev_score + DIJKSTRA_COST +
@@ -550,7 +548,12 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
             if result.visited.len() >= (cells as usize) { break; }
         }
 
-        if status != Status::Blocked {
+        let expand = match status {
+            Status::Unknown => fov.can_see(point - initial),
+            Status::Free | Status::Occupied  => true,
+            Status::Blocked => false,
+        };
+        if expand {
             for &dir in &dirs::ALL {
                 step(state, dir, point, score);
             }
