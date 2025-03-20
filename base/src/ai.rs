@@ -117,14 +117,14 @@ impl CachedPath {
             if !is_hiding_place(entity, p, threats) { return Status::Blocked; }
             known.get(p).status()
         };
-        let path = AStar(pos, target, ASTAR_LIMIT_WANDER, check);
+        let path = AStar(pos, target, ASTAR_LIMIT_WANDER, FOV_RADIUS, check);
         self.go(ctx, path?, turns)
     }
 
     fn start(&mut self, ctx: &Context, target: Point, turns: f64) -> Option<Action> {
         let Context { known, pos, .. } = *ctx;
         let check = |p: Point| known.get(p).status();
-        let path = AStar(pos, target, ASTAR_LIMIT_WANDER, check);
+        let path = AStar(pos, target, ASTAR_LIMIT_WANDER, FOV_RADIUS, check);
         self.go(ctx, path?, turns)
     }
 
@@ -787,7 +787,7 @@ fn path_to_target<F: Fn(Point) -> bool>(
     if let Some(x) = result && !x.dirs.is_empty() { return pick(&x.dirs, rng); }
 
     // Else, move towards the target.
-    let path = AStar(source, target, ASTAR_LIMIT_ATTACK, check);
+    let path = AStar(source, target, ASTAR_LIMIT_ATTACK, FOV_RADIUS, check);
     let dir = path.and_then(
         |x| if x.is_empty() { None } else { Some(x[0] - source) });
     step(dir.unwrap_or_else(|| *sample(&dirs::ALL, rng)))
