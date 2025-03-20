@@ -1,4 +1,3 @@
-#![feature(int_roundings)]
 #![feature(iter_chain)]
 #![feature(let_chains)]
 #![feature(test)]
