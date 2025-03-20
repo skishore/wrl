@@ -95,6 +95,12 @@ pub fn BFS<F: Fn(Point) -> bool, G: Fn(Point) -> Status>(
 const NOT_IN_HEAP: AStarHeapIndex = AStarHeapIndex(-1);
 const SOURCE_NODE: AStarNodeIndex = AStarNodeIndex(-1);
 
+#[derive(Default)]
+struct AStarState {
+    heap: AStarHeap,
+    map: HashMap<Point, AStarNodeIndex>,
+}
+
 struct AStarNode {
     distance: i32,
     index: AStarHeapIndex,
@@ -103,16 +109,16 @@ struct AStarNode {
     score: i32,
 }
 
-#[derive(Default)]
-struct AStarHeap {
-    nodes: Vec<AStarNode>,
-    heap: Vec<AStarNodeIndex>,
-}
-
 impl AStarNode {
     fn new(pos: Point, parent: AStarNodeIndex, distance: i32, score: i32) -> Self {
         Self { distance, index: NOT_IN_HEAP, parent, pos, score }
     }
+}
+
+#[derive(Default)]
+struct AStarHeap {
+    nodes: Vec<AStarNode>,
+    heap: Vec<AStarNodeIndex>,
 }
 
 impl AStarHeap {
@@ -276,14 +282,19 @@ fn AStarHeuristic(p: Point, los: &Vec<Point>) -> i32 {
 
 #[allow(non_snake_case)]
 pub fn AStar<F: Fn(Point) -> Status>(
-        source: Point, target: Point, limit: i32, check: F) -> Option<Vec<Point>> {
+        source: Point, target: Point, limit: i32, radius: i32, check: F) -> Option<Vec<Point>> {
     // Try line-of-sight - if that path is clear, then we don't need to search.
     // As with the full search below, we don't check if source is blocked here.
     let los = LOS(source, target);
-    let free = (1..los.len() - 1).all(|i| check(los[i]) == Status::Free);
+    let r2 = (radius * radius + radius) as i64;
+    let free = (1..los.len() - 1).all(|i| match check(los[i]) {
+        Status::Unknown => (los[i] - source).len_l2_squared() <= r2,
+        Status::Blocked | Status::Occupied => false,
+        Status::Free => true,
+    });
     if free { return Some(los.into_iter().skip(1).collect()) }
 
-    Dijkstra(source, |x| x == target, limit, check, |x| AStarHeuristic(x, &los))
+    Dijkstra(source, |x| x == target, limit, radius, check, |x| AStarHeuristic(x, &los))
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -293,8 +304,8 @@ pub fn AStar<F: Fn(Point) -> Status>(
 // Dijkstra search for a point satisfying an arbitrary predicate.
 #[allow(non_snake_case)]
 pub fn DijkstraSearch<F: Fn(Point) -> bool, G: Fn(Point) -> Status>(
-        source: Point, target: F, limit: i32, check: G) -> Option<Vec<Point>> {
-    Dijkstra(source, target, limit, check, |_| { 0 })
+        source: Point, target: F, limit: i32, radius: i32, check: G) -> Option<Vec<Point>> {
+    Dijkstra(source, target, limit, radius, check, |_| { 0 })
 }
 
 // TODO(shaunak): This search algorithm is non-isotropic. It prefers to move
@@ -304,13 +315,48 @@ pub fn DijkstraSearch<F: Fn(Point) -> bool, G: Fn(Point) -> Status>(
 // that gets us as close as possible to the target.
 #[allow(non_snake_case)]
 pub fn Dijkstra<F: Fn(Point) -> bool, G: Fn(Point) -> Status, H: Fn(Point) -> i32>(
-        source: Point, target: F, limit: i32, check: G, heuristic: H) -> Option<Vec<Point>> {
-    let mut map = HashMap::default();
-    let mut heap = AStarHeap::default();
+        source: Point, target: F, limit: i32, radius: i32,
+        check: G, heuristic: H) -> Option<Vec<Point>> {
+    CACHE.with_borrow_mut(|cache|{
+        // Reuse AStar allocations via the cached AStarState.
+        let state = &mut cache.0;
+
+        // Get a precomputed Vision of the right size.
+        let r = radius as usize;
+        while cache.2.len() <= r { cache.2.push(None); }
+        let cached_fov = &mut cache.2[r];
+        if cached_fov.is_none() { *cached_fov = Some(Vision::new(radius)); }
+        let fov = cached_fov.as_mut().unwrap();
+
+        let result = CachedDijkstra(state, fov, source, target, limit, check, heuristic);
+
+        // Clean up the updates done to the cache state.
+        state.heap.heap.clear();
+        state.heap.nodes.clear();
+        state.map.clear();
+
+        result
+    })
+}
+
+#[allow(non_snake_case)]
+fn CachedDijkstra<F: Fn(Point) -> bool, G: Fn(Point) -> Status, H: Fn(Point) -> i32>(
+        state: &mut AStarState, fov: &mut Vision, source: Point, target: F,
+        limit: i32, check: G, heuristic: H) -> Option<Vec<Point>> {
+    let map = &mut state.map;
+    let heap = &mut state.heap;
 
     let score = heuristic(source);
     let node = AStarNode::new(source, SOURCE_NODE, 0, score);
     map.insert(source, heap.push(node));
+
+    let origin = Point::default();
+    let opacity_lookup = |point: Point| {
+        let blocked = check(point + source) == Status::Blocked;
+        if blocked { INITIAL_VISIBILITY } else { 0 }
+    };
+    let args = VisionArgs { pos: origin, dir: origin, opacity_lookup, };
+    fov.compute(&args);
 
     for _ in 0..limit {
         if heap.is_empty() { break; }
@@ -333,8 +379,13 @@ pub fn Dijkstra<F: Fn(Point) -> bool, G: Fn(Point) -> Status, H: Fn(Point) -> i3
             let status = if target(next) { Status::Free } else { check(next) };
             if status == Status::Blocked { continue; }
 
+            let occupied = match status {
+                Status::Unknown => !fov.can_see(next - source),
+                Status::Blocked | Status::Free => false,
+                Status::Occupied => true,
+            };
+
             let diagonal = dir.0 != 0 && dir.1 != 0;
-            let occupied = status == Status::Occupied || status == Status::Unknown;
             let distance = prev_distance + ASTAR_UNIT_COST +
                            if diagonal { ASTAR_DIAGONAL_PENALTY } else { 0 } +
                            if occupied { ASTAR_OCCUPIED_PENALTY } else { 0 };
@@ -387,6 +438,7 @@ struct DijkstraNode {
     status: Option<Status>,
 }
 
+#[derive(Default)]
 struct DijkstraState {
     dirty: Vec<Point>,
     lists: Vec<DijkstraLink>,
@@ -401,9 +453,11 @@ impl DijkstraState {
 }
 
 thread_local! {
-    static CACHE: RefCell<(DijkstraState, Vec<Option<Vision>>)> = {
+    static CACHE: RefCell<(AStarState, DijkstraState, Vec<Option<Vision>>)> = {
         let map = Matrix::new(Point::default(), DijkstraNode::default());
-        (DijkstraState { dirty: vec![], lists: vec![], map }, vec![]).into()
+        let d = DijkstraState { dirty: vec![], lists: vec![], map };
+        let a = AStarState::default();
+        (a, d, vec![]).into()
     };
 }
 
@@ -426,22 +480,22 @@ pub fn DijkstraMap<F: Fn(Point) -> Status>(
     CACHE.with_borrow_mut(|cache|{
         // Make sure the Matrix has enough space for the search.
         let n = 2 * limit + 1;
-        let state = &mut cache.0;
+        let state = &mut cache.1;
         if state.map.size.0 < n || state.map.size.1 < n {
             state.map = Matrix::new(Point(n, n), DijkstraNode::default());
         }
 
         // Get a precomputed Vision of the right size.
         let r = radius as usize;
-        while cache.1.len() <= r { cache.1.push(None); }
-        let cached_fov = &mut cache.1[r];
+        while cache.2.len() <= r { cache.2.push(None); }
+        let cached_fov = &mut cache.2[r];
         if cached_fov.is_none() { *cached_fov = Some(Vision::new(radius)); }
         let fov = cached_fov.as_mut().unwrap();
 
         let result = CachedDijkstraMap(state, fov, source, check, cells, limit);
 
         // Restore the cached state to a clean condition.
-        let state = &mut cache.0;
+        let state = &mut cache.1;
         for &p in &state.dirty { state.map.set(p, DijkstraNode::default()); }
         state.dirty.clear();
         state.lists.clear();
@@ -575,7 +629,7 @@ mod tests {
     const BFS_LIMIT: i32 = 32;
     const DIJKSTRA_CELLS: i32 = 1024;
     const DIJKSTRA_LIMIT: i32 = 64;
-    const FOV: i32 = 12;
+    const FOV_RADIUS: i32 = 12;
 
     #[bench]
     fn bench_bfs(b: &mut test::Bencher) {
@@ -593,7 +647,7 @@ mod tests {
         b.iter(|| {
             let done = |_: Point| { false };
             let check = |p: Point| { map.get(&p).copied().unwrap_or(Status::Free) };
-            DijkstraSearch(Point::default(), done, DIJKSTRA_CELLS, check);
+            DijkstraSearch(Point::default(), done, DIJKSTRA_CELLS, FOV_RADIUS, check);
         });
     }
 
@@ -604,7 +658,7 @@ mod tests {
             let mut result = HashMap::default();
             result.insert(Point::default(), 0);
             let check = |p: Point| { map.get(&p).copied().unwrap_or(Status::Free) };
-            DijkstraMap(Point::default(), check, DIJKSTRA_CELLS, DIJKSTRA_LIMIT, FOV);
+            DijkstraMap(Point::default(), check, DIJKSTRA_CELLS, DIJKSTRA_LIMIT, FOV_RADIUS);
         });
     }
 
