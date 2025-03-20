@@ -330,11 +330,11 @@ pub fn Dijkstra<F: Fn(Point) -> bool, G: Fn(Point) -> Status, H: Fn(Point) -> i3
 
         for dir in &dirs::ALL {
             let next = prev_pos + *dir;
-            let test = if target(next) { Status::Free } else { check(next) };
-            if test == Status::Blocked { continue; }
+            let status = if target(next) { Status::Free } else { check(next) };
+            if status == Status::Blocked { continue; }
 
             let diagonal = dir.0 != 0 && dir.1 != 0;
-            let occupied = test == Status::Occupied;
+            let occupied = status == Status::Occupied || status == Status::Unknown;
             let distance = prev_distance + ASTAR_UNIT_COST +
                            if diagonal { ASTAR_DIAGONAL_PENALTY } else { 0 } +
                            if occupied { ASTAR_OCCUPIED_PENALTY } else { 0 };
