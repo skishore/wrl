@@ -339,7 +339,7 @@ impl Strategy for BasicNeedsStrategy {
 
         let Context { known, pos, .. } = *ctx;
         let valid = |p: Point| self.satisfies_need(known.get(p).get_cell());
-        for &dir in std::iter::chain(&[dirs::NONE], &dirs::ALL) {
+        for &dir in [dirs::NONE].iter().chain(&dirs::ALL) {
             if valid(pos + dir) {
                 *self.turns_left(ctx) = max(*self.turns_left(ctx), self.timeout());
                 return Some(self.action(pos + dir));
@@ -349,7 +349,7 @@ impl Strategy for BasicNeedsStrategy {
         ensure_neighborhood(ctx);
 
         let n = &ctx.neighborhood;
-        for &(point, _) in std::iter::chain(&n.blocked, &n.visited) {
+        for &(point, _) in n.blocked.iter().chain(&n.visited) {
             if !self.satisfies_need(known.get(point).get_cell()) { continue; }
 
             // Compute at most one path to a point in the neighborhood.
