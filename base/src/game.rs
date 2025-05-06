@@ -667,8 +667,8 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
 // Animation
 //
-// TODO(skishore): All this code is WRONG! It may reveal things (e.g. hidden
-// entities) to the player that they should not be able to see.
+// TODO: All this code is WRONG! It may reveal things (e.g. hidden entities)
+// to the player that they should not be able to see.
 //
 // To fix these bugs, we need to audit all usage of Board getters in Effects,
 // and instead of directly overwriting cells, we need to apply updates (e.g.
