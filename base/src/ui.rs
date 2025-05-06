@@ -939,6 +939,23 @@ impl UI {
             return;
         }
 
+        // TODO: There are several bugs in this code:
+        //
+        //   - EntityKnowledge for the focused entity can get cleaned up while
+        //     the player is still focused on it.
+        //
+        //   - CellKnowledge for the tile under the focused entity can get
+        //     cleaned up while the player is still focused on it.
+        //
+        //   - If the player hears the targeted entity move, but does not see
+        //     it, the knowledge update currently still update the entity's
+        //     position, giving the player knowledge of the tile under its
+        //     new location. Instead, noise knowledge updates for the player
+        //     shouldn't be tied to a specific entity. The player can guess.
+        //
+        // Unfortunately, the cleanest way to fix all of these bugs is to
+        // clone the focused entity's knowledge each frame on which the entity
+        // is visible. Is there a better way?
         let (cell, view, header, seen) = match &self.target {
             Some(x) => {
                 let cell = known.get(x.target);
