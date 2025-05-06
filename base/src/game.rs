@@ -12,7 +12,7 @@ use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs};
 use crate::effect::{Effect, Event, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
 use crate::knowledge::Knowledge;
-use crate::mapgen::mapgen_with_size;
+use crate::mapgen::legacy_mapgen_with_size as mapgen_with_size;
 use crate::pathing::Status;
 use crate::shadowcast::{INITIAL_VISIBILITY, VISIBILITY_LOSSES, Vision, VisionArgs};
 use crate::ui::{UI, get_direction};
@@ -23,7 +23,7 @@ use crate::ui::{UI, get_direction};
 
 pub const MOVE_TIMER: i32 = 960;
 pub const TURN_TIMER: i32 = 120;
-pub const WORLD_SIZE: i32 = 100;
+pub const WORLD_SIZE: i32 = 50;
 
 pub const FOV_RADIUS_NPC: i32 = 12;
 pub const FOV_RADIUS_PC_: i32 = 21;
@@ -36,8 +36,8 @@ const SPEED_NPC: f64 = 0.1;
 
 const LIGHT: Light = Light::Sun(Point(4, 1));
 const WEATHER: Weather = Weather::None;
-const NUM_PREDATORS: i32 = 2;
-const NUM_PREY: i32 = 18;
+const NUM_PREDATORS: i32 = 4;
+const NUM_PREY: i32 = 1;
 
 const UI_DAMAGE_FLASH: i32 = 6;
 const UI_DAMAGE_TICKS: i32 = 6;
@@ -641,7 +641,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 let cb = move |board: &mut Board, _: &mut RNG| {
                     let Some(other) = board.entities.get_mut(oid) else { return; };
 
-                    let damage = 1;
+                    let damage = 0;
                     if other.cur_hp > damage {
                         other.cur_hp -= damage;
                         board.update_known_entity(oid, eid, /*heard=*/true);

@@ -553,7 +553,7 @@ impl Strategy for ChaseStrategy {
         let prev = self.target.take();
 
         let turns_left = ctx.shared.till_hunger;
-        let cutoff = max(MAX_HUNGER_CARNIVORE / 2, 1);
+        let cutoff = max(MAX_HUNGER_CARNIVORE, 1);
         if turns_left >= cutoff { return (Priority::Skip, 0); }
 
         let Context { known, pos, .. } = *ctx;
@@ -612,6 +612,7 @@ struct FlightStrategy {
     dirs: Vec<Point>,
     path: CachedPath,
     stage: FlightStage,
+    since_path: i32,
     since_seen: i32,
     turn_limit: i32,
     threats: Vec<Threat>,
@@ -642,9 +643,9 @@ impl FlightStrategy {
 
 impl Default for FlightStrategy {
     fn default() -> Self {
-        let (since_seen, turn_limit) = (0, MIN_FLIGHT_TURNS);
+        let (since_path, since_seen, turn_limit) = (0, 0, MIN_FLIGHT_TURNS);
         let (path, stage) = (CachedPath::default(), FlightStage::Done);
-        Self { dirs: vec![], path, stage, since_seen, turn_limit, threats: vec![] }
+        Self { dirs: vec![], path, stage, since_path, since_seen, turn_limit, threats: vec![] }
     }
 }
 
@@ -670,8 +671,10 @@ impl Strategy for FlightStrategy {
         let stage = if hiding { FlightStage::Hide } else { FlightStage::Flee };
 
         if reset || changed {
-            self.reject();
-        } else if !self.path.check(ctx) {
+            self.dirs.clear();
+            if self.since_path >= 8 { self.path.reset(); }
+        }
+        if !self.path.check(ctx) {
             self.path.reset();
         }
 
@@ -688,6 +691,9 @@ impl Strategy for FlightStrategy {
     }
 
     fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
+        let last_since_path = self.since_path;
+        self.since_path = 0;
+
         if !self.dirs.is_empty() || self.since_seen >= self.turn_limit {
             self.path.reset();
             return self.look(ctx);
@@ -701,7 +707,10 @@ impl Strategy for FlightStrategy {
         };
 
         let turns = pick_turns(self.stage);
-        if let Some(x) = self.path.follow(ctx, turns) { return Some(x); }
+        if let Some(x) = self.path.follow(ctx, turns) {
+            self.since_path = last_since_path + 1;
+            return Some(x);
+        }
 
         let Context { entity, pos, .. } = *ctx;
 
@@ -996,10 +1005,10 @@ impl AIState {
         let strategies: Vec<Box<dyn Strategy>> = vec![
             Box::new(ChaseStrategy::default()),
             Box::new(FlightStrategy::default()),
-            Box::new(RestStrategy::default()),
+            //Box::new(RestStrategy::default()),
             Box::new(BasicNeedsStrategy::new(BasicNeed::EatMeat)),
-            Box::new(BasicNeedsStrategy::new(BasicNeed::EatPlants)),
-            Box::new(BasicNeedsStrategy::new(BasicNeed::Drink)),
+            //Box::new(BasicNeedsStrategy::new(BasicNeed::EatPlants)),
+            //Box::new(BasicNeedsStrategy::new(BasicNeed::Drink)),
             Box::new(AssessStrategy::default()),
             Box::new(ExploreStrategy::default()),
         ];
