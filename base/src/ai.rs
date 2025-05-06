@@ -566,6 +566,8 @@ impl Strategy for ChaseStrategy {
     }
 
     fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
+        // TODO: Don't attack the target if the last ping was because we heard
+        // it but we don't currently see it - check that it's seen!
         let ChaseTarget { age, bias, last } = *self.target.as_ref()?;
         if age == 0 { return Some(attack_target(ctx, last)); }
 

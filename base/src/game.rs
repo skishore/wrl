@@ -667,8 +667,8 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
 // Animation
 //
-// TODO(skishore): All this code is WRONG! It may reveal things (e.g. hidden
-// entities) to the player that they should not be able to see.
+// TODO: All this code is WRONG! It may reveal things (e.g. hidden entities)
+// to the player that they should not be able to see.
 //
 // To fix these bugs, we need to audit all usage of Board getters in Effects,
 // and instead of directly overwriting cells, we need to apply updates (e.g.
@@ -814,6 +814,19 @@ fn update_state(state: &mut State) {
         let result = act(state, eid, action);
         if player && !result.success { break; }
 
+        // TODO: age accounting is fundamentally screwed up. Example:
+        //   - Enemy can see player
+        //   - Enemy takes a slow move (2-turn)
+        //   - Enemy bumps age of its player knowledge, 0 -> 1
+        //   - Enemy has an FOV update (because it's the POV entity?)
+        //   - Enemy decreases age of its player knowledge, 1 -> 0
+        //   - Player moves
+        //   - Enemy has an FOV update (because of its move)
+        //   - Enemy leaves age of its player knowledge at 0
+        //   - Enemy attacks empty space...
+        //
+        // Can this bug still happen if the enemy is not the POV entity?
+        //
         if !player || state.get_player().pos != pos {
             state.board.start_next_turn(eid);
         }

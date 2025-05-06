@@ -308,11 +308,11 @@ pub fn DijkstraSearch<F: Fn(Point) -> bool, G: Fn(Point) -> Status>(
     Dijkstra(source, target, limit, radius, check, |_| { 0 })
 }
 
-// TODO(shaunak): This search algorithm is non-isotropic. It prefers to move
-// northwest. Fix it by sampling all nodes at `score` matching `target`.
+// TODO: This search algorithm is non-isotropic. It prefers to move northwest.
+// Fix it by sampling all nodes at `score` matching `target`.
 //
-// TODO(shaunak): If it's AStar, and we haven't found a target, return a path
-// that gets us as close as possible to the target.
+// TODO: If it's AStar, and we haven't found a target, return a path that gets
+// us as close as possible to the target.
 #[allow(non_snake_case)]
 pub fn Dijkstra<F: Fn(Point) -> bool, G: Fn(Point) -> Status, H: Fn(Point) -> i32>(
         source: Point, target: F, limit: i32, radius: i32,
@@ -452,6 +452,9 @@ impl DijkstraState {
     }
 }
 
+// TODO: We can get rid of the usage of Vision here if we precompute it in the
+// call site, and then, when we check a cell's status, we map Unknown -> Free
+// iff that cell is "visible" under that Vision.
 thread_local! {
     static CACHE: RefCell<(AStarState, DijkstraState, Vec<Option<Vision>>)> = {
         let map = Matrix::new(Point::default(), DijkstraNode::default());
