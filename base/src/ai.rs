@@ -835,7 +835,7 @@ fn flight_cell(ctx: &mut Context, threats: &[Threat], hiding: bool) -> Option<Po
 
     let threat_inv_l2s: Vec<_> = threats.iter().map(
         |&x| (x.pos, safe_inv_l2(pos - x.pos))).collect();
-    let scale = DijkstraLength(Point(1, 0)) as f64;
+    let scale = 1. / DijkstraLength(Point(1, 0)) as f64;
 
     let score = |p: Point, source_distance: i32| -> f64 {
         let mut inv_l2 = 0.;
@@ -860,11 +860,11 @@ fn flight_cell(ctx: &mut Context, threats: &[Threat], hiding: bool) -> Option<Po
         // WARNING: This heuristic can cause a piece to be "checkmated" in a
         // corner, if the Dijkstra search below isn't wide enough for us to
         // find a cell which is further from the threat than the corner cell.
-        let base = 1.5 * (threat_distance as f64) +
-                   -1. * (source_distance as f64) +
-                   16. * scale * (blocked as i32 as f64) +
-                   16. * scale * (frontier as i32 as f64) +
-                   16. * scale * if hidden { 1. } else { 0. };
+        let base = 1.5 * scale * (threat_distance as f64) +
+                   -1. * scale * (source_distance as f64) +
+                   16. * (blocked as i32 as f64) +
+                   16. * (frontier as i32 as f64) +
+                   16. * if hidden { 1. } else { 0. };
         (cos + 1.).pow(3) * base.pow(9)
     };
 
