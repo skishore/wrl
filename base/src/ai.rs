@@ -6,7 +6,7 @@ use rand::Rng;
 use rand_distr::{Distribution, Normal};
 use rand_distr::num_traits::Pow;
 
-use crate::base::{LOS, Point, RNG, dirs, sample, weighted};
+use crate::base::{LOS, Point, Slice, RNG, dirs, sample, weighted};
 use crate::entity::Entity;
 use crate::game::{NOISY_RADIUS, Item, move_ready};
 use crate::game::{Action, EatAction, MoveAction};
@@ -85,12 +85,6 @@ struct CachedPath {
     skipped: usize,
     steps: Vec<Point>,
     pos: Point,
-}
-
-impl Debug for CachedPath {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CachedPath").field("len", &self.steps.len()).finish()
-    }
 }
 
 impl CachedPath {
@@ -227,8 +221,9 @@ struct Context<'a, 'b> {
     env: &'a mut AIEnv<'b>,
 }
 
-trait Strategy : Debug {
+trait Strategy {
     fn get_path(&self) -> &[Point];
+    fn debug(&self, slice: &mut Slice);
     fn bid(&mut self, ctx: &mut Context, last: bool) -> (Priority, i32);
     fn accept(&mut self, ctx: &mut Context) -> Option<Action>;
     fn reject(&mut self);
@@ -241,7 +236,6 @@ trait Strategy : Debug {
 #[derive(Debug, Eq, PartialEq)]
 enum BasicNeed { EatMeat, EatPlants, Drink }
 
-#[derive(Debug)]
 struct BasicNeedsStrategy {
     last: Option<Point>,
     need: BasicNeed,
@@ -326,6 +320,10 @@ impl BasicNeedsStrategy {
 impl Strategy for BasicNeedsStrategy {
     fn get_path(&self) -> &[Point] { &self.path.steps }
 
+    fn debug(&self, slice: &mut Slice) {
+        slice.write_str(&format!("BasicNeed: {:?}", self.need)).newline();
+    }
+
     fn bid(&mut self, ctx: &mut Context, last: bool) -> (Priority, i32) {
         // Keep track of the the last-seen cell that satisfies our need.
         self.update_last(ctx);
@@ -382,11 +380,15 @@ impl Strategy for BasicNeedsStrategy {
 
 // RestStrategy
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct RestStrategy { path: CachedPath }
 
 impl Strategy for RestStrategy {
     fn get_path(&self) -> &[Point] { &self.path.steps }
+
+    fn debug(&self, slice: &mut Slice) {
+        slice.write_str("Rest").newline();
+    }
 
     fn bid(&mut self, ctx: &mut Context, last: bool) -> (Priority, i32) {
         if !self.path.check(ctx) { self.path.reset(); }
@@ -435,16 +437,12 @@ impl Strategy for RestStrategy {
 #[derive(Default)]
 struct AssessStrategy { dirs: Vec<Point> }
 
-impl Debug for AssessStrategy {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AssessStrategy")
-         .field("len", &self.dirs.len())
-         .finish()
-    }
-}
-
 impl Strategy for AssessStrategy {
     fn get_path(&self) -> &[Point] { &[] }
+
+    fn debug(&self, slice: &mut Slice) {
+        slice.write_str("Assess").newline();
+    }
 
     fn bid(&mut self, ctx: &mut Context, last: bool) -> (Priority, i32) {
         if ctx.shared.till_assess > 0 { return (Priority::Skip, 0); }
@@ -475,11 +473,15 @@ impl Strategy for AssessStrategy {
 
 // ExploreStrategy
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct ExploreStrategy { path: CachedPath }
 
 impl Strategy for ExploreStrategy {
     fn get_path(&self) -> &[Point] { &self.path.steps }
+
+    fn debug(&self, slice: &mut Slice) {
+        slice.write_str("Explore").newline();
+    }
 
     fn bid(&mut self, ctx: &mut Context, last: bool) -> (Priority, i32) {
         if !self.path.check(ctx) { self.path.reset(); }
@@ -538,7 +540,7 @@ struct ChaseTarget {
     last: Point,
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct ChaseStrategy {
     path: CachedPath,
     target: Option<ChaseTarget>,
@@ -546,6 +548,10 @@ struct ChaseStrategy {
 
 impl Strategy for ChaseStrategy {
     fn get_path(&self) -> &[Point] { &self.path.steps }
+
+    fn debug(&self, slice: &mut Slice) {
+        slice.write_str("Chase").newline();
+    }
 
     fn bid(&mut self, ctx: &mut Context, _: bool) -> (Priority, i32) {
         if !ctx.entity.predator { return (Priority::Skip, 0); }
@@ -607,7 +613,6 @@ struct Threat {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum FlightStage { Flee, Hide, Done }
 
-#[derive(Debug)]
 struct FlightStrategy {
     dirs: Vec<Point>,
     path: CachedPath,
@@ -616,6 +621,7 @@ struct FlightStrategy {
     since_seen: i32,
     turn_limit: i32,
     threats: Vec<Threat>,
+    utility: Vec<String>,
 }
 
 impl FlightStrategy {
@@ -643,14 +649,33 @@ impl FlightStrategy {
 
 impl Default for FlightStrategy {
     fn default() -> Self {
-        let (since_path, since_seen, turn_limit) = (0, 0, MIN_FLIGHT_TURNS);
-        let (path, stage) = (CachedPath::default(), FlightStage::Done);
-        Self { dirs: vec![], path, stage, since_path, since_seen, turn_limit, threats: vec![] }
+        Self {
+            dirs: vec![],
+            path: Default::default(),
+            stage: FlightStage::Done,
+            since_path: 0,
+            since_seen: 0,
+            turn_limit: MIN_FLIGHT_TURNS,
+            threats: vec![],
+            utility: vec![],
+        }
     }
 }
 
 impl Strategy for FlightStrategy {
     fn get_path(&self) -> &[Point] { &self.path.steps }
+
+    fn debug(&self, slice: &mut Slice) {
+        slice.write_str("Flight").newline();
+        slice.write_str(&format!("    stage: {:?}", self.stage)).newline();
+        slice.write_str(&format!("    since_path: {}", self.since_path)).newline();
+        slice.write_str(&format!("    since_seen: {}", self.since_seen)).newline();
+        slice.write_str(&format!("    turn_limit: {}", self.turn_limit)).newline();
+        slice.write_str("    utility:").newline();
+        for line in &self.utility {
+            slice.write_str("      ").write_str(line).newline();
+        }
+    }
 
     fn bid(&mut self, ctx: &mut Context, _: bool) -> (Priority, i32) {
         if ctx.entity.predator { return (Priority::Skip, 0); }
@@ -672,7 +697,7 @@ impl Strategy for FlightStrategy {
 
         if reset || changed {
             self.dirs.clear();
-            if self.since_path >= 8 { self.path.reset(); }
+            if self.stage > stage || self.since_path >= 8 { self.path.reset(); }
         }
         if !self.path.check(ctx) {
             self.path.reset();
@@ -717,7 +742,7 @@ impl Strategy for FlightStrategy {
         if !all_asleep && is_hiding_place(entity, pos, &self.threats) {
             ensure_sneakable(ctx, &self.threats);
 
-            if let Some(target) = flight_cell(ctx, &self.threats, true) {
+            if let Some(target) = flight_cell(ctx, &self.threats, &mut self.utility, true) {
                 self.stage = FlightStage::Hide;
                 if target == pos { return self.look(ctx); }
                 return self.path.sneak(ctx, target, WANDER_TURNS, &self.threats);
@@ -726,7 +751,7 @@ impl Strategy for FlightStrategy {
 
         ensure_neighborhood(ctx);
 
-        if let Some(target) = flight_cell(ctx, &self.threats, false) {
+        if let Some(target) = flight_cell(ctx, &self.threats, &mut self.utility, false) {
             self.stage = FlightStage::Flee;
             if target == pos { return self.look(ctx); }
             return self.path.start(ctx, target, pick_turns(self.stage));
@@ -850,14 +875,15 @@ fn search_around(ctx: &mut Context, path: &mut CachedPath,
 
 // Helpers for FlightStrategy
 
-fn flight_cell(ctx: &mut Context, threats: &[Threat], hiding: bool) -> Option<Point> {
+fn flight_cell(ctx: &mut Context, threats: &[Threat],
+               utility: &mut Vec<String>, hiding: bool) -> Option<Point> {
     let Context { entity, known, pos, .. } = *ctx;
 
     let threat_inv_l2s: Vec<_> = threats.iter().map(
         |&x| (x.pos, safe_inv_l2(pos - x.pos))).collect();
     let scale = 1. / DijkstraLength(Point(1, 0)) as f64;
 
-    let score = |p: Point, source_distance: i32| -> f64 {
+    let score = |p: Point, source_distance: i32, debug: Option<&mut String>| -> f64 {
         let mut inv_l2 = 0.;
         let mut threat = Point::default();
         let mut threat_distance = std::i32::MAX;
@@ -867,8 +893,8 @@ fn flight_cell(ctx: &mut Context, threats: &[Threat], hiding: bool) -> Option<Po
         }
 
         let blocked = {
-            let los = LOS(p, threat);
-            (1..los.len() - 1).any(|i| !known.get(los[i]).unblocked())
+            let los = LOS(threat, p);
+            (1..los.len() - 1).any(|i| known.get(los[i]).blocked())
         };
         let frontier = dirs::ALL.iter().any(|&x| known.get(p + x).unknown());
         let hidden = !hiding && is_hiding_place(entity, p, &threats);
@@ -877,21 +903,62 @@ fn flight_cell(ctx: &mut Context, threats: &[Threat], hiding: bool) -> Option<Po
         let inv_delta_l2 = safe_inv_l2(delta);
         let cos = delta.dot(pos - threat) as f64 * inv_delta_l2 * inv_l2;
 
+        if let Some(x) = debug {
+            x.push_str(if blocked { "B" } else { "." });
+            x.push_str(if frontier { "F" } else { "." });
+            x.push_str(if hidden { "H" } else { "." });
+            x.push_str(&format!(" cos: {:.2}; threat: {:?}", cos, threat));
+        }
+
         // WARNING: This heuristic can cause a piece to be "checkmated" in a
         // corner, if the Dijkstra search below isn't wide enough for us to
         // find a cell which is further from the threat than the corner cell.
         let base = 1.5 * scale * (threat_distance as f64) +
                    -1. * scale * (source_distance as f64) +
-                   16. * (blocked as i32 as f64) +
-                   16. * (frontier as i32 as f64) +
+                   16. * if blocked { 1. } else { 0. } +
+                   16. * if frontier { 1. } else { 0. } +
                    16. * if hidden { 1. } else { 0. };
-        (cos + 1.).pow(3) * base.pow(9)
+        (cos + 1.).pow(0) * base.pow(1)
     };
 
+    let min_score = score(pos, 0, None);
     let map = if hiding { &ctx.sneakable.visited } else { &ctx.neighborhood.visited };
-    let scores: Vec<_> = map.iter().map(
-        |&(p, distance)| (p, score(p, distance))).collect();
-    select_target(&scores, ctx.env)
+    let scores: Vec<_> = map.iter().filter_map(|&(p, distance)| {
+        let delta = score(p, distance, None) - min_score;
+        if delta >= 0. { Some((p, delta)) } else { None }
+    }).collect();
+    let result = select_target_softmax(&scores, ctx.env, 0.1);
+
+    if let Some(p) = result {
+        let mut threat_distance = std::i32::MAX;
+        let mut cur_threat_distance = std::i32::MAX;
+        for &(x, _) in &threat_inv_l2s {
+            threat_distance = min(threat_distance, DijkstraLength(x - p));
+            cur_threat_distance = min(cur_threat_distance, DijkstraLength(x - pos));
+        }
+        let sd = scale * DijkstraLength(pos - p) as f64;
+        let td = scale * threat_distance as f64;
+        let cur_td = scale * cur_threat_distance as f64;
+
+        let mut distance = None;
+        for &(q, d) in map { if p == q { distance = Some(d); } }
+
+        let mut move_debug = String::new();
+        let mut stay_debug = String::new();
+        let move_score = score(p, distance.unwrap(), Some(&mut move_debug));
+        let stay_score = score(pos, 0, Some(&mut stay_debug));
+
+        utility.clear();
+        utility.push(format!("move: sd = {:.2}; td = {:.2}; score = {:.2}",
+                             sd, td, move_score));
+        utility.push(format!("      {}", move_debug));
+        utility.push(format!("stay: sd = {:.2}; td = {:.2}; score = {:.2}",
+                             0., cur_td, stay_score));
+        utility.push(format!("      {}", stay_debug));
+        let prob = 2. / (1. + (-0.025 * move_score).exp()) - 1.;
+        utility.push(format!("escape_probability: {:.2}", prob));
+    }
+    result
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -988,11 +1055,34 @@ fn select_target(scores: &[(Point, f64)], env: &mut AIEnv) -> Option<Point> {
     Some(*weighted(&values, env.rng))
 }
 
+fn select_target_softmax(
+        scores: &[(Point, f64)], env: &mut AIEnv, temperature: f64) -> Option<Point> {
+    if scores.is_empty() { return None; }
+
+    let max = scores.iter().fold(
+        std::f64::NEG_INFINITY, |acc, x| if acc > x.1 { acc } else { x.1 });
+    let scale = ((1 << 16) - 1) as f64;
+    let inv_temperature = 1. / temperature;
+    let values: Vec<_> = scores.iter().map(|&(p, score)| {
+        let value = (scale * (inv_temperature * (score - max)).exp()) as i32;
+        assert!(0 <= value && value < (1 << 16));
+        (value, p)
+    }).collect();
+
+    if let Some(x) = env.debug.as_deref_mut() {
+        x.utility.clear();
+        for &(score, point) in &values {
+            x.utility.push((point, (score >> 8) as u8));
+        }
+    }
+    Some(*weighted(&values, env.rng))
+}
+
+
 //////////////////////////////////////////////////////////////////////////////
 
 // Execution
 
-#[derive(Debug)]
 pub struct AIState {
     bids: Vec<(Priority, i32, usize)>,
     strategies: Vec<Box<dyn Strategy>>,
@@ -1019,6 +1109,14 @@ impl AIState {
     pub fn get_path(&self) -> &[Point] {
         if self.last == -1 { return &[]; }
         self.strategies[self.last as usize].get_path()
+    }
+
+    pub fn debug(&self, slice: &mut Slice) {
+        for (i, strategy) in self.strategies.iter().enumerate() {
+            slice.write_str(if i as i32 == self.last { "> " } else { "  " });
+            strategy.debug(slice);
+            slice.newline();
+        }
     }
 
     pub fn plan(&mut self, entity: &Entity, env: &mut AIEnv) -> Action {
