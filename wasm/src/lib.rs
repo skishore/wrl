@@ -6,7 +6,7 @@ use wrl_base::base::{Glyph, Matrix};
 use wrl_base::game::{Input, State};
 
 thread_local! {
-    static STATE: RefCell<State> = Default::default()
+    static STATE: RefCell<(State, Matrix<Glyph>)> = Default::default()
 }
 
 #[wasm_bindgen(module = "/web/bindings.js")]
@@ -23,16 +23,14 @@ pub fn keydown(ch: i32, shift: bool) {
     } else {
         Input::Char(ch as u8 as char)
     };
-    STATE.with_borrow_mut(|game|{ game.add_input(input); });
+    STATE.with_borrow_mut(|(game, _)|{ game.add_input(input); });
 }
 
 #[wasm_bindgen]
 pub fn tick() {
-    STATE.with_borrow_mut(|game|{
+    STATE.with_borrow_mut(|(game, buffer)| {
         game.update();
-        let mut output = Matrix::default();
-        let mut debug = String::default();
-        game.render(&mut output, &mut debug);
-        render(output.data.as_ptr(), output.size.0, output.size.1)
+        game.render(buffer);
+        render(buffer.data.as_ptr(), buffer.size.0, buffer.size.1)
     });
 }

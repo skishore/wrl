@@ -30,7 +30,7 @@ impl Screen {
         Self { extent: Point(x as i32, y as i32), output, next, prev, fg, bg }
     }
 
-    fn render(&mut self, stats: &Stats, debug: &str, delta: f64) -> io::Result<()> {
+    fn render(&mut self, stats: &Stats, delta: f64) -> io::Result<()> {
         let mut lines_changed = 0;
         let Point(sx, sy) = self.next.size;
         for y in 0..sy {
@@ -59,11 +59,6 @@ impl Screen {
             }
         }
         std::mem::swap(&mut self.next, &mut self.prev);
-
-        if !debug.is_empty() {
-            self.write_debug_message(debug)?;
-            lines_changed += 1;
-        }
 
         if delta > 1.0 {
             let out = format!(
@@ -134,18 +129,6 @@ impl Screen {
         }
     }
 
-    fn write_debug_message(&mut self, msg: &str) -> io::Result<()> {
-        self.clear_foreground()?;
-        self.clear_background()?;
-        let n = 5;
-        for i in 0..n {
-            let y = self.extent.1 as u16 - i - 1;
-            write!(self.output, "{}{}", Goto(0, y), clear::CurrentLine)?;
-        }
-        let y = self.extent.1 as u16 - n;
-        write!(self.output, "{}{}{}", Goto(0, y), clear::CurrentLine, msg)
-    }
-
     fn write_status_message(&mut self, msg: &str) -> io::Result<()> {
         self.clear_foreground()?;
         self.clear_background()?;
@@ -196,8 +179,7 @@ fn main() {
     let full = args.len() == 2;
     let game = State::new(/*seed=*/None, full);
     let mut output = Matrix::default();
-    let mut debug = String::default();
-    game.render(&mut output, &mut debug);
+    game.render(&mut output);
 
     let mut inputs = termion::async_stdin().keys();
     let mut screen = Screen::new(output.size);
@@ -225,8 +207,8 @@ fn main() {
         // and render() is a fast operation. We frame-lock renders to updates.
         let start = game_loop::Time::now();
         let delta = start.sub(&time);
-        g.game.render(&mut screen.next, &mut debug);
-        screen.render(&stats, &debug, delta).unwrap();
+        g.game.render(&mut screen.next);
+        screen.render(&stats, delta).unwrap();
         let limit = game_loop::Time::now();
         stats.on_render(limit.sub(&start));
 
