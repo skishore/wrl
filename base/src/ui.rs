@@ -24,6 +24,7 @@ const UI_ROW_SPACE: i32 = 1;
 const UI_KEY_SPACE: i32 = 4;
 
 const UI_LOG_SIZE: i32 = 4;
+const UI_DEBUG_SIZE: i32 = 60;
 const UI_CHOICE_SIZE: i32 = 40;
 const UI_STATUS_SIZE: i32 = 30;
 const UI_COLOR: (u8, u8, u8) = (255, 192, 0);
@@ -89,6 +90,7 @@ fn within_map_bounds(ui: &UI, entity: &Entity, point: Point) -> bool {
 struct Layout {
     log: Rect,
     map: Rect,
+    debug: Rect,
     choice: Rect,
     rivals: Rect,
     status: Rect,
@@ -113,6 +115,9 @@ impl Layout {
         let (col, row) = (UI_COL_SPACE, UI_ROW_SPACE);
         let w = 2 * x + 2 + 2 * (ss + kl + 2 * col);
         let h = y + 2 + row + UI_LOG_SIZE + row + 1;
+
+        let debug = Rect::default();
+        let bounds = Point(w, h);
 
         let status = Rect {
             root: Point(col, row + 1),
@@ -148,7 +153,24 @@ impl Layout {
             size: Point(ss + kl, status.root.1 + status.size.1 - ry),
         };
 
-        Self { log, map, choice, rivals, status, target, bounds: Point(w, h) }
+        Self { log, map, debug, choice, rivals, status, target, bounds }
+    }
+
+    fn full(size: Point) -> Self {
+        let Point(x, y) = size;
+        let w = UI_DEBUG_SIZE;
+        let (col, row) = (UI_COL_SPACE, UI_ROW_SPACE);
+        let map = Rect { root: Point(1, 1), size: Point(2 * x, y) };
+        let debug = Rect {
+            root: Point(map.root.0 + map.size.0 + col + 1, row + 1),
+            size: Point(w, y - 2 * row),
+        };
+        let bounds = Point(debug.root.0 + debug.size.0, y + 2);
+
+        let x = Rect::default();
+        let (log, choice, rivals, status, target) = (x, x, x, x, x);
+
+        Self { log, map, debug, choice, rivals, status, target, bounds }
     }
 }
 
@@ -495,7 +517,7 @@ impl UI {
     // Rendering entry point
 
     pub fn render(&self, buffer: &mut Buffer, entity: &Entity,
-                  frame: Option<&Frame>, extra: &[(Point, Glyph)]) {
+                  frame: Option<&Frame>, entities: &[(Point, Glyph)]) {
         if buffer.data.is_empty() {
             *buffer = Matrix::new(self.layout.bounds, ' '.into());
         }
@@ -510,9 +532,13 @@ impl UI {
         // Render the base map, then the debug layer, then the weather:
         self.render_map(buffer, entity, frame);
         if !entity.player && frame.is_none() {
-            self.render_debug(buffer, entity, extra);
+            self.render_debug_overlay(buffer, entity, entities);
         }
         self.render_weather(buffer, entity);
+
+        if !entity.player && self.full {
+            self.render_debug(buffer, entity);
+        }
     }
 
     // Update entry points
@@ -529,7 +555,7 @@ impl UI {
 
     pub fn show_full_view(&mut self) {
         let side = WORLD_SIZE;
-        self.layout = Layout::new(Point(side, side));
+        self.layout = Layout::full(Point(side, side));
         self.full = true;
     }
 
@@ -773,7 +799,13 @@ impl UI {
         }
     }
 
-    fn render_debug(&self, buffer: &mut Buffer, entity: &Entity, extra: &[(Point, Glyph)]) {
+    fn render_debug(&self, buffer: &mut Buffer, entity: &Entity) {
+        let slice = &mut Slice::new(buffer, self.layout.debug);
+        entity.ai.debug(slice);
+    }
+
+    fn render_debug_overlay(&self, buffer: &mut Buffer, entity: &Entity,
+                            entities: &[(Point, Glyph)]) {
         let slice = &mut Slice::new(buffer, self.layout.map);
         let offset = self.get_map_offset(entity);
 
@@ -796,7 +828,7 @@ impl UI {
             let glyph = slice.get(point);
             slice.set(point, glyph.with_fg(Color::black()).with_bg(0x400));
         }
-        for &(point, glyph) in extra {
+        for &(point, glyph) in entities {
             slice.set(slice_point(point), glyph);
         }
         for other in &entity.known.entities {
@@ -1169,10 +1201,17 @@ impl UI {
         self.render_title(buffer, ml, Point(ml + mw, mh - 1), "");
         self.render_title(buffer, uw, Point(0, uh - 1), "");
 
+        if self.full {
+            let dl = self.layout.bounds.0 - mw;
+            self.render_title(buffer, dl, Point(ml + mw, 0), "Debug");
+        }
+
         self.render_box(buffer, &self.layout.map);
     }
 
     fn render_title(&self, buffer: &mut Buffer, width: i32, pos: Point, text: &str) {
+        if width <= 0 { return; }
+
         let shift = 2;
         let color: Color = UI_COLOR.into();
         let dashes = Glyph::chfg('-', color);
