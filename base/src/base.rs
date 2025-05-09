@@ -298,7 +298,7 @@ impl<T: Clone> Matrix<T> {
 
 pub type Buffer = Matrix<Glyph>;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct Rect { pub root: Point, pub size: Point }
 
 pub struct Slice<'a> {
