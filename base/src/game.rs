@@ -929,16 +929,13 @@ impl State {
 
     pub fn update(&mut self) { update_state(self); }
 
-    pub fn render(&self, buffer: &mut Buffer, debug: &mut String) {
+    pub fn render(&self, buffer: &mut Buffer) {
         let entity = self.pov.and_then(
             |x| self.board.get_entity(x)).unwrap_or(self.get_player());
         let frame = self.board.get_frame();
 
-        debug.clear();
         let mut entities = vec![];
-
         if !entity.player {
-            *debug = format!("{:?}", entity.ai);
             entities = self.board.entity_order.iter().map(|&x| {
                 let other = &self.board.entities[x];
                 (other.pos, other.glyph)
