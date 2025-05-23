@@ -253,7 +253,7 @@ impl Knowledge {
 
         let same = other.eid == entity.eid;
         let entry = &mut self.entities[handle];
-        let aggressor = |x: &Entity| x.player || x.predator;
+        let aggressor = |x: &Entity| x.predator;
         let rival = !same && (aggressor(entity) != aggressor(other));
 
         entry.age = 0;
