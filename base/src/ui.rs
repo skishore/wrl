@@ -524,7 +524,7 @@ impl UI {
         buffer.fill(buffer.default);
         self.render_layout(buffer);
 
-        self.render_log(buffer);
+        self.render_log(buffer, entity);
         self.render_rivals(buffer, entity);
         self.render_status(buffer, entity, None, None);
         self.render_target(buffer, entity);
@@ -684,6 +684,9 @@ impl UI {
         for y in 0..size.1 {
             for x in 0..size.0 {
                 let glyph = lookup(Point(x, y) + offset);
+                let scent = entity.get_scent_at(Point(x, y) + offset);
+                let color = Color::from((255, 128, 128)).fade(scent);
+                let glyph = glyph.with_bg(color);
                 slice.set(Point(2 * x, y), glyph);
             }
         }
@@ -897,8 +900,12 @@ impl UI {
 
     // Rendering each section of the UI
 
-    fn render_log(&self, buffer: &mut Buffer) {
+    fn render_log(&self, buffer: &mut Buffer, entity: &Entity) {
         let slice = &mut Slice::new(buffer, self.layout.log);
+        slice.write_str(&format!(
+            "Scent at {:?}: {:.2}; history = {} items",
+            entity.pos, entity.get_scent_at(entity.pos), entity.history.len()
+        )).newline();
         for line in &self.log.lines {
             slice.set_fg(Some(line.color)).write_str(&line.text).newline();
         }

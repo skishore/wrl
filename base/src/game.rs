@@ -834,7 +834,11 @@ fn update_state(state: &mut State) {
         //state.board.update_known(eid);
         //state.board.update_known(state.player);
 
-        if let Some(x) = state.board.entities.get_mut(eid) { drain(x, &result); }
+        if let Some(x) = state.board.entities.get_mut(eid) {
+            if x.history.len() == x.history.capacity() { x.history.pop_back(); }
+            x.history.push_front(x.pos);
+            drain(x, &result);
+        }
     }
 
     if update { update_pov_entities(state); }
