@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::num::NonZeroU64;
 use std::ops::{Index, IndexMut};
 
@@ -41,6 +42,27 @@ pub struct Entity {
     pub speed: f64,
     pub pos: Point,
     pub dir: Point,
+    pub history: VecDeque<Point>,
+}
+
+const HISTORY_SIZE: usize = 64;
+
+impl Entity {
+    pub fn get_scent_at(&self, p: Point) -> f64 {
+        let mut total = 0.;
+        let mut factor = 1.;
+        let dropoff = 1. / (HISTORY_SIZE as f64);
+        for (age, &pos) in self.history.iter().enumerate() {
+            let variance = 1. + 1. * age as f64;
+            let l2_squared = (pos - p).len_l2_squared() as f64;
+            let num = (-l2_squared / (2. * variance)).exp();
+            let den = (std::f64::consts::TAU * variance).sqrt();
+            total += factor * num / den;
+            factor *= 1. - dropoff;
+        }
+        let result = 0.2 * total;
+        if result > 1. { 1. } else { result }
+    }
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -77,6 +99,9 @@ pub struct EntityMap {
 
 impl EntityMap {
     pub fn add(&mut self, args: &EntityArgs, rng: &mut RNG) -> EID {
+        let mut history = VecDeque::with_capacity(HISTORY_SIZE);
+        history.push_front(args.pos);
+
         let key = self.map.insert_with_key(|x| Entity {
             eid: to_eid(x),
             glyph: args.glyph,
@@ -93,6 +118,7 @@ impl EntityMap {
             speed: args.speed,
             pos: args.pos,
             dir: *sample(&dirs::ALL, rng),
+            history,
         });
         to_eid(key)
     }
