@@ -885,14 +885,17 @@ fn assess_directions(dirs: &[Point], turns: i32, rng: &mut RNG) -> Vec<Point> {
     result.reserve((ASSESS_STEPS * turns) as usize);
 
     for i in 0..ASSESS_STEPS {
-        let scale = 100;
+        let dir = dirs[i as usize % dirs.len()];
+        let distance = dir.len_l2();
+        let scale = 100. / if distance > 0. { dir.len_l2() } else { 1. };
+
         let steps = rng.gen_range(0..turns) + 1;
         let angle = Normal::new(0., ASSESS_ANGLE).unwrap().sample(rng);
         let (sin, cos) = (angle.sin(), angle.cos());
 
-        let Point(dx, dy) = dirs[i as usize % dirs.len()];
-        let rx = (cos * (scale * dx) as f64) + (sin * (scale * dy) as f64);
-        let ry = (cos * (scale * dy) as f64) - (sin * (scale * dx) as f64);
+        let Point(dx, dy) = dir;
+        let rx = (cos * scale * dx as f64) + (sin * scale * dy as f64);
+        let ry = (cos * scale * dy as f64) - (sin * scale * dx as f64);
         let target = Point(rx as i32, ry as i32);
         for _ in 0..steps { result.push(target); }
     }
