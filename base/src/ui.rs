@@ -684,9 +684,9 @@ impl UI {
         for y in 0..size.1 {
             for x in 0..size.0 {
                 let glyph = lookup(Point(x, y) + offset);
-                let scent = entity.get_scent_at(Point(x, y) + offset);
-                let color = Color::from((255, 128, 128)).fade(scent);
-                let glyph = glyph.with_bg(color);
+                //let scent = entity.get_scent_at(Point(x, y) + offset);
+                //let color = Color::from((255, 128, 128)).fade(scent);
+                //let glyph = glyph.with_bg(color);
                 slice.set(Point(2 * x, y), glyph);
             }
         }

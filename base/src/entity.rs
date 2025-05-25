@@ -50,18 +50,23 @@ const HISTORY_SIZE: usize = 64;
 impl Entity {
     pub fn get_scent_at(&self, p: Point) -> f64 {
         let mut total = 0.;
-        let mut factor = 1.;
-        let dropoff = 1. / (HISTORY_SIZE as f64);
-        for (age, &pos) in self.history.iter().enumerate() {
-            let variance = 1. + 1. * age as f64;
-            let l2_squared = (pos - p).len_l2_squared() as f64;
-            let num = (-l2_squared / (2. * variance)).exp();
-            let den = (std::f64::consts::TAU * variance).sqrt();
-            total += factor * num / den;
-            factor *= 1. - dropoff;
+        for age in 0..self.history.capacity() {
+            total += self.get_historical_scent_at(p, age);
         }
-        let result = 0.2 * total;
-        if result > 1. { 1. } else { result }
+        if total > 1. { 1. } else { total }
+    }
+
+    pub fn get_historical_scent_at(&self, p: Point, age: usize) -> f64 {
+        let Some(&pos) = self.history.get(age) else { return 0. };
+
+        let base = 0.2;
+        let dropoff = 1. - 1. / (HISTORY_SIZE as f64);
+        let variance = 1. + 1. * age as f64;
+
+        let l2_squared = (pos - p).len_l2_squared() as f64;
+        let num = (-l2_squared / (2. * variance)).exp();
+        let den = (std::f64::consts::TAU * variance).sqrt();
+        base * num / den * dropoff.powi(age as i32)
     }
 }
 
