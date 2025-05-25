@@ -1,9 +1,11 @@
 use std::cmp::max;
 
+use rand::Rng;
+
 use thin_vec::{ThinVec, thin_vec};
 
 use crate::static_assert_size;
-use crate::base::{Glyph, HashMap, Point, clamp};
+use crate::base::{Glyph, HashMap, Point, RNG, clamp};
 use crate::entity::{EID, Entity};
 use crate::game::{MOVE_TIMER, Board, Item, Light, Tile};
 use crate::list::{Handle, List};
@@ -86,12 +88,19 @@ static_assert_size!(EntityKnowledge, 72);
 #[cfg(target_pointer_width = "64")]
 static_assert_size!(EntityKnowledge, 80);
 
+#[derive(Clone, Copy)]
+pub struct Scent {
+    pub age: i32,
+    pub pos: Point,
+}
+
 #[derive(Default)]
 pub struct Knowledge {
     cell_by_point: HashMap<Point, CellHandle>,
     entity_by_eid: HashMap<EID, EntityHandle>,
     pub cells: List<CellKnowledge>,
     pub entities: List<EntityKnowledge>,
+    pub scents: Vec<Scent>,
     pub time: Timestamp,
 }
 
@@ -142,9 +151,24 @@ impl Knowledge {
         }
     }
 
-    pub fn update(&mut self, me: &Entity, board: &Board, vision: &Vision) {
+    pub fn update(&mut self, me: &Entity, board: &Board, vision: &Vision, rng: &mut RNG) {
         let (pos, time) = (me.pos, self.time);
         let dark = matches!(board.get_light(), Light::None);
+
+        // Clear and recompute scents. Only the player gives off a scent.
+        self.scents.clear();
+        for &oid in &board.entity_order {
+            if oid == me.eid { continue; }
+            let other = &board.entities[oid];
+            if !other.player { continue; }
+            let mut remainder = rng.gen::<f64>();
+            for age in 0..other.history.capacity() {
+                remainder -= other.get_historical_scent_at(me.pos, age);
+                if remainder >= 0. { continue; }
+                self.scents.push(Scent { age: age as i32, pos: other.history[age] });
+                break;
+            }
+        }
 
         // Clear visibility flags. Visible cells come first in the list so we
         // can stop when we see the first one that's not visible.

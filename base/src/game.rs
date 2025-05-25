@@ -166,8 +166,8 @@ static_assert_size!(Cell, 32);
 
 pub struct Board {
     active_entity_index: usize,
-    entity_order: Vec<EID>,
-    entities: EntityMap,
+    pub entity_order: Vec<EID>,
+    pub entities: EntityMap,
     map: Matrix<Cell>,
     // Animation
     _effect: Effect,
@@ -313,7 +313,7 @@ impl Board {
         let prev = replace(&mut cell.eid, Some(eid));
         assert!(prev.is_none());
         self.entity_order.push(eid);
-        self.update_known(eid);
+        self.update_known(eid, rng);
         eid
     }
 
@@ -377,7 +377,7 @@ impl Board {
 
     // Knowledge
 
-    fn update_known(&mut self, eid: EID) {
+    fn update_known(&mut self, eid: EID, rng: &mut RNG) {
         let mut known = self.known.take().unwrap_or_default();
         swap(&mut known, &mut self.entities[eid].known);
 
@@ -392,7 +392,7 @@ impl Board {
             vision.compute(&VisionArgs { pos, dir, opacity_lookup });
         }
         let vision = if player { &self._pc_vision } else { &self.npc_vision };
-        known.update(me, &self, vision);
+        known.update(me, &self, vision, rng);
 
         swap(&mut known, &mut self.entities[eid].known);
         self.known = Some(known);
@@ -456,6 +456,7 @@ pub struct MoveAction { pub look: Point, pub step: Point, pub turns: f64 }
 pub enum Action {
     Idle,
     Rest,
+    SniffAround,
     WaitForInput,
     Look(Point),
     Move(MoveAction),
@@ -534,6 +535,15 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
         Action::Idle => ActionResult::success(),
         Action::Rest => ActionResult::success(),
         Action::WaitForInput => ActionResult::failure(),
+        Action::SniffAround => {
+            let entity = &mut state.board.entities[eid];
+            let (point, color) = (entity.pos, 0x440);
+
+            let board = &mut state.board;
+            let cb = Box::new(|_: &mut Board, _: &mut RNG| {});
+            board.add_effect(apply_flash(board, point, color, cb), &mut state.rng);
+            ActionResult::success()
+        }
         Action::Look(dir) => {
             state.board.entities[eid].dir = dir;
             ActionResult::success()
@@ -641,7 +651,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 let cb = move |board: &mut Board, _: &mut RNG| {
                     let Some(other) = board.entities.get_mut(oid) else { return; };
 
-                    let damage = 0;
+                    let damage = 1;
                     if other.cur_hp > damage {
                         other.cur_hp -= damage;
                         board.update_known_entity(oid, eid, /*heard=*/true);
@@ -757,9 +767,9 @@ fn process_input(state: &mut State, input: Input) {
 }
 
 fn update_pov_entities(state: &mut State) {
-    state.board.update_known(state.player);
+    state.board.update_known(state.player, &mut state.rng);
     if let Some(x) = state.pov && state.board.entities.has(x) {
-        state.board.update_known(x);
+        state.board.update_known(x, &mut state.rng);
     }
     let player = &state.board.entities[state.player];
     state.ui.update_focus(player);
@@ -806,8 +816,8 @@ fn update_state(state: &mut State) {
             break;
         }
 
-        state.board.update_known(eid);
-        state.board.update_known(state.player);
+        state.board.update_known(eid, &mut state.rng);
+        state.board.update_known(state.player, &mut state.rng);
 
         update = true;
         let action = plan(state, eid);
@@ -831,8 +841,8 @@ fn update_state(state: &mut State) {
             state.board.start_next_turn(eid);
         }
 
-        //state.board.update_known(eid);
-        //state.board.update_known(state.player);
+        //state.board.update_known(eid, &mut state.rng);
+        //state.board.update_known(state.player, &mut state.rng);
 
         if let Some(x) = state.board.entities.get_mut(eid) {
             if x.history.len() == x.history.capacity() { x.history.pop_back(); }
@@ -908,7 +918,7 @@ impl State {
             }
         }
         board.entities[player].dir = dirs::S;
-        board.update_known(player);
+        board.update_known(player, &mut rng);
 
         let inputs = Default::default();
         let ai = Default::default();

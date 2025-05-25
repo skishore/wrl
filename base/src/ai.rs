@@ -10,7 +10,7 @@ use crate::base::{LOS, Point, Slice, RNG, dirs, sample, weighted};
 use crate::entity::Entity;
 use crate::game::{NOISY_RADIUS, Item, move_ready};
 use crate::game::{Action, EatAction, MoveAction};
-use crate::knowledge::{CellKnowledge, Knowledge};
+use crate::knowledge::{CellKnowledge, Knowledge, Scent};
 use crate::pathing::{AStar, BFS, DijkstraLength, DijkstraMap, Neighborhood, Status};
 use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
 
@@ -533,6 +533,70 @@ impl Strategy for ExploreStrategy {
 
 //////////////////////////////////////////////////////////////////////////////
 
+#[derive(Default)]
+struct TrackStrategy {
+    path: CachedPath,
+    scent: Option<Scent>,
+    fresh: bool,
+}
+
+impl Strategy for TrackStrategy {
+    fn get_path(&self) -> &[Point] { &self.path.steps }
+
+    fn debug(&self, slice: &mut Slice) {
+        slice.write_str("Track").newline();
+        if let Some(x) = &self.scent {
+            slice.write_str(&format!("    scent.age: {}", x.age)).newline();
+            slice.write_str(&format!("    scent.pos: {:?}", x.pos)).newline();
+            slice.write_str(&format!("    fresh: {}", self.fresh)).newline();
+        }
+    }
+
+    fn bid(&mut self, ctx: &mut Context, _: bool) -> (Priority, i32) {
+        if !self.path.check(ctx) { self.path.reset(); }
+
+        if let Some(x) = &mut self.scent { x.age += 1; }
+        self.fresh = false;
+
+        for &scent in &ctx.known.scents {
+            let (fresh, newer) = match &self.scent {
+                Some(x) => (scent.pos != x.pos, scent.age < x.age),
+                None => (true, true),
+            };
+            if !newer { continue; }
+
+            if fresh { self.path.reset(); }
+            self.scent = Some(scent);
+            self.fresh = fresh;
+        }
+
+        if let Some(x) = &self.scent && x.age >= MAX_SEARCH_TURNS {
+            self.scent = None;
+            self.fresh = false;
+        }
+
+        let Some(x) = &self.scent else { return (Priority::Skip, 0); };
+
+        (Priority::Hunt, 2 * x.age + 1)
+    }
+
+    fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
+        let Some(x) = self.scent else { return None; };
+        let Scent { age, pos } = x;
+
+        if self.fresh { return Some(Action::SniffAround); }
+
+        let turns = if !move_ready(ctx.entity) { SLOWED_TURNS } else { WANDER_TURNS };
+        if let Some(x) = self.path.follow(ctx, turns) { return Some(x); }
+
+        search_around(ctx, &mut self.path, age, Point(0, 0), pos, turns)
+    }
+
+    fn reject(&mut self) { self.path.reset(); }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 #[derive(Debug)]
 struct ChaseTarget {
     age: i32,
@@ -551,6 +615,11 @@ impl Strategy for ChaseStrategy {
 
     fn debug(&self, slice: &mut Slice) {
         slice.write_str("Chase").newline();
+        if let Some(x) = &self.target {
+            slice.write_str(&format!("    target.age: {}", x.age)).newline();
+            slice.write_str(&format!("    target.bias: {:?}", x.bias)).newline();
+            slice.write_str(&format!("    target.last: {:?}", x.last)).newline();
+        }
     }
 
     fn bid(&mut self, ctx: &mut Context, _: bool) -> (Priority, i32) {
@@ -579,7 +648,7 @@ impl Strategy for ChaseStrategy {
             target.pos - pos
         };
         self.target = Some(ChaseTarget { age, bias, last });
-        (Priority::Hunt, 0)
+        (Priority::Hunt, 2 * age)
     }
 
     fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
@@ -1093,6 +1162,7 @@ pub struct AIState {
 impl AIState {
     pub fn new(predator: bool, rng: &mut RNG) -> Self {
         let strategies: Vec<Box<dyn Strategy>> = vec![
+            Box::new(TrackStrategy::default()),
             Box::new(ChaseStrategy::default()),
             Box::new(FlightStrategy::default()),
             //Box::new(RestStrategy::default()),
