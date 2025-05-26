@@ -34,7 +34,7 @@ const VISIBILITY_LOSS: i32 = VISIBILITY_LOSSES[FOV_RADIUS_IN_TALL_GRASS - 1];
 const SPEED_PC_: f64 = 0.1;
 const SPEED_NPC: f64 = 0.1;
 
-const LIGHT: Light = Light::Sun(Point(4, 1));
+const LIGHT: Light = Light::Sun(Point(2, 0));
 const WEATHER: Weather = Weather::None;
 const NUM_PREDATORS: i32 = 20;
 const NUM_PREY: i32 = 0;

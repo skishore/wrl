@@ -34,7 +34,7 @@ const UI_MOVE_FRAMES: i32 = 12;
 const UI_TARGET_FRAMES: i32 = 20;
 
 const UI_FOV_BRIGHTEN: f64 = 0.12;
-const UI_REMEMBERED: f64 = 0.25;
+const UI_REMEMBERED: f64 = 0.15;
 const UI_SHADE_FADE: f64 = 0.50;
 
 const UI_TARGET_SHADE: u8 = 192;
