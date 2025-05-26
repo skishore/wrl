@@ -19,7 +19,7 @@ use crate::shadowcast::Vision;
 const MAX_ENTITY_MEMORY: usize = 64;
 const MAX_TILE_MEMORY: usize = 4096;
 
-pub const PLAYER_MAP_MEMORY: i32 = 32;
+pub const PLAYER_MAP_MEMORY: i32 = 64;
 
 //////////////////////////////////////////////////////////////////////////////
 
