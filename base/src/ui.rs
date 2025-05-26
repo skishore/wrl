@@ -659,7 +659,9 @@ impl UI {
             let shadowed = cell.shade();
 
             let glyph = if see_entity && let Some(x) = cell.entity() {
-                if obscured { x.glyph.with_fg(tile.glyph.fg()) } else { x.glyph }
+                if x.hp == 0. { Glyph::wdfg('%', 0x400) }
+                else if obscured { x.glyph.with_fg(tile.glyph.fg()) }
+                else { x.glyph }
             } else if let Some(x) = cell.items().last() {
                 show_item(x)
             } else {
