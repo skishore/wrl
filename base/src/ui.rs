@@ -8,9 +8,8 @@ use crate::base::{HashMap, LOS, Point, RNG, dirs};
 use crate::base::{Buffer, Color, Glyph, Matrix, Rect, Slice};
 use crate::effect::{Frame, self};
 use crate::entity::{EID, Entity};
-use crate::game::{WORLD_SIZE, FOV_RADIUS_NPC, FOV_RADIUS_PC_};
+use crate::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_, WORLD_SIZE};
 use crate::game::{Input, Tile, show_item};
-use crate::knowledge::PLAYER_MAP_MEMORY;
 use crate::knowledge::{EntityKnowledge, Knowledge};
 use crate::pathing::Status;
 use crate::shadowcast::{Vision, VisionArgs};
@@ -34,7 +33,7 @@ const UI_MOVE_FRAMES: i32 = 12;
 const UI_TARGET_FRAMES: i32 = 20;
 
 const UI_FOV_BRIGHTEN: f64 = 0.12;
-const UI_REMEMBERED: f64 = 0.15;
+const UI_REMEMBERED: f64 = 0.25;
 const UI_SHADE_FADE: f64 = 0.50;
 
 const UI_TARGET_SHADE: u8 = 192;
@@ -659,9 +658,11 @@ impl UI {
             let shadowed = cell.shade();
 
             let glyph = if see_entity && let Some(x) = cell.entity() {
+                let big = x.player && !x.sneaking;
+                let glyph = if x.player && x.sneaking { Glyph::wide('e') } else { x.glyph };
                 if x.hp == 0. { Glyph::wdfg('%', 0x400) }
-                else if obscured { x.glyph.with_fg(tile.glyph.fg()) }
-                else { x.glyph }
+                else if obscured && !big { glyph.with_fg(tile.glyph.fg()) }
+                else { glyph }
             } else if let Some(x) = cell.items().last() {
                 show_item(x)
             } else {
@@ -670,10 +671,7 @@ impl UI {
             let mut color = glyph.fg();
 
             if !cell.visible() {
-                let turns = if player { cell.turns_since_seen() } else  { 0 };
-                let delta = (PLAYER_MAP_MEMORY - turns) as f64;
-                let limit = max(PLAYER_MAP_MEMORY, 1) as f64;
-                color = Color::white().fade(UI_REMEMBERED * delta / limit);
+                color = Color::white().fade(UI_REMEMBERED);
             } else if shadowed {
                 color = color.fade(UI_SHADE_FADE);
             }
