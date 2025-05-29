@@ -19,7 +19,7 @@ use crate::shadowcast::Vision;
 const MAX_ENTITY_MEMORY: usize = 64;
 const MAX_TILE_MEMORY: usize = 4096;
 
-pub const PLAYER_MAP_MEMORY: i32 = 64;
+pub const PLAYER_MAP_MEMORY: i32 = 0;
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -81,7 +81,9 @@ pub struct EntityKnowledge {
     pub rival: bool,
     pub friend: bool,
     pub asleep: bool,
+    pub player: bool,
     pub visible: bool,
+    pub sneaking: bool,
 }
 #[cfg(target_pointer_width = "32")]
 static_assert_size!(EntityKnowledge, 72);
@@ -201,11 +203,14 @@ impl Knowledge {
 
             let visible = true;
             let shade = dark || cell.shadow > 0;
-            let see_entity_at = nearby || !(shade || tile.limits_vision());
+            let see_big_entities = nearby || !shade;
+            let see_all_entities = nearby || !(shade || tile.limits_vision());
 
             let handle = (|| {
-                if !see_entity_at { return None; }
+                if !see_big_entities { return None; }
                 let other = board.get_entity(eid?)?;
+                let big = other.player && !other.sneaking;
+                if !big && !see_all_entities { return None; }
                 let (seen, heard) = (true, false);
                 Some(self.update_entity(me, other, seen, heard))
             })();
@@ -225,15 +230,17 @@ impl Knowledge {
             // Update the cell's flags.
             cell.shade = shade;
             cell.visible = visible;
-            cell.see_entity_at = see_entity_at;
+            cell.see_entity_at = see_all_entities;
 
             // Clone items, but reuse the existing allocation, if any.
             cell.items.clear();
             for &x in items { cell.items.push(x); }
 
-            // Only update the cell's entity if we can see entities there.
-            if see_entity_at {
+            // Only clear the cell's entity if we can see entities there.
+            if see_all_entities {
                 cell.last_see_entity_at = time;
+            }
+            if see_all_entities || handle.is_some() {
                 let existing = std::mem::replace(&mut cell.handle, handle);
                 if existing != handle && let Some(x) = existing {
                     self.mark_entity_moved(x, point);
@@ -271,7 +278,9 @@ impl Knowledge {
                 rival: Default::default(),
                 friend: Default::default(),
                 asleep: Default::default(),
+                player: Default::default(),
                 visible: Default::default(),
+                sneaking: Default::default(),
             })
         });
 
@@ -297,7 +306,9 @@ impl Knowledge {
         entry.rival = rival;
         entry.friend = same;
         entry.asleep = other.asleep;
+        entry.player = other.player;
         entry.visible = seen;
+        entry.sneaking = other.sneaking;
 
         handle
     }

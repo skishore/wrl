@@ -589,7 +589,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             if step.len_l1() > 1 { return ActionResult::failure(); }
 
             // Moving diagonally is slower. Moving quickly is noisier.
-            let noisy = !(entity.player || turns > 1.);
+            let noisy = turns <= 1.;
             let turns = step.len_l2() * turns;
             let color = entity.glyph.fg();
             let source = entity.pos;
@@ -750,6 +750,13 @@ fn process_input(state: &mut State, input: Input) {
     if state.ui.process_input(player, input) { return; }
 
     let Input::Char(ch) = input else { return; };
+
+    if ch == 'c' {
+        let player = state.mut_player();
+        player.sneaking = !player.sneaking;
+        return;
+    }
+
     let Some(dir) = get_direction(ch) else { return; };
 
     if dir == Point::default() {
@@ -762,7 +769,8 @@ fn process_input(state: &mut State, input: Input) {
     if let Some(x) = cell.entity() && x.rival {
         state.input = Action::Attack(player.pos + dir);
     } else {
-        state.input = Action::Move(MoveAction { look: dir, step: dir, turns: 1. });
+        let turns = if player.sneaking { 2. } else { 1. };
+        state.input = Action::Move(MoveAction { look: dir, step: dir, turns });
     }
 }
 
@@ -940,6 +948,8 @@ impl State {
     }
 
     fn get_player(&self) -> &Entity { &self.board.entities[self.player] }
+
+    fn mut_player(&mut self) -> &mut Entity { &mut self.board.entities[self.player] }
 
     pub fn add_effect(&mut self, x: Effect) { self.board.add_effect(x, &mut self.rng) }
 

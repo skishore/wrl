@@ -45,7 +45,7 @@ impl Default for MapgenConfig {
         Self {
             size: Point(100, 100),
             room_series,
-            wall_chance: 0.45,
+            wall_chance: 0.40,
             birth_limit: 5,
             death_limit: 4,
             cave_steps: 3,
@@ -563,7 +563,7 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
                 has_grove = true;
                 map.set(p, 'B');
             }
-            grassiness = 0.0 + 0.2 * grassiness;
+            grassiness = 0.0 + 0.1 * grassiness;
         } else if i < l2 {
             for &p in values.keys() {
                 if !can_plant_trees.contains(&map.get(p)) { continue; }
@@ -571,9 +571,9 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
                 has_thicket = true;
                 map.set(p, '#');
             }
-            grassiness = 0.0 + 0.6 * grassiness;
+            grassiness = 0.2 + 0.1 * grassiness;
         } else {
-            grassiness = 0.0 + 0.4 * grassiness;
+            grassiness = 0.1 + 0.1 * grassiness;
         };
 
         let target = (grassiness * values.len() as f64).round() as usize;
