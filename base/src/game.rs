@@ -36,7 +36,7 @@ const SPEED_NPC: f64 = 0.1;
 
 const LIGHT: Light = Light::Sun(Point(2, 0));
 const WEATHER: Weather = Weather::None;
-const NUM_PREDATORS: i32 = 20;
+const NUM_PREDATORS: i32 = 10;
 const NUM_PREY: i32 = 0;
 
 const UI_DAMAGE_FLASH: i32 = 6;
@@ -111,8 +111,11 @@ lazy_static! {
     static ref TILES: HashMap<char, Tile> = {
         let items = [
             ('#', (FLAGS_BLOCKED,      Glyph::wdfg('#', (16, 96, 0)),     "a tree")),
-            ('.', (FLAGS_NONE,         Glyph::wdfg('.', (255, 255, 255)), "grass")),
+            ('.', (FLAGS_NONE,         Glyph::wdfg('.', (224, 255, 192)), "grass")),
+            (',', (FLAGS_NONE,         Glyph::wdfg('`', (96, 192, 96)),   "weeds")),
             ('"', (FLAG_LIMITS_VISION, Glyph::wdfg('"', (96, 192, 0)),    "tall grass")),
+            ('|', (FLAG_LIMITS_VISION, Glyph::wdfg('|', (96, 192, 0)),    "reeds")),
+            ('+', (FLAGS_NONE,         Glyph::wdfg('+', (255, 96, 96)),   "a flower")),
             ('~', (FLAGS_FRESH_WATER,  Glyph::wdfg('~', (0, 128, 255)),   "water")),
             ('B', (FLAGS_BERRY_TREE,   Glyph::wdfg('#', (192, 128, 0)),   "a berry tree")),
             ('=', (FLAGS_NONE,         Glyph::wdfg('=', (255, 128, 0)),   "a bridge")),

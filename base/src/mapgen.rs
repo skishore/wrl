@@ -23,6 +23,7 @@ struct MapgenConfig {
 
     // Cellular automaton params. Move to RoomStep?
     wall_chance: f64,
+    wall_perlin: f64,
     birth_limit: i32,
     death_limit: i32,
     cave_steps: i32,
@@ -35,17 +36,14 @@ struct MapgenConfig {
 impl Default for MapgenConfig {
     fn default() -> Self {
         let room_series = vec![
-            RoomStep { min_size: 30, max_size: 60, attempts: 10 },
-            RoomStep { min_size: 25, max_size: 50, attempts: 15 },
-            RoomStep { min_size: 20, max_size: 40, attempts: 20 },
-            RoomStep { min_size: 15, max_size: 30, attempts: 25 },
-            RoomStep { min_size: 10, max_size: 20, attempts: 30 },
+            RoomStep { min_size: 20, max_size: 30, attempts: 100 },
         ];
 
         Self {
             size: Point(100, 100),
             room_series,
-            wall_chance: 0.40,
+            wall_chance: 0.25,
+            wall_perlin: 0.25,
             birth_limit: 5,
             death_limit: 4,
             cave_steps: 3,
@@ -80,12 +78,14 @@ fn build_cave(size: Point, config: &MapgenConfig, rng: &mut RNG) -> Matrix<char>
     let Point(w, h) = size;
     let mut result = Matrix::new(size, ' ');
 
+    let noise = generate_perlin_noise(size, 4.0, 2, 0.65, rng);
+
     // Initialize the interior with random values.
     for x in 1..(w - 1) {
         for y in 1..(h - 1) {
             let p = Point(x, y);
-            let wall = rng.gen::<f64>() < config.wall_chance;
-            result.set(p, if wall { ' ' } else { '.' });
+            let wall = config.wall_chance + config.wall_perlin * noise.get(p);
+            result.set(p, if rng.gen::<f64>() < wall { ' ' } else { '.' });
         }
     }
 
@@ -242,15 +242,14 @@ fn find_diagonal_components(map: &Matrix<char>, v: char) -> Vec<Vec<Point>> {
 
 //////////////////////////////////////////////////////////////////////////////
 
-fn generate_blue_noise(size: Point, spacing: i32, rng: &mut RNG) -> Matrix<f64> {
-    let mut noise = Matrix::new(size, 0.0);
-    let mut points: Vec<_> = (0..size.0).flat_map(
-        |x| (0..size.1).map(move |y| Point(x, y))).collect();
-    points.shuffle(rng);
+fn generate_blue_noise(spacing: i32, options: &[Point], noise: &mut Matrix<f64>, rng: &mut RNG) {
+    noise.fill(0.);
+    let mut options: Vec<_> = options.iter().map(|&x| x).collect();
+    options.shuffle(rng);
 
     let d = ((spacing / 2) as f64).sqrt().ceil() as i32;
 
-    for point in points {
+    for point in options {
         let okay = (|| {
             for dx in -d..=d {
                 for dy in -d..=d {
@@ -263,7 +262,6 @@ fn generate_blue_noise(size: Point, spacing: i32, rng: &mut RNG) -> Matrix<f64> 
         })();
         if okay { noise.set(point, 1.0); }
     }
-    noise
 }
 
 fn generate_perlin_noise(
@@ -333,6 +331,33 @@ fn generate_perlin_noise(
         }
     }
     noise
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+#[allow(non_snake_case)]
+fn BFS(size: Point, sources: Vec<Point>) -> Matrix<i32> {
+    let mut result = Matrix::new(size, -1);
+    sources.iter().for_each(|&p| result.set(p, 0));
+
+    let mut distance = 1;
+    let mut prev = sources;
+    let mut next = vec![];
+
+    while !prev.is_empty() {
+        for &p in &prev {
+            for &dir in &dirs::ALL {
+                let n = p + dir;
+                if !result.contains(n) || result.get(n) >= 0 { continue; }
+                result.set(n, distance);
+                next.push(n);
+            }
+        }
+        std::mem::swap(&mut prev, &mut next);
+        distance += 1;
+        next.clear();
+    }
+    result
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -409,8 +434,8 @@ fn dijkstra<F: Fn(Point) -> Vec<Point>, G: Fn(Point) -> f64, H: Fn(Point) -> boo
             let entry = map.get(&next);
             if let Some(x) = entry && x.2 { continue; }
 
-            let distance = node.distance + score(next) + (next - prev).len_l2();
-            if let Some(x) = entry && distance > x.1 { continue; }
+            let distance = node.distance + score(next) * (next - prev).len_l2();
+            if let Some(x) = entry && distance >= x.1 { continue; }
             if distance == f64::INFINITY { continue; }
 
             heap.push(DijkstraNode { point: next, distance });
@@ -478,22 +503,30 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
 
     // Noises used to guide feature placement.
     let noise = generate_perlin_noise(size, 4.0, 2, 0.65, rng);
-    let berry_blue_noise = generate_blue_noise(size, 24, rng);
-    let trees_blue_noise = generate_blue_noise(size, 12, rng);
 
     // Build the lake...
-    let lc = MapgenConfig { birth_limit: 6, ..config.clone() };
     let ls = Point(rng.gen_range(18..=36), rng.gen_range(12..=24));
     let lz = config.size - ls;
     let lx = ((0.50 + 0.25 * rng.gen::<f64>()) * lz.0 as f64).round() as i32;
     let ly = ((0.75 + 0.25 * rng.gen::<f64>()) * lz.1 as f64).round() as i32;
     let lake = (|| loop {
-        let result = build_room_cave(ls, &lc, rng);
+        let result = build_room_cave(ls, config, rng);
         if find_cardinal_components(&result, '#').len() == 1 { return result; }
     })();
 
     // Then, place the lake.
+    let border = 1;
     let mapping: HashMap<_, _> = [('#', 'S'), ('.', '~')].into_iter().collect();
+    for x in 0..ls.0 {
+        for y in 0..ls.1 {
+            let Some('S') = mapping.get(&lake.get(Point(x, y))) else { continue };
+            for dx in -border..border + 1 {
+                for dy in -border..border + 1 {
+                    map.set(Point(x + lx + dx, y + ly + dy), 'S');
+                }
+            }
+        }
+    }
     for x in 0..ls.0 {
         for y in 0..ls.1 {
             let Some(&c) = mapping.get(&lake.get(Point(x, y))) else { continue };
@@ -503,6 +536,7 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
 
     // Set up Dijkstra parameters for the river...
     let width = 2;
+    let border = 2;
     let costs: HashMap<_, _> = [('#', 64.0), (' ', 64.0)].into_iter().collect();
     let score_one = |p: Point, center: bool| {
         if !map.contains(p) {
@@ -529,49 +563,90 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
     let sources: Vec<_> = (0..size.0).map(|x| Point(x, 0)).collect();
 
     // Then, build the river.
-    let path = dijkstra(&sources, edges, score, target)?;
-    for &p in path.iter().take(path.len() - 1) {
-        for x in 0..width {
-            for y in 0..width {
-                map.set(p + Point(x, y), 'W');
+    let mut path = dijkstra(&sources, edges, score, target)?;
+    path.pop();
+    for &p in &path {
+        for dx in -border..width + border {
+            for dy in -border..width + border {
+                let q = p + Point(dx, dy);
+                if map.get(q) != '~' { map.set(q, 'S'); }
+            }
+        }
+    }
+    for &p in &path {
+        for dx in 0..width {
+            for dy in 0..width {
+                map.set(p + Point(dx, dy), 'W');
             }
         }
     }
 
+    let mut water_tiles = vec![];
+    for x in 0..size.0 {
+        for y in 0..size.1 {
+            let c = map.get(Point(x, y));
+            if c == '~' || c == 'W' { water_tiles.push(Point(x, y)); }
+        }
+    }
+    let distance_to_water = BFS(map.size, water_tiles);
+
     // Plant grass and other features in each room.
-    let l1 = std::cmp::max(2, (0.2 * (rooms.len() as f64)).round() as usize);
-    let l2 = std::cmp::max(4, (0.4 * (rooms.len() as f64)).round() as usize);
+    let l1 = std::cmp::max(2, (0.15 * (rooms.len() as f64)).round() as usize);
+    let l2 = std::cmp::max(4, (0.30 * (rooms.len() as f64)).round() as usize);
+    let l3 = std::cmp::max(6, (0.45 * (rooms.len() as f64)).round() as usize);
+    let mut blue_noise = Matrix::new(size, 0.);
     let can_plant_grass = ['.', 'S'];
     let can_plant_trees = ['.'];
     let mut has_thicket = false;
     let mut has_grove = false;
 
     for (i, room) in rooms.iter().enumerate() {
-        let mut values = HashMap::default();
+        let mut values = vec![];
         for &p in room {
             if can_plant_grass.contains(&map.get(p)) {
-                values.insert(p, noise.get(p) + 0.3 * rng.gen::<f64>());
+                values.push((p, noise.get(p) + 0.3 * rng.gen::<f64>()));
             }
         }
         if values.is_empty() { continue; }
 
+        let values: Vec<_> = values.into_iter().collect();
+        let mut trees = vec![];
+        if i < l1 || i < l2 || i < l3 {
+            trees = values.iter().filter_map(|&(p, _)| {
+                if !can_plant_trees.contains(&map.get(p)) { return None; };
+                if dirs::ALL.iter().any(|&x| map.get(p + x) == '#') { return None; };
+                Some(p)
+            }).collect();
+        }
+
+        let mut weediness = 0.2;
         let mut grassiness = rng.gen::<f64>();
         if i < l1 {
-            for &p in values.keys() {
-                if !can_plant_trees.contains(&map.get(p)) { continue; }
-                if berry_blue_noise.get(p) == 0.0 { continue; }
+            generate_blue_noise(24, &trees, &mut blue_noise, rng);
+            for &p in &trees {
+                if blue_noise.get(p) == 0. { continue; }
                 has_grove = true;
                 map.set(p, 'B');
             }
+            weediness = 0.4;
             grassiness = 0.0 + 0.1 * grassiness;
         } else if i < l2 {
-            for &p in values.keys() {
-                if !can_plant_trees.contains(&map.get(p)) { continue; }
-                if trees_blue_noise.get(p) == 0.0 { continue; }
+            generate_blue_noise(12, &trees, &mut blue_noise, rng);
+            for &p in &trees {
+                if blue_noise.get(p) == 0. { continue; }
                 has_thicket = true;
                 map.set(p, '#');
             }
             grassiness = 0.2 + 0.1 * grassiness;
+        } else if i < l3 {
+            generate_blue_noise(18, &trees, &mut blue_noise, rng);
+            for &p in &trees {
+                if blue_noise.get(p) == 0. { continue; }
+                has_thicket = true;
+                map.set(p, '+');
+            }
+            weediness = 0.6;
+            grassiness = 0.0 + 0.3 * grassiness;
         } else {
             grassiness = 0.1 + 0.1 * grassiness;
         };
@@ -580,10 +655,13 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
         let mut values: Vec<_> = values.into_iter().collect();
         values.sort_by_key(|&x| (f64_to_monotonic_u64(x.1), x.0.0, x.0.1));
 
+        let grass = if rng.gen::<f64>() < weediness { ',' } else { '"' };
+
         for (i, &(p, _)) in values.iter().enumerate() {
             if i >= target { break; }
             if !can_plant_grass.contains(&map.get(p)) { continue; }
-            map.set(p, '"');
+            let grass = if distance_to_water.get(p) < 4 { '|' } else { grass };
+            map.set(p, grass);
         }
     }
     if !has_grove || !has_thicket { return None; }
@@ -594,13 +672,14 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
         ('#', 64.0),
         (' ', 64.0),
         ('B', 64.0),
+        ('|', 16.0),
         ('"', 16.0),
         ('W', 16.0),
         (',', 4.0),
         ('S', 4.0),
     ].into_iter().collect();
     let score_one = |p: Point, center: bool| {
-        if !map.contains(p) {
+        if !map.contains(p) || p.1 >= ly {
             return if center { f64::INFINITY } else { *costs.get(&' ').unwrap() };
         }
         let tile = map.get(p);
@@ -643,8 +722,8 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
     }
 
     // Split the final map into components that are reachable by walking.
-    let mapping: HashMap<_, _> =
-        [('"', '.'), ('=', '.'), ('R', '.'), ('S', '.')].into_iter().collect();
+    let walkable = ['.', ',', '"', '|', '+', '=', 'R', 'S'];
+    let mapping: HashMap<_, _> = walkable.into_iter().map(|x| (x, '.')).collect();
     let mut copy = map.clone();
     for x in 0..size.0 {
         for y in 0..size.1 {
