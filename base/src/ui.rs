@@ -9,7 +9,7 @@ use crate::base::{Buffer, Color, Glyph, Matrix, Rect, Slice};
 use crate::effect::{Frame, self};
 use crate::entity::{EID, Entity};
 use crate::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_, WORLD_SIZE};
-use crate::game::{Input, Tile, show_item};
+use crate::game::{Board, Input, Tile, show_item};
 use crate::knowledge::{EntityKnowledge, Knowledge};
 use crate::pathing::Status;
 use crate::shadowcast::{Vision, VisionArgs};
@@ -515,23 +515,23 @@ pub struct UI {
 impl UI {
     // Rendering entry point
 
-    pub fn render(&self, buffer: &mut Buffer, entity: &Entity,
-                  frame: Option<&Frame>, entities: &[(Point, Glyph)]) {
+    pub fn render(&self, buffer: &mut Buffer, entity: &Entity, board: &Board) {
         if buffer.data.is_empty() {
             *buffer = Matrix::new(self.layout.bounds, ' '.into());
         }
         buffer.fill(buffer.default);
         self.render_layout(buffer);
 
-        self.render_log(buffer, entity);
         self.render_rivals(buffer, entity);
         self.render_status(buffer, entity, None, None);
         self.render_target(buffer, entity);
 
         // Render the base map, then the debug layer, then the weather:
+        let frame = board.get_frame();
         self.render_map(buffer, entity, frame);
+        self.render_scent_overlay(buffer, entity, board);
         if !entity.player && frame.is_none() {
-            self.render_debug_overlay(buffer, entity, entities);
+            self.render_debug_overlay(buffer, entity, board);
         }
         self.render_weather(buffer, entity);
 
@@ -807,8 +807,7 @@ impl UI {
         entity.ai.debug(slice);
     }
 
-    fn render_debug_overlay(&self, buffer: &mut Buffer, entity: &Entity,
-                            entities: &[(Point, Glyph)]) {
+    fn render_debug_overlay(&self, buffer: &mut Buffer, entity: &Entity, board: &Board) {
         let slice = &mut Slice::new(buffer, self.layout.map);
         let offset = self.get_map_offset(entity);
 
@@ -831,8 +830,9 @@ impl UI {
             let glyph = slice.get(point);
             slice.set(point, glyph.with_fg(Color::black()).with_bg(0x400));
         }
-        for &(point, glyph) in entities {
-            slice.set(slice_point(point), glyph);
+        for &oid in &board.entity_order {
+            let other = &board.entities[oid];
+            slice.set(slice_point(other.pos), other.glyph);
         }
         for other in &entity.known.entities {
             let color = if other.visible { 0x040 } else {
@@ -842,6 +842,32 @@ impl UI {
             let Point(x, y) = other.pos - offset;
             slice.set(Point(2 * x, y), glyph);
         };
+    }
+
+    fn render_scent_overlay(&self, buffer: &mut Buffer, entity: &Entity, board: &Board) {
+        let slice = &mut Slice::new(buffer, self.layout.map);
+        let offset = self.get_map_offset(entity);
+
+        let brighten = |slice: &mut Slice, point: Point, brightness: f64| {
+            let point = Point(2 * (point.0 - offset.0), point.1 - offset.1);
+            if !slice.contains(point) { return; }
+
+            let glyph = slice.get(point);
+            let glyph = glyph.with_fg(glyph.fg().brighten(brightness));
+            let glyph = glyph.with_bg(glyph.bg().brighten(brightness));
+            slice.set(point, glyph);
+        };
+
+        let size = self.get_map_size();
+        for y in 0..size.1 {
+            for x in 0..size.0 {
+                let point = Point(x, y) + offset;
+                let scent = board.get_cell(point).scent;
+                if scent == 0 { continue; }
+                let brightness = (scent as f64 / 300.) * 0.9 + 0.1;
+                brighten(slice, point, brightness);
+            }
+        }
     }
 
     fn render_weather(&self, buffer: &mut Buffer, entity: &Entity) {
@@ -900,12 +926,8 @@ impl UI {
 
     // Rendering each section of the UI
 
-    fn render_log(&self, buffer: &mut Buffer, entity: &Entity) {
+    fn render_log(&self, buffer: &mut Buffer) {
         let slice = &mut Slice::new(buffer, self.layout.log);
-        slice.write_str(&format!(
-            "Scent at {:?}: {:.2}; history = {} items",
-            entity.pos, entity.get_scent_at(entity.pos), entity.history.len()
-        )).newline();
         for line in &self.log.lines {
             slice.set_fg(Some(line.color)).write_str(&line.text).newline();
         }
