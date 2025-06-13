@@ -36,7 +36,7 @@ const SPEED_NPC: f64 = 0.1;
 
 const LIGHT: Light = Light::Sun(Point(2, 0));
 const WEATHER: Weather = Weather::None;
-const NUM_PREDATORS: i32 = 10;
+const NUM_PREDATORS: i32 = 0;
 const NUM_PREY: i32 = 0;
 
 const UI_DAMAGE_FLASH: i32 = 6;
@@ -159,6 +159,7 @@ enum Weather { None, Rain(Point, usize) }
 pub struct Cell {
     pub eid: Option<EID>,
     pub items: ThinVec<Item>,
+    pub scent: i32,
     pub shadow: i32,
     pub tile: &'static Tile,
 }
@@ -189,7 +190,13 @@ impl Board {
             Light::Sun(x) => LOS(Point::default(), x).into_iter().skip(1).collect(),
             Light::None => vec![],
         };
-        let cell = Cell { eid: None, items: thin_vec![], shadow: 0, tile: Tile::get('#') };
+        let cell = Cell {
+            eid: None,
+            items: thin_vec![],
+            scent: 0,
+            shadow: 0,
+            tile: Tile::get('#'),
+        };
 
         let mut result = Self {
             active_entity_index: 0,
@@ -363,7 +370,7 @@ impl Board {
     }
 
     fn reset(&mut self, tile: &'static Tile) {
-        self.map.fill(Cell { eid: None, items: thin_vec![], shadow: 0, tile });
+        self.map.fill(Cell { eid: None, items: thin_vec![], scent: 0, shadow: 0, tile });
         self.update_edge_shadows();
         self.entity_order.clear();
         self.active_entity_index = 0;
@@ -420,6 +427,43 @@ impl Board {
 
     fn remove_known_entity(&mut self, eid: EID, oid: EID) {
         self.entities[eid].known.remove_entity(oid);
+    }
+
+    // Scent diffusion
+
+    fn blocks_scent(tile: &Tile) -> bool { tile.blocks_movement() }
+
+    fn set_scent_at(&mut self, point: Point, scent: i32) {
+        let Some(cell) = self.map.entry_mut(point) else { return; };
+        cell.scent = scent;
+    }
+
+    fn update_scent(&mut self) {
+        let mut neighborhood = Matrix::new(self.map.size, (0, 0));
+        for x in 0..self.map.size.0 {
+            for y in 0..self.map.size.1 {
+                let entry = neighborhood.entry_mut(Point(x, y)).unwrap();
+                for dx in -1..=1 {
+                    for dy in -1..=1 {
+                        let cell = self.map.get(Point(x + dx, y + dy));
+                        if Board::blocks_scent(cell.tile) { continue; }
+                        entry.0 += cell.scent;
+                        entry.1 += 1;
+                    }
+                }
+            }
+        }
+        let base = 1000;
+        let diffusion = 100;
+        for x in 0..self.map.size.0 {
+            for y in 0..self.map.size.1 {
+                let entry = self.map.entry_mut(Point(x, y)).unwrap();
+                if Board::blocks_scent(entry.tile) { continue; }
+                let (neighbor_scent, neighbor_count) = neighborhood.get(Point(x, y));
+                let scent = entry.scent * 10 * (base - neighbor_count * diffusion);
+                entry.scent = (scent + 10 * diffusion * neighbor_scent) / (10 * base);
+            }
+        }
     }
 
     // Environmental effects
@@ -855,10 +899,10 @@ fn update_state(state: &mut State) {
         //state.board.update_known(eid, &mut state.rng);
         //state.board.update_known(state.player, &mut state.rng);
 
-        if let Some(x) = state.board.entities.get_mut(eid) {
-            if x.history.len() == x.history.capacity() { x.history.pop_back(); }
-            x.history.push_front(x.pos);
-            drain(x, &result);
+        if player {
+            let pos = state.get_player().pos;
+            state.board.set_scent_at(pos, 300);
+            state.board.update_scent();
         }
     }
 
@@ -963,16 +1007,7 @@ impl State {
     pub fn render(&self, buffer: &mut Buffer) {
         let entity = self.pov.and_then(
             |x| self.board.get_entity(x)).unwrap_or(self.get_player());
-        let frame = self.board.get_frame();
-
-        let mut entities = vec![];
-        if !entity.player {
-            entities = self.board.entity_order.iter().map(|&x| {
-                let other = &self.board.entities[x];
-                (other.pos, other.glyph)
-            }).collect();
-        }
-        self.ui.render(buffer, entity, frame, &entities);
+        self.ui.render(buffer, entity, &self.board);
     }
 }
 
