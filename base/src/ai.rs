@@ -915,21 +915,25 @@ fn search_around(ctx: &mut Context, path: &mut CachedPath,
     let inv_dir_l2 = safe_inv_l2(dir);
     let inv_bias_l2 = safe_inv_l2(bias);
 
-    let score = |p: Point, distance: i32| -> f64 {
-        if distance == 0 { return 0.; }
-
+    let is_search_candidate = |p: Point| {
         let cell = known.get(p);
-        assert!(!cell.blocked());
-        if cell.turns_since_entity_visible() <= age { return 0. }
+        !cell.blocked() && cell.turns_since_entity_visible() > age
+    };
+
+    if center != pos && is_search_candidate(center) {
+        if let Some(x) = path.start(ctx, center, turns) { return Some(x); }
+    }
+
+    let score = |p: Point, distance: i32| -> f64 {
+        if distance == 0 || !is_search_candidate(p) { return 0.; }
 
         let delta = p - pos;
         let inv_delta_l2 = safe_inv_l2(delta);
         let cos0 = delta.dot(dir) as f64 * inv_delta_l2 * inv_dir_l2;
         let cos1 = delta.dot(bias) as f64 * inv_delta_l2 * inv_bias_l2;
         let angle = ((cos0 + 1.) * (cos1 + 1.)).pow(4);
-        let bonus = if p == center && center != pos { 64. } else { 1. };
 
-        angle * bonus / (((p - center).len_l2_squared() + 1) as f64).pow(2)
+        angle / (((p - center).len_l2_squared() + 1) as f64).pow(2)
     };
 
     ensure_neighborhood(ctx);
