@@ -54,13 +54,20 @@ pub enum Input { Escape, BackTab, Char(char) }
 const FLAG_BLOCKS_VISION: u32 = 1 << 0;
 const FLAG_LIMITS_VISION: u32 = 1 << 1;
 const FLAG_BLOCKS_MOVEMENT: u32 = 1 << 2;
-const FLAG_CAN_DRINK: u32 = 1 << 3;
-const FLAG_CAN_EAT: u32 = 1 << 4;
+const FLAG_BLOCKS_SCENT: u32 = 1 << 3;
+const FLAG_CAN_DRINK: u32 = 1 << 4;
+const FLAG_CAN_EAT: u32 = 1 << 5;
 
 const FLAGS_NONE: u32 = 0;
-const FLAGS_BLOCKED: u32 = FLAG_BLOCKS_MOVEMENT | FLAG_BLOCKS_VISION;
-const FLAGS_FRESH_WATER: u32 = FLAG_BLOCKS_MOVEMENT | FLAG_CAN_DRINK;
-const FLAGS_BERRY_TREE: u32 = FLAG_BLOCKS_MOVEMENT | FLAG_LIMITS_VISION | FLAG_CAN_EAT;
+
+const FLAGS_TREE: u32 =
+        FLAG_BLOCKS_MOVEMENT | FLAG_BLOCKS_SCENT | FLAG_BLOCKS_VISION;
+
+const FLAGS_BERRY_TREE: u32 =
+        FLAG_BLOCKS_MOVEMENT | FLAG_BLOCKS_SCENT | FLAG_LIMITS_VISION | FLAG_CAN_EAT;
+
+const FLAGS_FRESH_WATER: u32 =
+        FLAG_BLOCKS_MOVEMENT | FLAG_CAN_DRINK;
 
 pub struct Tile {
     pub flags: u32,
@@ -82,6 +89,7 @@ impl Tile {
     pub fn blocks_vision(&self) -> bool { self.flags & FLAG_BLOCKS_VISION != 0 }
     pub fn limits_vision(&self) -> bool { self.flags & FLAG_LIMITS_VISION != 0 }
     pub fn blocks_movement(&self) -> bool { self.flags & FLAG_BLOCKS_MOVEMENT != 0 }
+    pub fn blocks_scent(&self) -> bool { self.flags & FLAG_BLOCKS_SCENT != 0 }
 
     // Derived predicates.
     pub fn casts_shadow(&self) -> bool { self.blocks_vision() }
@@ -110,7 +118,7 @@ impl PartialEq for &'static Tile {
 lazy_static! {
     static ref TILES: HashMap<char, Tile> = {
         let items = [
-            ('#', (FLAGS_BLOCKED,      Glyph::wdfg('#', (16, 96, 0)),     "a tree")),
+            ('#', (FLAGS_TREE,         Glyph::wdfg('#', (16, 96, 0)),     "a tree")),
             ('.', (FLAGS_NONE,         Glyph::wdfg('.', (224, 255, 192)), "grass")),
             (',', (FLAGS_NONE,         Glyph::wdfg('`', (96, 192, 96)),   "weeds")),
             ('"', (FLAG_LIMITS_VISION, Glyph::wdfg('"', (96, 192, 0)),    "tall grass")),
@@ -159,6 +167,7 @@ enum Weather { None, Rain(Point, usize) }
 pub struct Cell {
     pub eid: Option<EID>,
     pub items: ThinVec<Item>,
+    pub scent: i32,
     pub shadow: i32,
     pub tile: &'static Tile,
 }
@@ -189,7 +198,13 @@ impl Board {
             Light::Sun(x) => LOS(Point::default(), x).into_iter().skip(1).collect(),
             Light::None => vec![],
         };
-        let cell = Cell { eid: None, items: thin_vec![], shadow: 0, tile: Tile::get('#') };
+        let cell = Cell {
+            eid: None,
+            items: thin_vec![],
+            scent: 0,
+            shadow: 0,
+            tile: Tile::get('#'),
+        };
 
         let mut result = Self {
             active_entity_index: 0,
@@ -363,7 +378,7 @@ impl Board {
     }
 
     fn reset(&mut self, tile: &'static Tile) {
-        self.map.fill(Cell { eid: None, items: thin_vec![], shadow: 0, tile });
+        self.map.fill(Cell { eid: None, items: thin_vec![], scent: 0, shadow: 0, tile });
         self.update_edge_shadows();
         self.entity_order.clear();
         self.active_entity_index = 0;
@@ -420,6 +435,41 @@ impl Board {
 
     fn remove_known_entity(&mut self, eid: EID, oid: EID) {
         self.entities[eid].known.remove_entity(oid);
+    }
+
+    // Scent diffusion
+
+    fn add_scent_source(&mut self, point: Point) {
+        let Some(cell) = self.map.entry_mut(point) else { return; };
+        cell.scent = std::cmp::min(cell.scent + 100, 600);
+    }
+
+    fn update_scent(&mut self) {
+        let mut neighborhood = Matrix::new(self.map.size, (0, 0));
+        for x in 0..self.map.size.0 {
+            for y in 0..self.map.size.1 {
+                let entry = neighborhood.entry_mut(Point(x, y)).unwrap();
+                for dx in -1..=1 {
+                    for dy in -1..=1 {
+                        let cell = self.map.get(Point(x + dx, y + dy));
+                        if cell.tile.blocks_scent() { continue; }
+                        entry.0 += cell.scent;
+                        entry.1 += 1;
+                    }
+                }
+            }
+        }
+        let base = 10000;
+        let diffusion = 500;
+        for x in 0..self.map.size.0 {
+            for y in 0..self.map.size.1 {
+                let entry = self.map.entry_mut(Point(x, y)).unwrap();
+                if entry.tile.blocks_scent() { continue; }
+                let (neighbor_scent, neighbor_count) = neighborhood.get(Point(x, y));
+                let scent = entry.scent * (base - neighbor_count * diffusion);
+                entry.scent = (scent + diffusion * neighbor_scent) / base;
+            }
+        }
     }
 
     // Environmental effects
@@ -855,11 +905,13 @@ fn update_state(state: &mut State) {
         //state.board.update_known(eid, &mut state.rng);
         //state.board.update_known(state.player, &mut state.rng);
 
-        if let Some(x) = state.board.entities.get_mut(eid) {
-            if x.history.len() == x.history.capacity() { x.history.pop_back(); }
-            x.history.push_front(x.pos);
-            drain(x, &result);
+        if player {
+            let pos = state.get_player().pos;
+            state.board.add_scent_source(pos);
+            state.board.update_scent();
         }
+
+        if let Some(x) = state.board.entities.get_mut(eid) { drain(x, &result); }
     }
 
     if update { update_pov_entities(state); }
@@ -963,16 +1015,7 @@ impl State {
     pub fn render(&self, buffer: &mut Buffer) {
         let entity = self.pov.and_then(
             |x| self.board.get_entity(x)).unwrap_or(self.get_player());
-        let frame = self.board.get_frame();
-
-        let mut entities = vec![];
-        if !entity.player {
-            entities = self.board.entity_order.iter().map(|&x| {
-                let other = &self.board.entities[x];
-                (other.pos, other.glyph)
-            }).collect();
-        }
-        self.ui.render(buffer, entity, frame, &entities);
+        self.ui.render(buffer, entity, &self.board);
     }
 }
 

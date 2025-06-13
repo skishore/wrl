@@ -153,24 +153,24 @@ impl Knowledge {
         }
     }
 
-    pub fn update(&mut self, me: &Entity, board: &Board, vision: &Vision, rng: &mut RNG) {
+    pub fn update(&mut self, me: &Entity, board: &Board, vision: &Vision, _rng: &mut RNG) {
         let (pos, time) = (me.pos, self.time);
         let dark = matches!(board.get_light(), Light::None);
 
-        // Clear and recompute scents. Only the player gives off a scent.
-        self.scents.clear();
-        for &oid in &board.entity_order {
-            if oid == me.eid { continue; }
-            let other = &board.entities[oid];
-            if !other.player { continue; }
-            let mut remainder = rng.gen::<f64>();
-            for age in 0..other.history.capacity() {
-                remainder -= other.get_historical_scent_at(me.pos, age);
-                if remainder >= 0. { continue; }
-                self.scents.push(Scent { age: age as i32, pos: other.history[age] });
-                break;
-            }
-        }
+        //// Clear and recompute scents. Only the player gives off a scent.
+        //self.scents.clear();
+        //for &oid in &board.entity_order {
+        //    if oid == me.eid { continue; }
+        //    let other = &board.entities[oid];
+        //    if !other.player { continue; }
+        //    let mut remainder = rng.gen::<f64>();
+        //    for age in 0..other.history.capacity() {
+        //        remainder -= other.get_historical_scent_at(me.pos, age);
+        //        if remainder >= 0. { continue; }
+        //        self.scents.push(Scent { age: age as i32, pos: other.history[age] });
+        //        break;
+        //    }
+        //}
 
         // Clear visibility flags. Visible cells come first in the list so we
         // can stop when we see the first one that's not visible.
