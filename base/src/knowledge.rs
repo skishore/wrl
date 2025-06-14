@@ -90,20 +90,17 @@ static_assert_size!(EntityKnowledge, 72);
 #[cfg(target_pointer_width = "64")]
 static_assert_size!(EntityKnowledge, 80);
 
-#[derive(Clone, Copy)]
-pub struct Scent {
-    pub age: i32,
-    pub pos: Point,
-}
-
 #[derive(Default)]
 pub struct Knowledge {
     cell_by_point: HashMap<Point, CellHandle>,
     entity_by_eid: HashMap<EID, EntityHandle>,
     pub cells: List<CellKnowledge>,
     pub entities: List<EntityKnowledge>,
-    pub scents: Vec<Scent>,
     pub time: Timestamp,
+
+    // Scent information
+    pub picked_up_scent: bool,
+    pub scent_steps: HashMap<Point, i32>,
 }
 
 impl CellKnowledge {
@@ -153,24 +150,30 @@ impl Knowledge {
         }
     }
 
-    pub fn update(&mut self, me: &Entity, board: &Board, vision: &Vision, _rng: &mut RNG) {
+    pub fn update(&mut self, me: &Entity, board: &Board, vision: &Vision, rng: &mut RNG) {
         let (pos, time) = (me.pos, self.time);
         let dark = matches!(board.get_light(), Light::None);
 
-        //// Clear and recompute scents. Only the player gives off a scent.
-        //self.scents.clear();
-        //for &oid in &board.entity_order {
-        //    if oid == me.eid { continue; }
-        //    let other = &board.entities[oid];
-        //    if !other.player { continue; }
-        //    let mut remainder = rng.gen::<f64>();
-        //    for age in 0..other.history.capacity() {
-        //        remainder -= other.get_historical_scent_at(me.pos, age);
-        //        if remainder >= 0. { continue; }
-        //        self.scents.push(Scent { age: age as i32, pos: other.history[age] });
-        //        break;
-        //    }
-        //}
+        // Clear and recompute scents. Scent is a local sense. In the future,
+        // we should deliver all scents when we're tracking and let the AI
+        // code choose the best one - it also checks that we can move there.
+        self.picked_up_scent = false;
+        self.scent_steps.clear();
+        if me.tracking > 0 {
+            let radius = 2;
+            for x in -radius..=radius {
+                for y in -radius..=radius {
+                    let step = Point(x, y);
+                    self.scent_steps.insert(step, board.get_cell(me.pos + step).scent);
+                }
+            }
+        } else {
+            let scent = board.get_cell(me.pos).scent;
+            if scent > 0 {
+                let chance = 0.05 * ((scent as f64).log10() + 1.);
+                self.picked_up_scent = rng.gen::<f64>() < chance;
+            }
+        }
 
         // Clear visibility flags. Visible cells come first in the list so we
         // can stop when we see the first one that's not visible.
