@@ -12,7 +12,7 @@ use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs};
 use crate::effect::{Effect, Event, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
 use crate::knowledge::Knowledge;
-use crate::mapgen::mapgen_with_size as mapgen;
+use crate::mapgen::legacy_mapgen_with_size as mapgen;
 use crate::pathing::Status;
 use crate::shadowcast::{INITIAL_VISIBILITY, VISIBILITY_LOSSES, Vision, VisionArgs};
 use crate::ui::{UI, get_direction};
@@ -23,7 +23,7 @@ use crate::ui::{UI, get_direction};
 
 pub const MOVE_TIMER: i32 = 960;
 pub const TURN_TIMER: i32 = 120;
-pub const WORLD_SIZE: i32 = 100;
+pub const WORLD_SIZE: i32 = 30;
 
 pub const FOV_RADIUS_NPC: i32 = 12;
 pub const FOV_RADIUS_PC_: i32 = 21;
@@ -38,7 +38,7 @@ const TRACKING_TURNS: i32 = 8;
 
 const LIGHT: Light = Light::Sun(Point(2, 0));
 const WEATHER: Weather = Weather::None;
-const NUM_PREDATORS: i32 = 0;
+const NUM_PREDATORS: i32 = 1;
 const NUM_PREY: i32 = 0;
 
 const UI_DAMAGE_FLASH: i32 = 6;
@@ -588,7 +588,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
         Action::SniffAround => {
             let entity = &mut state.board.entities[eid];
             let (point, color) = (entity.pos, 0x440);
-            entity.tracking = std::cmp::min(entity.tracking, TRACKING_TURNS);
+            entity.tracking = std::cmp::max(entity.tracking, TRACKING_TURNS);
 
             let board = &mut state.board;
             let cb = Box::new(|_: &mut Board, _: &mut RNG| {});

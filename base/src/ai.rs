@@ -523,7 +523,30 @@ impl Strategy for ExploreStrategy {
 //////////////////////////////////////////////////////////////////////////////
 
 #[derive(Default)]
-struct TrackStrategy { active: bool, sniffed: bool }
+struct TrackStrategy {
+    active: bool,
+    sniffed: bool,
+    tracking: i32,
+    scent_steps: crate::base::HashMap<Point, i32>,
+}
+
+impl TrackStrategy {
+    fn get_scent_steps(&self, ctx: &Context) -> Vec<Point> {
+        let known = ctx.known;
+        if known.scent_steps.is_empty() { return vec![]; }
+        let Some(&scent) = known.scent_steps.get(&Point::default()) else { return vec![]; };
+
+        let mut best_score = scent + 1;
+        let mut best_point = vec![];
+        for (&point, &scent) in &known.scent_steps {
+            if scent < best_score { continue; }
+            if scent > best_score { best_point.clear(); }
+            best_point.push(point);
+            best_score = scent;
+        }
+        best_point
+    }
+}
 
 impl Strategy for TrackStrategy {
     fn get_path(&self) -> &[Point] { &[] }
@@ -532,26 +555,40 @@ impl Strategy for TrackStrategy {
         slice.write_str("Track").newline();
         slice.write_str(&format!("    active: {}", self.active)).newline();
         slice.write_str(&format!("    sniffed: {}", self.sniffed)).newline();
+        slice.write_str(&format!("    tracking: {}", self.tracking)).newline();
+        if !self.scent_steps.is_empty() {
+            slice.write_str("    scent_steps:").newline();
+            for y in -1..=1 {
+                slice.write_str(&format!("        {:3} {:3} {:3}",
+                                         *self.scent_steps.get(&Point(-1, y)).unwrap_or(&0),
+                                         *self.scent_steps.get(&Point(0, y)).unwrap_or(&0),
+                                         *self.scent_steps.get(&Point(1, y)).unwrap_or(&0))
+                                ).newline();
+            }
+        }
     }
 
     fn bid(&mut self, ctx: &mut Context, _: bool) -> (Priority, i32) {
         let known = ctx.known;
-        let follow = self.sniffed && known.scent_step.is_some();
+        let follow = self.sniffed && !self.get_scent_steps(ctx).is_empty();
 
         if known.picked_up_scent || follow { self.active = true; }
         self.sniffed = false;
+        self.tracking = ctx.entity.tracking;
+        self.scent_steps = known.scent_steps.clone();
 
         if self.active { (Priority::Hunt, 1) } else { (Priority::Skip, 0) }
     }
 
     fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
-        let Context { entity, known, .. } = ctx;
-
-        if let &Some(x) = &known.scent_step {
-            let turns = if !move_ready(entity) { SLOWED_TURNS } else { WANDER_TURNS };
-            return Some(Action::Move(MoveAction { look: x, step: x, turns }));
+        let scent_steps = self.get_scent_steps(ctx);
+        if !scent_steps.is_empty() {
+            let dir = *sample(&scent_steps, ctx.env.rng);
+            let turns = if !move_ready(ctx.entity) { SLOWED_TURNS } else { WANDER_TURNS };
+            return Some(Action::Move(MoveAction { look: dir, step: dir, turns }));
         }
 
+        self.active = false;
         self.sniffed = true;
         Some(Action::SniffAround)
     }

@@ -5,7 +5,7 @@ use rand::Rng;
 use thin_vec::{ThinVec, thin_vec};
 
 use crate::static_assert_size;
-use crate::base::{Glyph, HashMap, Point, RNG, clamp, dirs, sample};
+use crate::base::{Glyph, HashMap, Point, RNG, clamp};
 use crate::entity::{EID, Entity};
 use crate::game::{MOVE_TIMER, Board, Item, Light, Tile};
 use crate::list::{Handle, List};
@@ -100,7 +100,7 @@ pub struct Knowledge {
 
     // Scent information
     pub picked_up_scent: bool,
-    pub scent_step: Option<Point>,
+    pub scent_steps: HashMap<Point, i32>,
 }
 
 impl CellKnowledge {
@@ -158,23 +158,16 @@ impl Knowledge {
         // we should deliver all scents when we're tracking and let the AI
         // code choose the best one - it also checks that we can move there.
         self.picked_up_scent = false;
-        self.scent_step = None;
+        self.scent_steps.clear();
         let scent = board.get_cell(me.pos).scent;
         if me.tracking > 0 {
-            let mut best_score = scent + 1;
-            let mut best_point = vec![];
-            for &dir in &dirs::ALL {
-                let score = board.get_cell(me.pos + dir).scent;
-                if score < best_score { continue; }
-                if score > best_score { best_point.clear(); }
-                best_point.push(dir);
-                best_score = score;
+            self.scent_steps.insert(Point::default(), scent);
+            for &dir in &crate::base::dirs::ALL {
+                self.scent_steps.insert(dir, board.get_cell(me.pos + dir).scent);
             }
-            if !best_point.is_empty() { self.scent_step = Some(*sample(&best_point, rng)); }
         } else if scent > 0 {
-            //let max = 300;
-            //let chance = 0.2 * std::cmp::min(scent, max) as f64 / max as f64;
-            let chance = 1.;
+            let max = 300;
+            let chance = 0.2 * std::cmp::min(scent, max) as f64 / max as f64;
             self.picked_up_scent = rng.gen::<f64>() < chance;
         }
 
