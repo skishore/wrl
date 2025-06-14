@@ -12,7 +12,7 @@ use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs};
 use crate::effect::{Effect, Event, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
 use crate::knowledge::Knowledge;
-use crate::mapgen::legacy_mapgen_with_size as mapgen;
+use crate::mapgen::mapgen_with_size as mapgen;
 use crate::pathing::Status;
 use crate::shadowcast::{INITIAL_VISIBILITY, VISIBILITY_LOSSES, Vision, VisionArgs};
 use crate::ui::{UI, get_direction};
@@ -23,7 +23,7 @@ use crate::ui::{UI, get_direction};
 
 pub const MOVE_TIMER: i32 = 960;
 pub const TURN_TIMER: i32 = 120;
-pub const WORLD_SIZE: i32 = 30;
+pub const WORLD_SIZE: i32 = 100;
 
 pub const FOV_RADIUS_NPC: i32 = 12;
 pub const FOV_RADIUS_PC_: i32 = 21;
@@ -38,7 +38,7 @@ const TRACKING_TURNS: i32 = 8;
 
 const LIGHT: Light = Light::Sun(Point(2, 0));
 const WEATHER: Weather = Weather::None;
-const NUM_PREDATORS: i32 = 1;
+const NUM_PREDATORS: i32 = 10;
 const NUM_PREY: i32 = 0;
 
 const UI_DAMAGE_FLASH: i32 = 6;
@@ -56,13 +56,20 @@ pub enum Input { Escape, BackTab, Char(char) }
 const FLAG_BLOCKS_VISION: u32 = 1 << 0;
 const FLAG_LIMITS_VISION: u32 = 1 << 1;
 const FLAG_BLOCKS_MOVEMENT: u32 = 1 << 2;
-const FLAG_CAN_DRINK: u32 = 1 << 3;
-const FLAG_CAN_EAT: u32 = 1 << 4;
+const FLAG_BLOCKS_SCENT: u32 = 1 << 3;
+const FLAG_CAN_DRINK: u32 = 1 << 4;
+const FLAG_CAN_EAT: u32 = 1 << 5;
 
 const FLAGS_NONE: u32 = 0;
-const FLAGS_BLOCKED: u32 = FLAG_BLOCKS_MOVEMENT | FLAG_BLOCKS_VISION;
-const FLAGS_FRESH_WATER: u32 = FLAG_BLOCKS_MOVEMENT | FLAG_CAN_DRINK;
-const FLAGS_BERRY_TREE: u32 = FLAG_BLOCKS_MOVEMENT | FLAG_LIMITS_VISION | FLAG_CAN_EAT;
+
+const FLAGS_TREE: u32 =
+        FLAG_BLOCKS_MOVEMENT | FLAG_BLOCKS_SCENT | FLAG_BLOCKS_VISION;
+
+const FLAGS_BERRY_TREE: u32 =
+        FLAG_BLOCKS_MOVEMENT | FLAG_BLOCKS_SCENT | FLAG_LIMITS_VISION | FLAG_CAN_EAT;
+
+const FLAGS_FRESH_WATER: u32 =
+        FLAG_BLOCKS_MOVEMENT | FLAG_CAN_DRINK;
 
 pub struct Tile {
     pub flags: u32,
@@ -84,6 +91,7 @@ impl Tile {
     pub fn blocks_vision(&self) -> bool { self.flags & FLAG_BLOCKS_VISION != 0 }
     pub fn limits_vision(&self) -> bool { self.flags & FLAG_LIMITS_VISION != 0 }
     pub fn blocks_movement(&self) -> bool { self.flags & FLAG_BLOCKS_MOVEMENT != 0 }
+    pub fn blocks_scent(&self) -> bool { self.flags & FLAG_BLOCKS_SCENT != 0 }
 
     // Derived predicates.
     pub fn casts_shadow(&self) -> bool { self.blocks_vision() }
@@ -112,7 +120,7 @@ impl PartialEq for &'static Tile {
 lazy_static! {
     static ref TILES: HashMap<char, Tile> = {
         let items = [
-            ('#', (FLAGS_BLOCKED,      Glyph::wdfg('#', (16, 96, 0)),     "a tree")),
+            ('#', (FLAGS_TREE,         Glyph::wdfg('#', (16, 96, 0)),     "a tree")),
             ('.', (FLAGS_NONE,         Glyph::wdfg('.', (224, 255, 192)), "grass")),
             (',', (FLAGS_NONE,         Glyph::wdfg('`', (96, 192, 96)),   "weeds")),
             ('"', (FLAG_LIMITS_VISION, Glyph::wdfg('"', (96, 192, 0)),    "tall grass")),
@@ -433,11 +441,9 @@ impl Board {
 
     // Scent diffusion
 
-    fn blocks_scent(tile: &Tile) -> bool { tile.blocks_movement() }
-
-    fn set_scent_at(&mut self, point: Point, scent: i32) {
+    fn add_scent_source(&mut self, point: Point) {
         let Some(cell) = self.map.entry_mut(point) else { return; };
-        cell.scent = scent;
+        cell.scent = std::cmp::min(cell.scent + 150, 300);
     }
 
     fn update_scent(&mut self) {
@@ -448,7 +454,7 @@ impl Board {
                 for dx in -1..=1 {
                     for dy in -1..=1 {
                         let cell = self.map.get(Point(x + dx, y + dy));
-                        if Board::blocks_scent(cell.tile) { continue; }
+                        if cell.tile.blocks_scent() { continue; }
                         entry.0 += cell.scent;
                         entry.1 += 1;
                     }
@@ -456,11 +462,11 @@ impl Board {
             }
         }
         let base = 1000;
-        let diffusion = 100;
+        let diffusion = 50;
         for x in 0..self.map.size.0 {
             for y in 0..self.map.size.1 {
                 let entry = self.map.entry_mut(Point(x, y)).unwrap();
-                if Board::blocks_scent(entry.tile) { continue; }
+                if entry.tile.blocks_scent() { continue; }
                 let (neighbor_scent, neighbor_count) = neighborhood.get(Point(x, y));
                 let scent = entry.scent * 10 * (base - neighbor_count * diffusion);
                 entry.scent = (scent + 10 * diffusion * neighbor_scent) / (10 * base);
@@ -905,7 +911,7 @@ fn update_state(state: &mut State) {
 
         if player {
             let pos = state.get_player().pos;
-            state.board.set_scent_at(pos, 300);
+            state.board.add_scent_source(pos);
             state.board.update_scent();
         }
 

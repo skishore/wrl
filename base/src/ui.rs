@@ -529,9 +529,9 @@ impl UI {
         // Render the base map, then the debug layer, then the weather:
         let frame = board.get_frame();
         self.render_map(buffer, entity, frame);
-        self.render_scent_overlay(buffer, entity, board);
         if !entity.player && frame.is_none() {
             self.render_debug_overlay(buffer, entity, board);
+            self.render_scent_overlay(buffer, entity, board);
         }
         self.render_weather(buffer, entity);
 

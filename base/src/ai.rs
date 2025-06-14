@@ -540,6 +540,8 @@ impl TrackStrategy {
         let mut best_point = vec![];
         for (&point, &scent) in &known.scent_steps {
             if scent < best_score { continue; }
+            if known.get(ctx.pos + point).blocked() { continue; }
+
             if scent > best_score { best_point.clear(); }
             best_point.push(point);
             best_score = scent;

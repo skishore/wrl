@@ -166,8 +166,7 @@ impl Knowledge {
                 self.scent_steps.insert(dir, board.get_cell(me.pos + dir).scent);
             }
         } else if scent > 0 {
-            let max = 300;
-            let chance = 0.2 * std::cmp::min(scent, max) as f64 / max as f64;
+            let chance = 0.1 * ((scent as f64).log10() + 1.);
             self.picked_up_scent = rng.gen::<f64>() < chance;
         }
 
