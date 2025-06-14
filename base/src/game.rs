@@ -34,6 +34,8 @@ const VISIBILITY_LOSS: i32 = VISIBILITY_LOSSES[FOV_RADIUS_IN_TALL_GRASS - 1];
 const SPEED_PC_: f64 = 0.1;
 const SPEED_NPC: f64 = 0.1;
 
+const TRACKING_TURNS: i32 = 8;
+
 const LIGHT: Light = Light::Sun(Point(2, 0));
 const WEATHER: Weather = Weather::None;
 const NUM_PREDATORS: i32 = 0;
@@ -577,6 +579,7 @@ fn plan(state: &mut State, eid: EID) -> Action {
 fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
     let entity = &mut state.board.entities[eid];
     entity.asleep = matches!(action, Action::Rest);
+    entity.tracking = std::cmp::max(entity.tracking - 1, 0);
 
     match action {
         Action::Idle => ActionResult::success(),
@@ -585,6 +588,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
         Action::SniffAround => {
             let entity = &mut state.board.entities[eid];
             let (point, color) = (entity.pos, 0x440);
+            entity.tracking = std::cmp::min(entity.tracking, TRACKING_TURNS);
 
             let board = &mut state.board;
             let cb = Box::new(|_: &mut Board, _: &mut RNG| {});

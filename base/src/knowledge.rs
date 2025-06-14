@@ -5,7 +5,7 @@ use rand::Rng;
 use thin_vec::{ThinVec, thin_vec};
 
 use crate::static_assert_size;
-use crate::base::{Glyph, HashMap, Point, RNG, clamp};
+use crate::base::{Glyph, HashMap, Point, RNG, clamp, dirs, sample};
 use crate::entity::{EID, Entity};
 use crate::game::{MOVE_TIMER, Board, Item, Light, Tile};
 use crate::list::{Handle, List};
@@ -90,20 +90,17 @@ static_assert_size!(EntityKnowledge, 72);
 #[cfg(target_pointer_width = "64")]
 static_assert_size!(EntityKnowledge, 80);
 
-#[derive(Clone, Copy)]
-pub struct Scent {
-    pub age: i32,
-    pub pos: Point,
-}
-
 #[derive(Default)]
 pub struct Knowledge {
     cell_by_point: HashMap<Point, CellHandle>,
     entity_by_eid: HashMap<EID, EntityHandle>,
     pub cells: List<CellKnowledge>,
     pub entities: List<EntityKnowledge>,
-    pub scents: Vec<Scent>,
     pub time: Timestamp,
+
+    // Scent information
+    pub picked_up_scent: bool,
+    pub scent_step: Option<Point>,
 }
 
 impl CellKnowledge {
@@ -153,24 +150,33 @@ impl Knowledge {
         }
     }
 
-    pub fn update(&mut self, me: &Entity, board: &Board, vision: &Vision, _rng: &mut RNG) {
+    pub fn update(&mut self, me: &Entity, board: &Board, vision: &Vision, rng: &mut RNG) {
         let (pos, time) = (me.pos, self.time);
         let dark = matches!(board.get_light(), Light::None);
 
-        //// Clear and recompute scents. Only the player gives off a scent.
-        //self.scents.clear();
-        //for &oid in &board.entity_order {
-        //    if oid == me.eid { continue; }
-        //    let other = &board.entities[oid];
-        //    if !other.player { continue; }
-        //    let mut remainder = rng.gen::<f64>();
-        //    for age in 0..other.history.capacity() {
-        //        remainder -= other.get_historical_scent_at(me.pos, age);
-        //        if remainder >= 0. { continue; }
-        //        self.scents.push(Scent { age: age as i32, pos: other.history[age] });
-        //        break;
-        //    }
-        //}
+        // Clear and recompute scents. Scent is a local sense. In the future,
+        // we should deliver all scents when we're tracking and let the AI
+        // code choose the best one - it also checks that we can move there.
+        self.picked_up_scent = false;
+        self.scent_step = None;
+        let scent = board.get_cell(me.pos).scent;
+        if me.tracking > 0 {
+            let mut best_score = scent + 1;
+            let mut best_point = vec![];
+            for &dir in &dirs::ALL {
+                let score = board.get_cell(me.pos + dir).scent;
+                if score < best_score { continue; }
+                if score > best_score { best_point.clear(); }
+                best_point.push(dir);
+                best_score = score;
+            }
+            if !best_point.is_empty() { self.scent_step = Some(*sample(&best_point, rng)); }
+        } else if scent > 0 {
+            //let max = 300;
+            //let chance = 0.2 * std::cmp::min(scent, max) as f64 / max as f64;
+            let chance = 1.;
+            self.picked_up_scent = rng.gen::<f64>() < chance;
+        }
 
         // Clear visibility flags. Visible cells come first in the list so we
         // can stop when we see the first one that's not visible.

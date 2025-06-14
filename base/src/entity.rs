@@ -30,10 +30,6 @@ pub struct Entity {
     pub glyph: Glyph,
     pub known: Box<Knowledge>,
     pub ai: Box<AIState>,
-    pub asleep: bool,
-    pub player: bool,
-    pub predator: bool,
-    pub sneaking: bool,
     pub cur_hp: i32,
     pub max_hp: i32,
     pub move_timer: i32,
@@ -42,6 +38,13 @@ pub struct Entity {
     pub speed: f64,
     pub pos: Point,
     pub dir: Point,
+
+    // Flags and other conditions
+    pub asleep: bool,
+    pub player: bool,
+    pub predator: bool,
+    pub sneaking: bool,
+    pub tracking: i32,
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -83,10 +86,6 @@ impl EntityMap {
             glyph: args.glyph,
             known: Default::default(),
             ai: Box::new(AIState::new(args.predator, rng)),
-            asleep: false,
-            player: args.player,
-            predator: args.predator,
-            sneaking: false,
             cur_hp: MAX_HP,
             max_hp: MAX_HP,
             move_timer: 0,
@@ -95,6 +94,13 @@ impl EntityMap {
             speed: args.speed,
             pos: args.pos,
             dir: *sample(&dirs::ALL, rng),
+
+            // Flags and other conditions
+            asleep: false,
+            player: args.player,
+            predator: args.predator,
+            sneaking: false,
+            tracking: 0,
         });
         to_eid(key)
     }
