@@ -10,7 +10,7 @@ use crate::base::{LOS, Point, Slice, RNG, dirs, sample, weighted};
 use crate::entity::Entity;
 use crate::game::{NOISY_RADIUS, Item, move_ready};
 use crate::game::{Action, EatAction, MoveAction};
-use crate::knowledge::{CellKnowledge, Knowledge, Scent};
+use crate::knowledge::{CellKnowledge, Knowledge};
 use crate::pathing::{AStar, BFS, DijkstraLength, DijkstraMap, Neighborhood, Status};
 use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
 
@@ -535,64 +535,94 @@ impl Strategy for ExploreStrategy {
 
 #[derive(Default)]
 struct TrackStrategy {
-    path: CachedPath,
-    scent: Option<Scent>,
-    fresh: bool,
+    active: bool,
+    sniffed: bool,
+    tracking: i32,
+    scent_steps: crate::base::HashMap<Point, i32>,
+}
+
+impl TrackStrategy {
+    fn get_scent_steps(&self, ctx: &Context) -> Vec<Point> {
+        let known = ctx.known;
+        if known.scent_steps.is_empty() { return vec![]; }
+        let Some(&scent) = known.scent_steps.get(&Point::default()) else { return vec![]; };
+
+        let check = |p: Point| known.get(p).status();
+        let neighborhood = DijkstraMap(ctx.pos, check, 25, 2);
+        let reachable: crate::base::HashSet<_> =
+                neighborhood.visited.into_iter().map(|x| x.0).collect();
+
+        let mut best_score = scent + 1;
+        let mut best_point = vec![];
+        for (&point, &scent) in &known.scent_steps {
+            if scent < best_score { continue; }
+            if !reachable.contains(&(ctx.pos + point)) { continue; }
+
+            if scent > best_score { best_point.clear(); }
+            best_point.push(point);
+            best_score = scent;
+        }
+        best_point
+    }
 }
 
 impl Strategy for TrackStrategy {
-    fn get_path(&self) -> &[Point] { &self.path.steps }
+    fn get_path(&self) -> &[Point] { &[] }
 
     fn debug(&self, slice: &mut Slice) {
         slice.write_str("Track").newline();
-        if let Some(x) = &self.scent {
-            slice.write_str(&format!("    scent.age: {}", x.age)).newline();
-            slice.write_str(&format!("    scent.pos: {:?}", x.pos)).newline();
-            slice.write_str(&format!("    fresh: {}", self.fresh)).newline();
+        slice.write_str(&format!("    active: {}", self.active)).newline();
+        slice.write_str(&format!("    sniffed: {}", self.sniffed)).newline();
+        slice.write_str(&format!("    tracking: {}", self.tracking)).newline();
+        if !self.scent_steps.is_empty() {
+            slice.write_str("    scent_steps:").newline();
+            let radius = 2;
+            for y in -radius..=radius {
+                slice.write_str("       ");
+                for x in -radius..=radius {
+                    let scent = *self.scent_steps.get(&Point(x, y)).unwrap_or(&0);
+                    slice.write_str(&format!(" {:3}", scent));
+                }
+                slice.newline();
+            }
         }
     }
 
     fn bid(&mut self, ctx: &mut Context, _: bool) -> (Priority, i32) {
-        if !self.path.check(ctx) { self.path.reset(); }
+        let known = ctx.known;
+        let follow = self.sniffed && !self.get_scent_steps(ctx).is_empty();
 
-        if let Some(x) = &mut self.scent { x.age += 1; }
-        self.fresh = false;
+        if known.picked_up_scent || follow { self.active = true; }
+        self.sniffed = false;
+        self.tracking = ctx.entity.tracking;
+        self.scent_steps = known.scent_steps.clone();
 
-        for &scent in &ctx.known.scents {
-            let (fresh, newer) = match &self.scent {
-                Some(x) => (scent.pos != x.pos, scent.age < x.age),
-                None => (true, true),
-            };
-            if !newer { continue; }
-
-            if fresh { self.path.reset(); }
-            self.scent = Some(scent);
-            self.fresh = fresh;
-        }
-
-        if let Some(x) = &self.scent && x.age >= MAX_SEARCH_TURNS {
-            self.scent = None;
-            self.fresh = false;
-        }
-
-        let Some(x) = &self.scent else { return (Priority::Skip, 0); };
-
-        (Priority::Hunt, 2 * x.age + 1)
+        if self.active { (Priority::Hunt, 1) } else { (Priority::Skip, 0) }
     }
 
     fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
-        let Some(x) = self.scent else { return None; };
-        let Scent { age, pos } = x;
+        let scent_steps = self.get_scent_steps(ctx);
+        if !scent_steps.is_empty() {
+            let known = ctx.known;
+            let point = *sample(&scent_steps, ctx.env.rng);
+            let turns = if !move_ready(ctx.entity) { SLOWED_TURNS } else { WANDER_TURNS };
+            let check = |p: Point| known.get(p).status();
+            let path = AStar(ctx.pos, ctx.pos + point, 25, check);
+            if let Some(path) = path && !path.is_empty() {
+                let dir = path[0] - ctx.pos;
+                return Some(Action::Move(MoveAction { look: dir, step: dir, turns }));
+            }
+        }
 
-        if self.fresh { return Some(Action::SniffAround); }
-
-        let turns = if !move_ready(ctx.entity) { SLOWED_TURNS } else { WANDER_TURNS };
-        if let Some(x) = self.path.follow(ctx, turns) { return Some(x); }
-
-        search_around(ctx, &mut self.path, age, Point(0, 0), pos, turns)
+        self.active = false;
+        self.sniffed = true;
+        Some(Action::SniffAround)
     }
 
-    fn reject(&mut self) { self.path.reset(); }
+    fn reject(&mut self) {
+        self.active = false;
+        self.sniffed = false;
+    }
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -649,7 +679,10 @@ impl Strategy for ChaseStrategy {
             target.pos - pos
         };
         self.target = Some(ChaseTarget { age, bias, last });
-        (Priority::Hunt, 2 * age)
+
+        let recent = age < MIN_SEARCH_TURNS;
+        let priority = if recent { 0 } else { 2 };
+        (Priority::Hunt, priority)
     }
 
     fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
@@ -664,7 +697,7 @@ impl Strategy for ChaseStrategy {
         };
         if let Some(x) = self.path.follow(ctx, turns) { return Some(x); }
 
-        let search_nearby = age > bias.len_l1();
+        let search_nearby = age >= MIN_SEARCH_TURNS;
         let center = if search_nearby { ctx.pos } else { last };
         search_around(ctx, &mut self.path, age, bias, center, turns)
     }
