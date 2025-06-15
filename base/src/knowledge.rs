@@ -159,15 +159,20 @@ impl Knowledge {
         // code choose the best one - it also checks that we can move there.
         self.picked_up_scent = false;
         self.scent_steps.clear();
-        let scent = board.get_cell(me.pos).scent;
         if me.tracking > 0 {
-            self.scent_steps.insert(Point::default(), scent);
-            for &dir in &crate::base::dirs::ALL {
-                self.scent_steps.insert(dir, board.get_cell(me.pos + dir).scent);
+            let radius = 2;
+            for x in -radius..=radius {
+                for y in -radius..=radius {
+                    let step = Point(x, y);
+                    self.scent_steps.insert(step, board.get_cell(me.pos + step).scent);
+                }
             }
-        } else if scent > 0 {
-            let chance = 0.1 * ((scent as f64).log10() + 1.);
-            self.picked_up_scent = rng.gen::<f64>() < chance;
+        } else {
+            let scent = board.get_cell(me.pos).scent;
+            if scent > 0 {
+                let chance = 0.05 * ((scent as f64).log10() + 1.);
+                self.picked_up_scent = rng.gen::<f64>() < chance;
+            }
         }
 
         // Clear visibility flags. Visible cells come first in the list so we

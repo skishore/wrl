@@ -536,11 +536,16 @@ impl TrackStrategy {
         if known.scent_steps.is_empty() { return vec![]; }
         let Some(&scent) = known.scent_steps.get(&Point::default()) else { return vec![]; };
 
+        let check = |p: Point| known.get(p).status();
+        let neighborhood = DijkstraMap(ctx.pos, check, 25, 2, 0);
+        let reachable: crate::base::HashSet<_> =
+                neighborhood.visited.into_iter().map(|x| x.0).collect();
+
         let mut best_score = scent + 1;
         let mut best_point = vec![];
         for (&point, &scent) in &known.scent_steps {
             if scent < best_score { continue; }
-            if known.get(ctx.pos + point).blocked() { continue; }
+            if !reachable.contains(&(ctx.pos + point)) { continue; }
 
             if scent > best_score { best_point.clear(); }
             best_point.push(point);
@@ -560,12 +565,14 @@ impl Strategy for TrackStrategy {
         slice.write_str(&format!("    tracking: {}", self.tracking)).newline();
         if !self.scent_steps.is_empty() {
             slice.write_str("    scent_steps:").newline();
-            for y in -1..=1 {
-                slice.write_str(&format!("        {:3} {:3} {:3}",
-                                         *self.scent_steps.get(&Point(-1, y)).unwrap_or(&0),
-                                         *self.scent_steps.get(&Point(0, y)).unwrap_or(&0),
-                                         *self.scent_steps.get(&Point(1, y)).unwrap_or(&0))
-                                ).newline();
+            let radius = 2;
+            for y in -radius..=radius {
+                slice.write_str("       ");
+                for x in -radius..=radius {
+                    let scent = *self.scent_steps.get(&Point(x, y)).unwrap_or(&0);
+                    slice.write_str(&format!(" {:3}", scent));
+                }
+                slice.newline();
             }
         }
     }
@@ -585,9 +592,15 @@ impl Strategy for TrackStrategy {
     fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
         let scent_steps = self.get_scent_steps(ctx);
         if !scent_steps.is_empty() {
-            let dir = *sample(&scent_steps, ctx.env.rng);
+            let known = ctx.known;
+            let point = *sample(&scent_steps, ctx.env.rng);
             let turns = if !move_ready(ctx.entity) { SLOWED_TURNS } else { WANDER_TURNS };
-            return Some(Action::Move(MoveAction { look: dir, step: dir, turns }));
+            let check = |p: Point| known.get(p).status();
+            let path = AStar(ctx.pos, ctx.pos + point, 25, 0, check);
+            if let Some(path) = path && !path.is_empty() {
+                let dir = path[0] - ctx.pos;
+                return Some(Action::Move(MoveAction { look: dir, step: dir, turns }));
+            }
         }
 
         self.active = false;
@@ -673,7 +686,7 @@ impl Strategy for ChaseStrategy {
         };
         if let Some(x) = self.path.follow(ctx, turns) { return Some(x); }
 
-        let search_nearby = age > bias.len_l1();
+        let search_nearby = age >= MIN_SEARCH_TURNS;
         let center = if search_nearby { ctx.pos } else { last };
         search_around(ctx, &mut self.path, age, bias, center, turns)
     }

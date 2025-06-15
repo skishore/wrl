@@ -443,7 +443,7 @@ impl Board {
 
     fn add_scent_source(&mut self, point: Point) {
         let Some(cell) = self.map.entry_mut(point) else { return; };
-        cell.scent = std::cmp::min(cell.scent + 150, 300);
+        cell.scent = std::cmp::min(cell.scent + 300, 300);
     }
 
     fn update_scent(&mut self) {
@@ -462,7 +462,7 @@ impl Board {
             }
         }
         let base = 1000;
-        let diffusion = 50;
+        let diffusion = 100;
         for x in 0..self.map.size.0 {
             for y in 0..self.map.size.1 {
                 let entry = self.map.entry_mut(Point(x, y)).unwrap();
