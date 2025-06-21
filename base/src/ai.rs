@@ -10,7 +10,7 @@ use crate::base::{LOS, Point, Slice, RNG, dirs, sample, weighted};
 use crate::entity::Entity;
 use crate::game::{NOISY_RADIUS, Item, move_ready};
 use crate::game::{Action, EatAction, MoveAction};
-use crate::knowledge::{CellKnowledge, Knowledge};
+use crate::knowledge::{CellKnowledge, Knowledge, Timedelta};
 use crate::pathing::{AStar, BFS, DijkstraLength, DijkstraMap, Neighborhood, Status};
 use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
 
@@ -503,7 +503,7 @@ impl Strategy for ExploreStrategy {
         let score = |p: Point, distance: i32| -> f64 {
             if distance == 0 { return 0.; }
 
-            let age = known.get(p).turns_since_seen();
+            let age = known.get(p).time_since_seen().turns;
             let age_scale = 1. / (1 << 24) as f64;
 
             let delta = p - pos;
@@ -630,7 +630,7 @@ impl Strategy for TrackStrategy {
 
 #[derive(Debug)]
 struct ChaseTarget {
-    age: i32,
+    age: Timedelta,
     bias: Point,
     last: Point,
 }
@@ -647,7 +647,7 @@ impl Strategy for ChaseStrategy {
     fn debug(&self, slice: &mut Slice) {
         slice.write_str("Chase").newline();
         if let Some(x) = &self.target {
-            slice.write_str(&format!("    target.age: {}", x.age)).newline();
+            slice.write_str(&format!("    target.age: {:?}", x.age)).newline();
             slice.write_str(&format!("    target.bias: {:?}", x.bias)).newline();
             slice.write_str(&format!("    target.last: {:?}", x.last)).newline();
         }
@@ -664,12 +664,12 @@ impl Strategy for ChaseStrategy {
 
         let Context { known, pos, .. } = *ctx;
         let mut targets: Vec<_> = known.entities.iter().filter(
-            |x| x.age < MAX_SEARCH_TURNS && x.rival).collect();
+            |x| x.age.turns < MAX_SEARCH_TURNS && x.rival).collect();
         if targets.is_empty() { return (Priority::Skip, 0); }
 
         let target = *targets.select_nth_unstable_by_key(
-                0, |x| (x.age, (x.pos - pos).len_l2_squared())).1;
-        let reset = target.age == 0;
+                0, |x| (x.age.ticks, (x.pos - pos).len_l2_squared())).1;
+        let reset = target.age.turns == 0;
         if reset || !self.path.check(ctx) { self.path.reset(); }
 
         let (age, last) = (target.age, target.pos);
@@ -680,24 +680,22 @@ impl Strategy for ChaseStrategy {
         };
         self.target = Some(ChaseTarget { age, bias, last });
 
-        let recent = age < MIN_SEARCH_TURNS;
+        let recent = age.turns < MIN_SEARCH_TURNS;
         let priority = if recent { 0 } else { 2 };
         (Priority::Hunt, priority)
     }
 
     fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
-        // TODO: Don't attack the target if the last ping was because we heard
-        // it but we don't currently see it - check that it's seen!
         let ChaseTarget { age, bias, last } = *self.target.as_ref()?;
-        if age == 0 { return Some(attack_target(ctx, last)); }
+        if age.ticks == 0 { return Some(attack_target(ctx, last)); }
 
         let turns = {
             if !move_ready(ctx.entity) { SLOWED_TURNS }
-            else if age >= MIN_SEARCH_TURNS { WANDER_TURNS } else { 1. }
+            else if age.turns >= MIN_SEARCH_TURNS { WANDER_TURNS } else { 1. }
         };
         if let Some(x) = self.path.follow(ctx, turns) { return Some(x); }
 
-        let search_nearby = age >= MIN_SEARCH_TURNS;
+        let search_nearby = age.turns >= MIN_SEARCH_TURNS;
         let center = if search_nearby { ctx.pos } else { last };
         search_around(ctx, &mut self.path, age, bias, center, turns)
     }
@@ -784,9 +782,9 @@ impl Strategy for FlightStrategy {
         if ctx.entity.predator { return (Priority::Skip, 0); }
 
         let Context { entity, known, pos, .. } = *ctx;
-        let reset = known.entities.iter().any(|x| x.age == 0 && x.rival);
+        let reset = known.entities.iter().any(|x| x.age.turns == 0 && x.rival);
         let mut threats: Vec<_> = known.entities.iter().filter_map(|x| {
-            if x.age >= MAX_FLIGHT_TURNS || !x.rival { return None; }
+            if x.age.turns >= MAX_FLIGHT_TURNS || !x.rival { return None; }
             Some(Threat { asleep: x.asleep, pos: x.pos })
         }).collect();
         threats.sort_unstable_by_key(|x| (x.pos.0, x.pos.1));
@@ -943,15 +941,15 @@ fn path_to_target<F: Fn(Point) -> bool>(
     step(dir.unwrap_or_else(|| *sample(&dirs::ALL, rng)))
 }
 
-fn search_around(ctx: &mut Context, path: &mut CachedPath,
-                 age: i32, bias: Point, center: Point, turns: f64) -> Option<Action> {
+fn search_around(ctx: &mut Context, path: &mut CachedPath, age: Timedelta,
+                 bias: Point, center: Point, turns: f64) -> Option<Action> {
     let Context { known, pos, dir, .. } = *ctx;
     let inv_dir_l2 = safe_inv_l2(dir);
     let inv_bias_l2 = safe_inv_l2(bias);
 
     let is_search_candidate = |p: Point| {
         let cell = known.get(p);
-        !cell.blocked() && cell.turns_since_entity_visible() > age
+        !cell.blocked() && cell.time_since_entity_visible().ticks > age.ticks
     };
 
     if center != pos && is_search_candidate(center) {
@@ -1232,7 +1230,7 @@ impl AIState {
         let known = &*entity.known;
         let mut observations = vec![];
         for cell in &known.cells {
-            if known.time - cell.last_seen > 0 { break; }
+            if (known.time - cell.last_seen).turns > 0 { break; }
             observations.push(cell);
         }
         self.shared.update(entity);

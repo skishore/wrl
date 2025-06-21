@@ -11,7 +11,7 @@ use crate::base::{Buffer, Color, Glyph};
 use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs};
 use crate::effect::{Effect, Event, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
-use crate::knowledge::Knowledge;
+use crate::knowledge::{Knowledge, Timedelta};
 use crate::mapgen::mapgen_with_size as mapgen;
 use crate::pathing::Status;
 use crate::shadowcast::{INITIAL_VISIBILITY, VISIBILITY_LOSSES, Vision, VisionArgs};
@@ -432,7 +432,7 @@ impl Board {
 
     fn start_next_turn(&mut self, eid: EID) {
         let Some(entity) = self.entities.get_mut(eid) else { return; };
-        entity.known.start_next_turn(entity.player);
+        entity.known.advance_time(Timedelta { ticks: 1, turns: 1 }, entity.player);
     }
 
     fn remove_known_entity(&mut self, eid: EID, oid: EID) {
@@ -889,25 +889,9 @@ fn update_state(state: &mut State) {
         let result = act(state, eid, action);
         if player && !result.success { break; }
 
-        // TODO: age accounting is fundamentally screwed up. Example:
-        //   - Enemy can see player
-        //   - Enemy takes a slow move (2-turn)
-        //   - Enemy bumps age of its player knowledge, 0 -> 1
-        //   - Enemy has an FOV update (because it's the POV entity?)
-        //   - Enemy decreases age of its player knowledge, 1 -> 0
-        //   - Player moves
-        //   - Enemy has an FOV update (because of its move)
-        //   - Enemy leaves age of its player knowledge at 0
-        //   - Enemy attacks empty space...
-        //
-        // Can this bug still happen if the enemy is not the POV entity?
-        //
         if !player || state.get_player().pos != pos {
             state.board.start_next_turn(eid);
         }
-
-        //state.board.update_known(eid, &mut state.rng);
-        //state.board.update_known(state.player, &mut state.rng);
 
         if player {
             let pos = state.get_player().pos;
