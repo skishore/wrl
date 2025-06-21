@@ -11,7 +11,7 @@ use crate::base::{Buffer, Color, Glyph};
 use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs};
 use crate::effect::{Effect, Event, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
-use crate::knowledge::Knowledge;
+use crate::knowledge::{Knowledge, Timedelta};
 use crate::mapgen::mapgen_with_size as mapgen;
 use crate::pathing::Status;
 use crate::shadowcast::{INITIAL_VISIBILITY, VISIBILITY_LOSSES, Vision, VisionArgs};
@@ -432,7 +432,7 @@ impl Board {
 
     fn start_next_turn(&mut self, eid: EID) {
         let Some(entity) = self.entities.get_mut(eid) else { return; };
-        entity.known.start_next_turn(entity.player);
+        entity.known.advance_time(Timedelta { ticks: 1, turns: 1 }, entity.player);
     }
 
     fn remove_known_entity(&mut self, eid: EID, oid: EID) {

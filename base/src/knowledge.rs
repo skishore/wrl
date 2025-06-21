@@ -26,12 +26,46 @@ pub const PLAYER_MAP_MEMORY: i32 = 0;
 // Timestamp
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct Timestamp(u32);
+pub struct Timedelta { pub ticks: i32, pub turns: i32 }
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Timestamp { tick: u32, turn: u32 }
+
+impl Timedelta {
+    pub fn max() -> Self {
+        Self { ticks: i32::MAX, turns: i32::MAX }
+    }
+}
+
+impl std::ops::Add<Timedelta> for Timedelta {
+    type Output = Self;
+    fn add(self, o: Self) -> Self {
+        Self { ticks: self.ticks + o.ticks, turns: self.turns + o.turns }
+    }
+}
+
+impl std::ops::Sub for Timedelta {
+    type Output = Self;
+    fn sub(self, o: Self) -> Self {
+        Self { ticks: self.ticks - o.ticks, turns: self.turns - o.turns }
+    }
+}
+
+impl std::ops::Add<Timedelta> for Timestamp {
+    type Output = Self;
+    fn add(self, o: Timedelta) -> Self::Output {
+        let tick = self.tick.wrapping_add(o.ticks as u32);
+        let turn = self.turn.wrapping_add(o.turns as u32);
+        Self::Output { tick, turn }
+    }
+}
 
 impl std::ops::Sub for Timestamp {
-    type Output = i32;
-    fn sub(self, other: Timestamp) -> Self::Output {
-        self.0.wrapping_sub(other.0) as Self::Output
+    type Output = Timedelta;
+    fn sub(self, o: Self) -> Self::Output {
+        let ticks = self.tick.wrapping_sub(o.tick) as i32;
+        let turns = self.turn.wrapping_sub(o.turn) as i32;
+        Self::Output { ticks, turns }
     }
 }
 
@@ -58,13 +92,13 @@ pub struct CellKnowledge {
     pub see_entity_at: bool,
 }
 #[cfg(target_pointer_width = "32")]
-static_assert_size!(CellKnowledge, 36);
+static_assert_size!(CellKnowledge, 40);
 #[cfg(target_pointer_width = "64")]
-static_assert_size!(CellKnowledge, 48);
+static_assert_size!(CellKnowledge, 56);
 
 pub struct EntityKnowledge {
     pub eid: EID,
-    pub age: i32,
+    pub age: Timedelta,
     pub pos: Point,
     pub dir: Point,
     pub glyph: Glyph,
@@ -86,9 +120,9 @@ pub struct EntityKnowledge {
     pub sneaking: bool,
 }
 #[cfg(target_pointer_width = "32")]
-static_assert_size!(EntityKnowledge, 72);
+static_assert_size!(EntityKnowledge, 76);
 #[cfg(target_pointer_width = "64")]
-static_assert_size!(EntityKnowledge, 80);
+static_assert_size!(EntityKnowledge, 88);
 
 #[derive(Default)]
 pub struct Knowledge {
@@ -139,18 +173,20 @@ impl Knowledge {
 
     // Writes
 
-    pub fn start_next_turn(&mut self, player: bool) {
-        self.time.0 += 1;
-        for x in &mut self.entities { x.age += 1; }
-        if !player { return; }
+    pub fn advance_time(&mut self, delta: Timedelta, player: bool) {
+        self.time = self.time + delta;
+        for x in &mut self.entities { x.age = x.age + delta; }
+        if !player || delta.turns == 0 { return; }
 
         while let Some(x) = self.cells.back() &&
-              self.time - x.last_seen >= PLAYER_MAP_MEMORY {
+              (self.time - x.last_seen).turns >= PLAYER_MAP_MEMORY {
             self.forget_last_cell();
         }
     }
 
     pub fn update(&mut self, me: &Entity, board: &Board, vision: &Vision, rng: &mut RNG) {
+        self.advance_time(Timedelta { ticks: 1, turns: 0 }, me.player);
+
         let (pos, time) = (me.pos, self.time);
         let dark = matches!(board.get_light(), Light::None);
 
@@ -292,7 +328,7 @@ impl Knowledge {
         let aggressor = |x: &Entity| x.predator;
         let rival = !same && (aggressor(entity) != aggressor(other));
 
-        entry.age = 0;
+        entry.age = Default::default();
         entry.pos = other.pos;
         entry.dir = other.dir;
         entry.alive = other.cur_hp > 0;
@@ -314,12 +350,6 @@ impl Knowledge {
         entry.sneaking = other.sneaking;
 
         handle
-    }
-
-    pub fn forget_cells_before(&mut self, limit: Timestamp) {
-        while let Some(x) = self.cells.back() && x.last_seen.0 < limit.0 {
-            self.forget_last_cell();
-        }
     }
 
     pub fn remove_entity(&mut self, oid: EID) {
@@ -351,7 +381,7 @@ impl Knowledge {
 
         while self.entity_by_eid.len() > MAX_ENTITY_MEMORY {
             let entity = self.entities.back().unwrap();
-            if entity.age == 0 { break; }
+            if entity.age.ticks == 0 { break; }
 
             let handle = self.entity_by_eid.remove(&entity.eid).unwrap();
             if !entity.moved {
@@ -392,13 +422,13 @@ impl<'a> CellResult<'a> {
 
     pub fn get_cell(&self) -> Option<&CellKnowledge> { self.cell }
 
-    pub fn turns_since_seen(&self) -> i32 {
-        let Some(x) = self.cell else { return std::i32::MAX };
+    pub fn time_since_seen(&self) -> Timedelta {
+        let Some(x) = self.cell else { return Timedelta::max() };
         self.root.time - x.last_seen
     }
 
-    pub fn turns_since_entity_visible(&self) -> i32 {
-        let Some(x) = self.cell else { return std::i32::MAX };
+    pub fn time_since_entity_visible(&self) -> Timedelta {
+        let Some(x) = self.cell else { return Timedelta::max() };
         self.root.time - x.last_see_entity_at
     }
 
