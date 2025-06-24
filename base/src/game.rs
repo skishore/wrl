@@ -515,12 +515,12 @@ fn plan(state: &mut State, eid: EID) -> Action {
         || Box::new(AIState::new(false, &mut state.rng)));
     swap(&mut ai, &mut entity.ai);
 
+    let board = &mut state.board;
     let debug = if state.pov == Some(eid) { Some(&mut state.ui.debug) } else { None };
-    let mut env = AIEnv { rng: &mut state.rng, debug };
-    let entity = &state.board.entities[eid];
-    let action = ai.plan(entity, &mut env);
+    let mut env = AIEnv { debug, fov: &mut board.npc_vision, rng: &mut state.rng };
+    let action = ai.plan(&board.entities[eid], &mut env);
 
-    let entity = &mut state.board.entities[eid];
+    let entity = &mut board.entities[eid];
     swap(&mut ai, &mut entity.ai);
     state.ai = Some(ai);
     action

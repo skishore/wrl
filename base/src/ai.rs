@@ -12,6 +12,7 @@ use crate::game::{NOISY_RADIUS, Item, move_ready};
 use crate::game::{Action, EatAction, MoveAction};
 use crate::knowledge::{CellKnowledge, Knowledge};
 use crate::pathing::{AStar, BFS, DijkstraLength, DijkstraMap, Neighborhood, Status};
+use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -24,7 +25,6 @@ const HIDING_CELLS: i32 = 256;
 const HIDING_LIMIT: i32 = 32;
 const SEARCH_CELLS: i32 = 1024;
 const SEARCH_LIMIT: i32 = 64;
-const FOV_RADIUS: i32 = 12;
 
 const ASSESS_ANGLE: f64 = TAU / 18.;
 const ASSESS_STEPS: i32 = 4;
@@ -71,8 +71,9 @@ pub struct AIDebug {
 }
 
 pub struct AIEnv<'a> {
-    pub rng: &'a mut RNG,
     pub debug: Option<&'a mut AIDebug>,
+    pub fov: &'a mut Vision,
+    pub rng: &'a mut RNG,
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -113,19 +114,28 @@ impl CachedPath {
     fn sneak(&mut self, ctx: &Context, target: Point,
              turns: f64, threats: &[Threat]) -> Option<Action> {
         let Context { entity, known, pos, .. } = *ctx;
+
         let check = |p: Point| {
             if !is_hiding_place(entity, p, threats) { return Status::Blocked; }
             known.get(p).status()
         };
-        let path = AStar(pos, target, ASTAR_LIMIT_WANDER, FOV_RADIUS, check);
-        self.go(ctx, path?, turns)
+        let path = AStar(pos, target, ASTAR_LIMIT_WANDER, check)?;
+        self.go(ctx, path, turns)
     }
 
-    fn start(&mut self, ctx: &Context, target: Point, turns: f64) -> Option<Action> {
+    fn start(&mut self, ctx: &mut Context, target: Point, turns: f64) -> Option<Action> {
+        ensure_vision(ctx);
+
         let Context { known, pos, .. } = *ctx;
-        let check = |p: Point| known.get(p).status();
-        let path = AStar(pos, target, ASTAR_LIMIT_WANDER, FOV_RADIUS, check);
-        self.go(ctx, path?, turns)
+        let fov = &*ctx.env.fov;
+
+        let check = |p: Point| {
+            let status = known.get(p).status();
+            if status != Status::Unknown { return status; }
+            if fov.can_see(p - pos) { Status::Free } else { Status::Unknown }
+        };
+        let path = AStar(pos, target, ASTAR_LIMIT_WANDER, check)?;
+        self.go(ctx, path, turns)
     }
 
     fn go(&mut self, ctx: &Context, path: Vec<Point>, turns: f64) -> Option<Action> {
@@ -211,6 +221,7 @@ struct Context<'a, 'b> {
     observations: Vec<&'a CellKnowledge>,
     neighborhood: Neighborhood,
     sneakable: Neighborhood,
+    ran_vision: bool,
     shared: &'a mut SharedAIState,
     // Mutable access to the RNG.
     env: &'a mut AIEnv<'b>,
@@ -789,7 +800,7 @@ fn path_to_target<F: Fn(Point) -> bool>(
     if let Some(x) = result && !x.dirs.is_empty() { return pick(&x.dirs, rng); }
 
     // Else, move towards the target.
-    let path = AStar(source, target, ASTAR_LIMIT_ATTACK, FOV_RADIUS, check);
+    let path = AStar(source, target, ASTAR_LIMIT_ATTACK, check);
     let dir = path.and_then(
         |x| if x.is_empty() { None } else { Some(x[0] - source) });
     step(dir.unwrap_or_else(|| *sample(&dirs::ALL, rng)))
@@ -904,19 +915,46 @@ fn assess_directions(dirs: &[Point], turns: i32, rng: &mut RNG) -> Vec<Point> {
 
 fn ensure_neighborhood(ctx: &mut Context) {
     if !ctx.neighborhood.visited.is_empty() { return; }
-    let known = ctx.known;
-    let check = |p: Point| known.get(p).status();
-    ctx.neighborhood = DijkstraMap(ctx.pos, check, SEARCH_CELLS, SEARCH_LIMIT, FOV_RADIUS);
+
+    ensure_vision(ctx);
+
+    let Context { known, pos, .. } = *ctx;
+    let fov = &*ctx.env.fov;
+
+    let check = |p: Point| {
+        let status = known.get(p).status();
+        if status != Status::Unknown { return status; }
+        if fov.can_see(p - pos) { Status::Free } else { Status::Unknown }
+    };
+    ctx.neighborhood = DijkstraMap(ctx.pos, check, SEARCH_CELLS, SEARCH_LIMIT);
 }
 
 fn ensure_sneakable(ctx: &mut Context, threats: &[Threat]) {
     if !ctx.sneakable.visited.is_empty() { return; }
+
     let Context { entity, known, .. } = *ctx;
+
     let check = |p: Point| {
         if !is_hiding_place(entity, p, threats) { return Status::Blocked; }
         known.get(p).status()
     };
-    ctx.sneakable = DijkstraMap(ctx.pos, check, HIDING_CELLS, HIDING_LIMIT, FOV_RADIUS);
+    ctx.sneakable = DijkstraMap(ctx.pos, check, HIDING_CELLS, HIDING_LIMIT);
+}
+
+fn ensure_vision(ctx: &mut Context) {
+    if ctx.ran_vision { return; }
+
+    let Context { known, pos, .. } = *ctx;
+
+    let opacity_lookup = |p: Point| {
+        let blocked = known.get(p + pos).status() == Status::Blocked;
+        if blocked { INITIAL_VISIBILITY } else { 0 }
+    };
+    let origin = Point::default();
+    let args = VisionArgs { pos: origin, dir: origin, opacity_lookup, };
+
+    ctx.env.fov.compute(&args);
+    ctx.ran_vision = true;
 }
 
 fn select_target(scores: &[(Point, f64)], env: &mut AIEnv) -> Option<Point> {
@@ -994,6 +1032,7 @@ impl AIState {
             observations,
             neighborhood: Default::default(),
             sneakable: Default::default(),
+            ran_vision: false,
             shared,
             env,
         };
