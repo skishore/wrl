@@ -219,7 +219,7 @@ impl Board {
         self._execute_effect_callbacks(rng);
     }
 
-    fn advance_effect(&mut self, pov: Option<EID>, rng: &mut RNG) -> bool {
+    fn advance_effect(&mut self, pov: EID, rng: &mut RNG) -> bool {
         let mut visible = self._pov_sees_effect(pov);
         while self._advance_one_frame(rng) {
             visible = visible || self._pov_sees_effect(pov);
@@ -254,18 +254,11 @@ impl Board {
         true
     }
 
-    fn _pov_sees_effect(&self, pov: Option<EID>) -> bool {
+    fn _pov_sees_effect(&self, pov: EID) -> bool {
         if self._effect.frames.is_empty() { return false; }
 
-        let eid = (|| {
-            if let Some(x) = pov && self.entities.has(x) { return x; }
-            let result = self.entity_order[0];
-            assert!(self.entities[result].player);
-            result
-        })();
-
         let frame = &self._effect.frames[0];
-        let known = &self.entities[eid].known;
+        let known = &self.entities[pov].known;
         frame.iter().any(|y| known.get(y.point).visible())
     }
 
@@ -787,10 +780,11 @@ fn update_pov_entities(state: &mut State) {
 }
 
 fn update_state(state: &mut State) {
-    let pos = state.get_player().pos;
+    let Entity { eid, pos, .. } = *state.get_player();
     state.ui.update(pos, &mut state.rng);
 
-    if state.board.advance_effect(state.pov, &mut state.rng) {
+    let pov = state.pov.unwrap_or(eid);
+    if state.board.advance_effect(pov, &mut state.rng) {
         update_pov_entities(state);
         return;
     }
