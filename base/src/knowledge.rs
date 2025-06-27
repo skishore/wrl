@@ -83,13 +83,9 @@ pub struct CellKnowledge {
     pub last_seen: Timestamp,
     pub items: ThinVec<Item>,
     pub point: Point,
+    pub shade: bool,
     pub tile: &'static Tile,
     visibility: i32,
-
-    // Small booleans, including some judgments.
-    pub shade: bool,
-    pub visible: bool,
-    pub see_entity_at: bool,
 }
 #[cfg(target_pointer_width = "32")]
 static_assert_size!(CellKnowledge, 40);
@@ -116,13 +112,12 @@ pub struct EntityKnowledge {
     pub friend: bool,
     pub asleep: bool,
     pub player: bool,
-    pub visible: bool,
     pub sneaking: bool,
 }
 #[cfg(target_pointer_width = "32")]
 static_assert_size!(EntityKnowledge, 76);
 #[cfg(target_pointer_width = "64")]
-static_assert_size!(EntityKnowledge, 88);
+static_assert_size!(EntityKnowledge, 80);
 
 #[derive(Default)]
 pub struct Knowledge {
@@ -145,13 +140,16 @@ impl CellKnowledge {
             last_seen: Default::default(),
             last_see_entity_at: Default::default(),
             point,
+            shade: false,
             tile,
             visibility: -1,
-            // Flags
-            shade: false,
-            visible: false,
-            see_entity_at: false,
         }
+    }
+}
+
+impl EntityKnowledge {
+    pub fn visible(&self) -> bool {
+        self.age.ticks == 0
     }
 }
 
@@ -211,20 +209,6 @@ impl Knowledge {
             }
         }
 
-        // Clear visibility flags. Visible cells come first in the list so we
-        // can stop when we see the first one that's not visible.
-        //
-        // Note that there may be cells with cell.last_seen == time that are
-        // not visible, because of sub-turn visibility updates.
-        for cell in &mut self.cells {
-            if !cell.visible { break; }
-            cell.see_entity_at = false;
-            cell.visible = false;
-        }
-        for entity in &mut self.entities {
-            entity.visible = false;
-        }
-
         // Entities have exact knowledge about anything they can see.
         //
         // We want self.cells to be sorted by recency, and if there are ties,
@@ -240,7 +224,6 @@ impl Knowledge {
             let nearby = (point - pos).len_l1() <= 1;
             if dark && !nearby { continue; }
 
-            let visible = true;
             let shade = dark || cell.shadow > 0;
             let see_big_entities = nearby || !shade;
             let see_all_entities = nearby || !(shade || tile.limits_vision());
@@ -264,12 +247,8 @@ impl Knowledge {
             let cell = &mut self.cells[cell_handle];
             cell.last_seen = time;
             cell.point = point;
-            cell.tile = tile;
-
-            // Update the cell's flags.
             cell.shade = shade;
-            cell.visible = visible;
-            cell.see_entity_at = see_all_entities;
+            cell.tile = tile;
 
             // Clone items, but reuse the existing allocation, if any.
             cell.items.clear();
@@ -318,7 +297,6 @@ impl Knowledge {
                 friend: Default::default(),
                 asleep: Default::default(),
                 player: Default::default(),
-                visible: Default::default(),
                 sneaking: Default::default(),
             })
         });
@@ -346,7 +324,6 @@ impl Knowledge {
         entry.friend = same;
         entry.asleep = other.asleep;
         entry.player = other.player;
-        entry.visible = seen;
         entry.sneaking = other.sneaking;
 
         handle
@@ -369,7 +346,7 @@ impl Knowledge {
         for entity in &mut self.entities {
             if !entity.heard { continue; }
             let Some(&h) = self.cell_by_point.get(&entity.pos) else { continue; };
-            if self.cells[h].see_entity_at { entity.heard = false; }
+            if self.cells[h].last_see_entity_at.tick == self.time.tick { entity.heard = false; }
         }
         if player { return; }
 
@@ -446,7 +423,7 @@ impl<'a> CellResult<'a> {
 
     pub fn visibility(&self) -> i32 {
         let Some(x) = self.cell else { return -1 };
-        if x.visible { x.visibility } else { -1 }
+        if x.last_seen.tick == self.root.time.tick { x.visibility } else { -1 }
     }
 
     // Derived fields
@@ -476,10 +453,12 @@ impl<'a> CellResult<'a> {
     }
 
     pub fn visible(&self) -> bool {
-        self.cell.map(|x| x.visible).unwrap_or(false)
+        let Some(x) = self.cell else { return false };
+        x.last_seen.tick == self.root.time.tick
     }
 
     pub fn can_see_entity_at(&self) -> bool {
-        self.cell.map(|x| x.see_entity_at).unwrap_or(false)
+        let Some(x) = self.cell else { return false };
+        x.last_see_entity_at.tick == self.root.time.tick
     }
 }

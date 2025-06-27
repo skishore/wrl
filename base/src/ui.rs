@@ -67,7 +67,7 @@ pub fn get_direction(ch: char) -> Option<Point> {
 fn rivals<'a>(entity: &'a Entity) -> Vec<&'a EntityKnowledge> {
     let mut rivals = vec![];
     for other in &entity.known.entities {
-        if !other.visible { break; }
+        if !other.visible() { break; }
         if other.eid != entity.eid { rivals.push(other); }
     }
     let pos = entity.pos;
@@ -218,7 +218,7 @@ pub struct Target {
 }
 
 fn can_target(entity: &EntityKnowledge) -> bool {
-    entity.visible && !entity.friend
+    entity.visible() && !entity.friend
 }
 
 fn init_target(data: TargetData, source: Point, target: Point) -> Box<Target> {
@@ -836,7 +836,7 @@ impl UI {
             slice.set(slice_point(other.pos), other.glyph);
         }
         for other in &entity.known.entities {
-            let color = if other.visible { 0x040 } else {
+            let color = if other.visible() { 0x040 } else {
                 if other.moved { 0x400 } else { 0x440 }
             };
             let glyph = other.glyph.with_fg(Color::black()).with_bg(color);
@@ -1038,7 +1038,7 @@ impl UI {
             }
             None => {
                 let view = self.focus.and_then(|x| known.entity(x));
-                let seen = view.map(|x| x.visible).unwrap_or(false);
+                let seen = view.map(|x| x.visible()).unwrap_or(false);
                 let cell = view.map(|x| known.get(x.pos)).unwrap_or(known.default());
                 let header = if seen {
                     "Last target:"
