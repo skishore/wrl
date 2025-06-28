@@ -1,3 +1,4 @@
+use std::iter::FusedIterator;
 use std::num::NonZeroU64;
 use std::ops::{Index, IndexMut};
 
@@ -74,9 +75,11 @@ fn to_eid(key: DefaultKey) -> EID {
 
 // EntityMap
 
+type BaseMap = SlotMap<DefaultKey, Entity>;
+
 #[derive(Default)]
 pub struct EntityMap {
-    map: SlotMap<DefaultKey, Entity>,
+    map: BaseMap
 }
 
 impl EntityMap {
@@ -114,6 +117,10 @@ impl EntityMap {
     pub fn has(&self, eid: EID) -> bool { self.map.contains_key(to_key(eid)) }
 
     pub fn remove(&mut self, eid: EID) -> Option<Entity> { self.map.remove(to_key(eid)) }
+
+    pub fn iter(&self) -> Iter<'_> { Iter { base: self.map.iter() } }
+
+    pub fn iter_mut(&mut self) -> IterMut<'_> { IterMut { base: self.map.iter_mut() } }
 }
 
 impl Index<EID> for EntityMap {
@@ -127,4 +134,48 @@ impl IndexMut<EID> for EntityMap {
     fn index_mut(&mut self, eid: EID) -> &mut Self::Output {
         self.get_mut(eid).unwrap()
     }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// EntityMap iterators
+
+pub struct Iter<'a> {
+    base: slotmap::basic::Iter<'a, DefaultKey, Entity>,
+}
+
+pub struct IterMut<'a> {
+    base: slotmap::basic::IterMut<'a, DefaultKey, Entity>,
+}
+
+impl<'a> FusedIterator for Iter<'a> {}
+
+impl<'a> FusedIterator for IterMut<'a> {}
+
+impl<'a> Iterator for Iter<'a> {
+    type Item = (EID, &'a Entity);
+    fn next(&mut self) -> Option<Self::Item> {
+        let (key, entity) = self.base.next()?;
+        Some((to_eid(key), entity))
+    }
+}
+
+impl<'a> Iterator for IterMut<'a> {
+    type Item = (EID, &'a mut Entity);
+    fn next(&mut self) -> Option<Self::Item> {
+        let (key, entity) = self.base.next()?;
+        Some((to_eid(key), entity))
+    }
+}
+
+impl<'a> IntoIterator for &'a EntityMap {
+    type Item = (EID, &'a Entity);
+    type IntoIter = Iter<'a>;
+    fn into_iter(self) -> Self::IntoIter { self.iter() }
+}
+
+impl<'a> IntoIterator for &'a mut EntityMap {
+    type Item = (EID, &'a mut Entity);
+    type IntoIter = IterMut<'a>;
+    fn into_iter(self) -> Self::IntoIter { self.iter_mut() }
 }

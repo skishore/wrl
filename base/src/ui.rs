@@ -522,7 +522,7 @@ impl UI {
         buffer.fill(buffer.default);
         self.render_layout(buffer);
 
-        self.render_log(buffer);
+        self.render_log(buffer, board);
         self.render_rivals(buffer, entity);
         self.render_status(buffer, entity, None, None);
         self.render_target(buffer, entity);
@@ -831,8 +831,7 @@ impl UI {
             let glyph = slice.get(point);
             slice.set(point, glyph.with_fg(Color::black()).with_bg(0x400));
         }
-        for &oid in &board.entity_order {
-            let other = &board.entities[oid];
+        for (_, other) in &board.entities {
             slice.set(slice_point(other.pos), other.glyph);
         }
         for other in &entity.known.entities {
@@ -927,8 +926,9 @@ impl UI {
 
     // Rendering each section of the UI
 
-    fn render_log(&self, buffer: &mut Buffer) {
+    fn render_log(&self, buffer: &mut Buffer, board: &Board) {
         let slice = &mut Slice::new(buffer, self.layout.log);
+        slice.write_str(&format!("{}", board.time)).newline();
         for line in &self.log.lines {
             slice.set_fg(Some(line.color)).write_str(&line.text).newline();
         }

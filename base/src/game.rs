@@ -11,7 +11,7 @@ use crate::base::{Buffer, Color, Glyph};
 use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs};
 use crate::effect::{Effect, Event, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
-use crate::knowledge::{Knowledge, Timedelta};
+use crate::knowledge::{Knowledge, Timedelta, TD, TS};
 use crate::mapgen::mapgen_with_size as mapgen;
 use crate::pathing::Status;
 use crate::shadowcast::{INITIAL_VISIBILITY, VISIBILITY_LOSSES, Vision, VisionArgs};
@@ -31,8 +31,8 @@ pub const FOV_RADIUS_PC_: i32 = 21;
 const FOV_RADIUS_IN_TALL_GRASS: usize = 4;
 const VISIBILITY_LOSS: i32 = VISIBILITY_LOSSES[FOV_RADIUS_IN_TALL_GRASS - 1];
 
-const SPEED_PC_: f64 = 0.1;
-const SPEED_NPC: f64 = 0.1;
+const SPEED_PC_: f64 = 1.;
+const SPEED_NPC: f64 = 1.;
 
 const TRACKING_TURNS: i32 = 8;
 
@@ -179,10 +179,10 @@ static_assert_size!(Cell, 24);
 static_assert_size!(Cell, 32);
 
 pub struct Board {
-    active_entity_index: usize,
-    pub entity_order: Vec<EID>,
-    pub entities: EntityMap,
     map: Matrix<Cell>,
+    active_entity: Option<EID>,
+    pub entities: EntityMap,
+    pub time: TS,
     // Animation
     _effect: Effect,
     // Knowledge state
@@ -209,10 +209,10 @@ impl Board {
         };
 
         let mut result = Self {
-            active_entity_index: 0,
-            entity_order: vec![],
-            entities: EntityMap::default(),
             map: Matrix::new(size, cell),
+            active_entity: None,
+            entities: EntityMap::default(),
+            time: TS::default(),
             // Animation
             _effect: Effect::default(),
             // Knowledge state
@@ -281,10 +281,6 @@ impl Board {
 
     // Getters
 
-    pub fn get_active_entity(&self) -> EID {
-        self.entity_order[self.active_entity_index]
-    }
-
     pub fn get_cell(&self, p: Point) -> &Cell { self.map.entry_ref(p) }
 
     pub fn get_entity(&self, eid: EID) -> Option<&Entity> { self.entities.get(eid) }
@@ -325,18 +321,8 @@ impl Board {
         let cell = self.map.entry_mut(pos).unwrap();
         let prev = replace(&mut cell.eid, Some(eid));
         assert!(prev.is_none());
-        self.entity_order.push(eid);
         self.update_known(eid, rng);
         eid
-    }
-
-    fn advance_entity(&mut self) {
-        let eid = self.get_active_entity();
-        charge(&mut self.entities[eid]);
-        self.active_entity_index += 1;
-        if self.active_entity_index == self.entity_order.len() {
-            self.active_entity_index = 0;
-        }
     }
 
     fn move_entity(&mut self, eid: EID, target: Point) {
@@ -362,21 +348,13 @@ impl Board {
         let okay = self.entities.remove(eid).is_some();
         assert!(okay);
 
-        // Remove the entity from the entity_order list.
-        let index = self.entity_order.iter().position(|&x| x == eid).unwrap();
-        self.entity_order.remove(index);
-        if self.active_entity_index > index {
-            self.active_entity_index -= 1;
-        } else if self.active_entity_index == self.entity_order.len() {
-            self.active_entity_index = 0;
-        }
+        // Mark the entity as inactive, if it was active.
+        if self.active_entity == Some(eid) { self.active_entity = None; }
     }
 
     fn reset(&mut self, tile: &'static Tile) {
         self.map.fill(Cell { eid: None, items: thin_vec![], scent: 0, shadow: 0, tile });
         self.update_edge_shadows();
-        self.entity_order.clear();
-        self.active_entity_index = 0;
         self.entities.clear();
     }
 
@@ -424,8 +402,9 @@ impl Board {
     }
 
     fn start_next_turn(&mut self, eid: EID) {
+        let time = TD::default();
         let Some(entity) = self.entities.get_mut(eid) else { return; };
-        entity.known.advance_time(Timedelta { ticks: 1, turns: 1 }, entity.player);
+        entity.known.advance_time(Timedelta { time, ticks: 1, turns: 1 }, entity.player);
     }
 
     fn remove_known_entity(&mut self, eid: EID, oid: EID) {
@@ -495,6 +474,47 @@ impl Board {
 
 //////////////////////////////////////////////////////////////////////////////
 
+pub fn move_ready(entity: &Entity) -> bool { entity.move_timer <= 0 }
+
+pub fn turn_ready(entity: &Entity) -> bool { entity.turn_timer <= 0 }
+
+fn drain(entity: &mut Entity, result: &ActionResult) {
+    entity.move_timer += (MOVE_TIMER as f64 * result.moves).round() as i32;
+    entity.turn_timer += (TURN_TIMER as f64 * result.turns).round() as i32;
+}
+
+fn advance_turn(board: &mut Board) -> Option<EID> {
+    if let Some(x) = board.active_entity { return Some(x); }
+
+    let mut best_eid = None;
+    let mut best_time = TD::max();
+    for (eid, entity) in &board.entities {
+        assert!(entity.speed > 0.);
+        let left = (entity.turn_timer as f64) * (1. / TURN_TIMER as f64);
+        let time = TD::from_seconds(left / entity.speed);
+        if time >= best_time { continue; }
+
+        best_eid = Some(eid);
+        best_time = time;
+    }
+
+    let eid = best_eid?;
+    let time = std::cmp::max(best_time, TD::default());
+    let charge = time.to_seconds() * TURN_TIMER as f64;
+
+    for (_, entity) in &mut board.entities {
+        let delta = (charge * entity.speed).round() as i32;
+        if entity.move_timer > 0 { entity.move_timer -= delta; }
+        if entity.turn_timer > 0 { entity.turn_timer -= delta; }
+    }
+    board.time = board.time + time;
+    board.active_entity = Some(eid);
+
+    return Some(eid);
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 // Action
 
 pub struct EatAction { pub point: Point, pub item: Option<Item> }
@@ -524,21 +544,6 @@ impl ActionResult {
     fn success() -> Self { Self::success_turns(1.) }
     fn success_moves(moves: f64) -> Self { Self { success: true,  moves, turns: 1. } }
     fn success_turns(turns: f64) -> Self { Self { success: true,  moves: 0., turns } }
-}
-
-pub fn move_ready(entity: &Entity) -> bool { entity.move_timer <= 0 }
-
-pub fn turn_ready(entity: &Entity) -> bool { entity.turn_timer <= 0 }
-
-fn charge(entity: &mut Entity) {
-    let charge = (TURN_TIMER as f64 * entity.speed).round() as i32;
-    if entity.move_timer > 0 { entity.move_timer -= charge; }
-    if entity.turn_timer > 0 { entity.turn_timer -= charge; }
-}
-
-fn drain(entity: &mut Entity, result: &ActionResult) {
-    entity.move_timer += (MOVE_TIMER as f64 * result.moves).round() as i32;
-    entity.turn_timer += (TURN_TIMER as f64 * result.turns).round() as i32;
 }
 
 fn can_attack(board: &Board, entity: &Entity, target: Point, range: i32) -> bool {
@@ -658,9 +663,8 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                     // Noise generation, for quick moves.
                     let mut updated = vec![];
                     let max = if noisy { NOISY_RADIUS } else { 1 };
-                    for &oid in &state.board.entity_order {
+                    for (oid, other) in &state.board.entities {
                         if oid == eid { continue; }
-                        let other = &state.board.entities[oid];
                         if other.asleep && !noisy { continue; }
                         let sr = (other.pos - source).len_nethack() <= max;
                         let tr = (other.pos - target).len_nethack() <= max;
@@ -788,10 +792,11 @@ fn apply_effect(mut effect: Effect, what: FT, callback: CB) -> Effect {
 fn process_input(state: &mut State, input: Input) {
     if input == Input::Char('q') || input == Input::Char('w') {
         let board = &state.board;
-        let i = board.entity_order.iter().position(|&x| Some(x) == state.pov).unwrap_or(0);
-        let l = board.entity_order.len();
+        let eids: Vec<_> = board.entities.iter().map(|(eid, _)| eid).collect();
+        let i = eids.iter().position(|&x| Some(x) == state.pov).unwrap_or(0);
+        let l = eids.len();
         let j = (i + if input == Input::Char('q') { l - 1 } else { 1 }) % l;
-        state.pov = if j == 0 { None } else { Some(board.entity_order[j]) };
+        state.pov = if j == 0 { None } else { Some(eids[j]) };
         state.ui.debug = Default::default();
         return;
     }
@@ -846,11 +851,8 @@ fn update_state(state: &mut State) {
     let game_loop_active = |state: &State| {
         state.get_player().cur_hp > 0 && state.board.get_frame().is_none()
     };
-
     let needs_input = |state: &State| {
-        if !game_loop_active(state) { return false; }
-        if !matches!(state.input, Action::WaitForInput) { return false; }
-        state.board.get_active_entity() == state.player
+        game_loop_active(state) && matches!(state.input, Action::WaitForInput)
     };
 
     let mut update = false;
@@ -863,17 +865,11 @@ fn update_state(state: &mut State) {
     if state.ui.update_target(player) { return; }
 
     while game_loop_active(state) {
-        let eid = state.board.get_active_entity();
-        let entity = &state.board.entities[eid];
-        let player = entity.player;
-        let pos = entity.pos;
+        let Some(eid) = advance_turn(&mut state.board) else { break };
 
-        if !turn_ready(entity) {
-            state.board.advance_entity();
-            continue;
-        } else if player && needs_input(state) {
-            break;
-        }
+        let entity = &state.board.entities[eid];
+        let Entity { player, pos, .. } = *entity;
+        if player && needs_input(state) { break; }
 
         state.board.update_known(eid, &mut state.rng);
         state.board.update_known(state.player, &mut state.rng);
@@ -893,7 +889,10 @@ fn update_state(state: &mut State) {
             state.board.update_scent();
         }
 
-        if let Some(x) = state.board.entities.get_mut(eid) { drain(x, &result); }
+        let Some(entity) = state.board.entities.get_mut(eid) else { continue };
+
+        state.board.active_entity = None;
+        drain(entity, &result);
     }
 
     if update { update_pov_entities(state); }

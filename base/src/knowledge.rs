@@ -19,53 +19,117 @@ use crate::shadowcast::Vision;
 const MAX_ENTITY_MEMORY: usize = 64;
 const MAX_TILE_MEMORY: usize = 4096;
 
-pub const PLAYER_MAP_MEMORY: i32 = 0;
+//////////////////////////////////////////////////////////////////////////////
+
+// New TD / TS (turn-free timedelta / timestamp)
+
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+pub struct TD(i32);
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct TS(u32);
+
+impl TD {
+    const SCALE: f64 = 1000.;
+
+    pub fn max() -> Self {
+        Self(i32::MAX)
+    }
+
+    pub fn from_seconds(seconds: f64) -> Self {
+        Self((TD::SCALE * seconds).round() as i32)
+    }
+
+    pub fn to_seconds(&self) -> f64 {
+        (1. / TD::SCALE) * self.0 as f64
+    }
+}
+
+impl std::ops::Add<TD> for TD {
+    type Output = Self;
+    fn add(self, o: Self) -> Self {
+        Self(self.0 + o.0)
+    }
+}
+
+impl std::ops::Sub for TD {
+    type Output = Self;
+    fn sub(self, o: Self) -> Self {
+        Self(self.0 - o.0)
+    }
+}
+
+impl std::ops::Add<TD> for TS {
+    type Output = Self;
+    fn add(self, o: TD) -> Self::Output {
+        Self(self.0.wrapping_add(o.0 as u32))
+    }
+}
+
+impl std::ops::Sub for TS {
+    type Output = TD;
+    fn sub(self, o: Self) -> Self::Output {
+        TD(self.0.wrapping_sub(o.0) as i32)
+    }
+}
+
+impl std::fmt::Display for TS {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        let scale = TD::SCALE as u32;
+        let (left, msec) = (self.0 / scale, self.0 % scale);
+        let (left, sec) = (left / 60, left % 60);
+        let (left, min) = (left / 60, left % 60);
+        write!(fmt, "{:0>2}:{:0>2}:{:0>2}:{:0>3}", left, min, sec, msec)
+    }
+}
 
 //////////////////////////////////////////////////////////////////////////////
 
 // Timestamp
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct Timedelta { pub ticks: i32, pub turns: i32 }
+pub struct Timedelta { pub time: TD, pub ticks: i32, pub turns: i32 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct Timestamp { tick: u32, turn: u32 }
+pub struct Timestamp { time: TS, tick: u32, turn: u32 }
 
 impl Timedelta {
     pub fn max() -> Self {
-        Self { ticks: i32::MAX, turns: i32::MAX }
+        Self { time: TD::max(), ticks: i32::MAX, turns: i32::MAX }
     }
 }
 
 impl std::ops::Add<Timedelta> for Timedelta {
     type Output = Self;
     fn add(self, o: Self) -> Self {
-        Self { ticks: self.ticks + o.ticks, turns: self.turns + o.turns }
+        Self { time: self.time + o.time, ticks: self.ticks + o.ticks, turns: self.turns + o.turns }
     }
 }
 
 impl std::ops::Sub for Timedelta {
     type Output = Self;
     fn sub(self, o: Self) -> Self {
-        Self { ticks: self.ticks - o.ticks, turns: self.turns - o.turns }
+        Self { time: self.time - o.time, ticks: self.ticks - o.ticks, turns: self.turns - o.turns }
     }
 }
 
 impl std::ops::Add<Timedelta> for Timestamp {
     type Output = Self;
     fn add(self, o: Timedelta) -> Self::Output {
+        let time = self.time + o.time;
         let tick = self.tick.wrapping_add(o.ticks as u32);
         let turn = self.turn.wrapping_add(o.turns as u32);
-        Self::Output { tick, turn }
+        Self::Output { time, tick, turn }
     }
 }
 
 impl std::ops::Sub for Timestamp {
     type Output = Timedelta;
     fn sub(self, o: Self) -> Self::Output {
+        let time = self.time - o.time;
         let ticks = self.tick.wrapping_sub(o.tick) as i32;
         let turns = self.turn.wrapping_sub(o.turn) as i32;
-        Self::Output { ticks, turns }
+        Self::Output { time, ticks, turns }
     }
 }
 
@@ -90,7 +154,7 @@ pub struct CellKnowledge {
 #[cfg(target_pointer_width = "32")]
 static_assert_size!(CellKnowledge, 40);
 #[cfg(target_pointer_width = "64")]
-static_assert_size!(CellKnowledge, 56);
+static_assert_size!(CellKnowledge, 64);
 
 pub struct EntityKnowledge {
     pub eid: EID,
@@ -117,7 +181,7 @@ pub struct EntityKnowledge {
 #[cfg(target_pointer_width = "32")]
 static_assert_size!(EntityKnowledge, 76);
 #[cfg(target_pointer_width = "64")]
-static_assert_size!(EntityKnowledge, 80);
+static_assert_size!(EntityKnowledge, 88);
 
 #[derive(Default)]
 pub struct Knowledge {
@@ -174,16 +238,16 @@ impl Knowledge {
     pub fn advance_time(&mut self, delta: Timedelta, player: bool) {
         self.time = self.time + delta;
         for x in &mut self.entities { x.age = x.age + delta; }
-        if !player || delta.turns == 0 { return; }
+        if !player { return; }
 
-        while let Some(x) = self.cells.back() &&
-              (self.time - x.last_seen).turns >= PLAYER_MAP_MEMORY {
+        while let Some(x) = self.cells.back() && self.time.tick != x.last_seen.tick {
             self.forget_last_cell();
         }
     }
 
     pub fn update(&mut self, me: &Entity, board: &Board, vision: &Vision, rng: &mut RNG) {
-        self.advance_time(Timedelta { ticks: 1, turns: 0 }, me.player);
+        let time = board.time - self.time.time;
+        self.advance_time(Timedelta { time, ticks: 1, turns: 0 }, me.player);
 
         let (pos, time) = (me.pos, self.time);
         let dark = matches!(board.get_light(), Light::None);
