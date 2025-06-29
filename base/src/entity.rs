@@ -31,19 +31,23 @@ pub struct Entity {
     pub glyph: Glyph,
     pub known: Box<Knowledge>,
     pub ai: Box<AIState>,
-    pub asleep: bool,
-    pub player: bool,
-    pub predator: bool,
-    pub sneaking: bool,
     pub cur_hp: i32,
     pub max_hp: i32,
     pub move_timer: i32,
     pub turn_timer: i32,
     pub range: i32,
     pub speed: f64,
+
+    // Location:
     pub pos: Point,
     pub dir: Point,
     pub history: VecDeque<Point>,
+
+    // Flags:
+    pub asleep: bool,
+    pub player: bool,
+    pub predator: bool,
+    pub sneaking: bool,
 }
 
 const HISTORY_SIZE: usize = 64;
@@ -113,19 +117,23 @@ impl EntityMap {
             glyph: args.glyph,
             known: Default::default(),
             ai: Box::new(AIState::new(args.predator, rng)),
-            asleep: false,
-            player: args.player,
-            predator: args.predator,
-            sneaking: false,
             cur_hp: MAX_HP,
             max_hp: MAX_HP,
             move_timer: 0,
             turn_timer: 0,
             range: ATTACK_RANGE,
             speed: args.speed,
+
+            // Location:
             pos: args.pos,
             dir: *sample(&dirs::ALL, rng),
             history,
+
+            // Flags:
+            asleep: false,
+            player: args.player,
+            predator: args.predator,
+            sneaking: false,
         });
         to_eid(key)
     }
