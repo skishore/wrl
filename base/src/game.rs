@@ -172,13 +172,16 @@ pub struct Board {
     pub entity_order: Vec<EID>,
     pub entities: EntityMap,
     map: Matrix<Cell>,
-    // Animation
+
+    // Animation:
     _effect: Effect,
-    // Knowledge state
+
+    // Knowledge state:
     known: Option<Box<Knowledge>>,
     npc_vision: Vision,
     _pc_vision: Vision,
-    // Environmental effects
+
+    // Environmental effects:
     light: Light,
     shadow: Vec<Point>,
 }
@@ -196,13 +199,16 @@ impl Board {
             entity_order: vec![],
             entities: EntityMap::default(),
             map: Matrix::new(size, cell),
-            // Animation
+
+            // Animation:
             _effect: Effect::default(),
-            // Knowledge state
+
+            // Knowledge state:
             known: Some(Box::default()),
             npc_vision: Vision::new(FOV_RADIUS_NPC),
             _pc_vision: Vision::new(FOV_RADIUS_PC_),
-            // Environmental effects
+
+            // Environmental effects:
             light,
             shadow,
         };
