@@ -830,9 +830,8 @@ impl UI {
             let glyph = slice.get(point);
             slice.set(point, glyph.with_fg(Color::black()).with_bg(0x400));
         }
-        for &eid in &board.entity_order {
-            let entity = &board.entities[eid];
-            slice.set(slice_point(entity.pos), entity.glyph);
+        for (_, other) in &board.entities {
+            slice.set(slice_point(other.pos), other.glyph);
         }
         for other in &entity.known.entities {
             let color = if other.visible { 0x040 } else {

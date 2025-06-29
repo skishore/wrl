@@ -610,9 +610,8 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                     // Noise generation, for quick moves.
                     let mut updated = vec![];
                     let max = if noisy { NOISY_RADIUS } else { 1 };
-                    for &oid in &state.board.entity_order {
+                    for (oid, other) in &state.board.entities {
                         if oid == eid { continue; }
-                        let other = &state.board.entities[oid];
                         if other.asleep && !noisy { continue; }
                         let sr = (other.pos - source).len_nethack() <= max;
                         let tr = (other.pos - target).len_nethack() <= max;
@@ -740,10 +739,11 @@ fn apply_effect(mut effect: Effect, what: FT, callback: CB) -> Effect {
 fn process_input(state: &mut State, input: Input) {
     if input == Input::Char('q') || input == Input::Char('w') {
         let board = &state.board;
-        let i = board.entity_order.iter().position(|&x| Some(x) == state.pov).unwrap_or(0);
-        let l = board.entity_order.len();
+        let eids: Vec<_> = board.entities.iter().map(|(eid, _)| eid).collect();
+        let i = eids.iter().position(|&x| Some(x) == state.pov).unwrap_or(0);
+        let l = eids.len();
         let j = (i + if input == Input::Char('q') { l - 1 } else { 1 }) % l;
-        state.pov = if j == 0 { None } else { Some(board.entity_order[j]) };
+        state.pov = if j == 0 { None } else { Some(eids[j]) };
         state.ui.debug = Default::default();
         return;
     }

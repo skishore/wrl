@@ -159,10 +159,8 @@ impl Knowledge {
 
         // Clear and recompute scents. Only the player gives off a scent.
         self.scents.clear();
-        for &oid in &board.entity_order {
-            if oid == me.eid { continue; }
-            let other = &board.entities[oid];
-            if !other.player { continue; }
+        for (oid, other) in &board.entities {
+            if oid == me.eid || !other.player { continue; }
             let mut remainder = rng.gen::<f64>();
             for age in 0..other.history.capacity() {
                 remainder -= other.get_historical_scent_at(me.pos, age);

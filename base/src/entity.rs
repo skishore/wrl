@@ -1,8 +1,10 @@
 use std::collections::VecDeque;
+use std::iter::FusedIterator;
 use std::num::NonZeroU64;
 use std::ops::{Index, IndexMut};
 
-use slotmap::{DefaultKey, Key, KeyData, SlotMap};
+use slotmap::{DefaultKey, Key, KeyData};
+use slotmap::hop::HopSlotMap;
 
 use crate::static_assert_size;
 use crate::ai::AIState;
@@ -12,6 +14,7 @@ use crate::knowledge::Knowledge;
 //////////////////////////////////////////////////////////////////////////////
 
 const ATTACK_RANGE: i32 = 8;
+const HISTORY_SIZE: usize = 64;
 const MAX_HP: i32 = 3;
 
 //////////////////////////////////////////////////////////////////////////////
@@ -50,9 +53,33 @@ pub struct Entity {
     pub sneaking: bool,
 }
 
-const HISTORY_SIZE: usize = 64;
-
 impl Entity {
+    fn new(eid: EID, args: &EntityArgs, rng: &mut RNG) -> Self {
+        Self {
+            eid,
+            glyph: args.glyph,
+            known: Default::default(),
+            ai: Box::new(AIState::new(args.predator, rng)),
+            cur_hp: MAX_HP,
+            max_hp: MAX_HP,
+            move_timer: 0,
+            turn_timer: 0,
+            range: ATTACK_RANGE,
+            speed: args.speed,
+
+            // Location:
+            pos: args.pos,
+            dir: *sample(&dirs::ALL, rng),
+            history: VecDeque::with_capacity(HISTORY_SIZE),
+
+            // Flags:
+            asleep: false,
+            player: args.player,
+            predator: args.predator,
+            sneaking: false,
+        }
+    }
+
     pub fn get_scent_at(&self, p: Point) -> f64 {
         let mut total = 0.;
         for age in 0..self.history.capacity() {
@@ -102,51 +129,29 @@ fn to_eid(key: DefaultKey) -> EID {
 
 // EntityMap
 
+type BaseMap = HopSlotMap<DefaultKey, Entity>;
+
 #[derive(Default)]
-pub struct EntityMap {
-    map: SlotMap<DefaultKey, Entity>,
-}
+pub struct EntityMap(BaseMap);
 
 impl EntityMap {
     pub fn add(&mut self, args: &EntityArgs, rng: &mut RNG) -> EID {
-        let mut history = VecDeque::with_capacity(HISTORY_SIZE);
-        history.push_front(args.pos);
-
-        let key = self.map.insert_with_key(|x| Entity {
-            eid: to_eid(x),
-            glyph: args.glyph,
-            known: Default::default(),
-            ai: Box::new(AIState::new(args.predator, rng)),
-            cur_hp: MAX_HP,
-            max_hp: MAX_HP,
-            move_timer: 0,
-            turn_timer: 0,
-            range: ATTACK_RANGE,
-            speed: args.speed,
-
-            // Location:
-            pos: args.pos,
-            dir: *sample(&dirs::ALL, rng),
-            history,
-
-            // Flags:
-            asleep: false,
-            player: args.player,
-            predator: args.predator,
-            sneaking: false,
-        });
-        to_eid(key)
+        to_eid(self.0.insert_with_key(|x| Entity::new(to_eid(x), args, rng)))
     }
 
-    pub fn clear(&mut self) { self.map.clear(); }
+    pub fn clear(&mut self) { self.0.clear(); }
 
-    pub fn get(&self, eid: EID) -> Option<&Entity> { self.map.get(to_key(eid)) }
+    pub fn get(&self, eid: EID) -> Option<&Entity> { self.0.get(to_key(eid)) }
 
-    pub fn get_mut(&mut self, eid: EID) -> Option<&mut Entity> { self.map.get_mut(to_key(eid)) }
+    pub fn get_mut(&mut self, eid: EID) -> Option<&mut Entity> { self.0.get_mut(to_key(eid)) }
 
-    pub fn has(&self, eid: EID) -> bool { self.map.contains_key(to_key(eid)) }
+    pub fn has(&self, eid: EID) -> bool { self.0.contains_key(to_key(eid)) }
 
-    pub fn remove(&mut self, eid: EID) -> Option<Entity> { self.map.remove(to_key(eid)) }
+    pub fn remove(&mut self, eid: EID) -> Option<Entity> { self.0.remove(to_key(eid)) }
+
+    pub fn iter(&self) -> Iter<'_> { Iter(self.0.iter()) }
+
+    pub fn iter_mut(&mut self) -> IterMut<'_> { IterMut(self.0.iter_mut()) }
 }
 
 impl Index<EID> for EntityMap {
@@ -159,5 +164,44 @@ impl Index<EID> for EntityMap {
 impl IndexMut<EID> for EntityMap {
     fn index_mut(&mut self, eid: EID) -> &mut Self::Output {
         self.get_mut(eid).unwrap()
+    }
+}
+
+impl<'a> IntoIterator for &'a EntityMap {
+    type Item = (EID, &'a Entity);
+    type IntoIter = Iter<'a>;
+    fn into_iter(self) -> Self::IntoIter { self.iter() }
+}
+
+
+impl<'a> IntoIterator for &'a mut EntityMap {
+    type Item = (EID, &'a mut Entity);
+    type IntoIter = IterMut<'a>;
+    fn into_iter(self) -> Self::IntoIter { self.iter_mut() }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// EntityMap iterators
+
+pub struct Iter<'a>(slotmap::hop::Iter<'a, DefaultKey, Entity>);
+
+pub struct IterMut<'a>(slotmap::hop::IterMut<'a, DefaultKey, Entity>);
+
+impl<'a> FusedIterator for Iter<'a> {}
+
+impl<'a> FusedIterator for IterMut<'a> {}
+
+impl<'a> Iterator for Iter<'a> {
+    type Item = (EID, &'a Entity);
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next().map(|(k, v)| (to_eid(k), v))
+    }
+}
+
+impl<'a> Iterator for IterMut<'a> {
+    type Item = (EID, &'a mut Entity);
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next().map(|(k, v)| (to_eid(k), v))
     }
 }
