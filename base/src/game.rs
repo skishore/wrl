@@ -957,16 +957,7 @@ impl State {
     pub fn render(&self, buffer: &mut Buffer) {
         let entity = self.pov.and_then(
             |x| self.board.get_entity(x)).unwrap_or(self.get_player());
-        let frame = self.board.get_frame();
-
-        let mut entities = vec![];
-        if !entity.player {
-            entities = self.board.entity_order.iter().map(|&x| {
-                let other = &self.board.entities[x];
-                (other.pos, other.glyph)
-            }).collect();
-        }
-        self.ui.render(buffer, entity, frame, &entities);
+        self.ui.render(buffer, entity, &self.board);
     }
 }
 

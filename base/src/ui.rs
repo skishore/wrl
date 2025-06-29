@@ -9,7 +9,7 @@ use crate::base::{Buffer, Color, Glyph, Matrix, Rect, Slice};
 use crate::effect::{Frame, self};
 use crate::entity::{EID, Entity};
 use crate::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_, WORLD_SIZE};
-use crate::game::{Input, Tile, show_item};
+use crate::game::{Board, Input, Tile, show_item};
 use crate::knowledge::{EntityKnowledge, Knowledge};
 use crate::pathing::Status;
 use crate::shadowcast::{Vision, VisionArgs};
@@ -515,8 +515,7 @@ pub struct UI {
 impl UI {
     // Rendering entry point
 
-    pub fn render(&self, buffer: &mut Buffer, entity: &Entity,
-                  frame: Option<&Frame>, entities: &[(Point, Glyph)]) {
+    pub fn render(&self, buffer: &mut Buffer, entity: &Entity, board: &Board) {
         if buffer.data.is_empty() {
             *buffer = Matrix::new(self.layout.bounds, ' '.into());
         }
@@ -529,9 +528,10 @@ impl UI {
         self.render_target(buffer, entity);
 
         // Render the base map, then the debug layer, then the weather:
+        let frame = board.get_frame();
         self.render_map(buffer, entity, frame);
         if !entity.player && frame.is_none() {
-            self.render_debug_overlay(buffer, entity, entities);
+            self.render_debug_overlay(buffer, entity, board);
         }
         self.render_weather(buffer, entity);
 
@@ -807,8 +807,7 @@ impl UI {
         entity.ai.debug(slice);
     }
 
-    fn render_debug_overlay(&self, buffer: &mut Buffer, entity: &Entity,
-                            entities: &[(Point, Glyph)]) {
+    fn render_debug_overlay(&self, buffer: &mut Buffer, entity: &Entity, board: &Board) {
         let slice = &mut Slice::new(buffer, self.layout.map);
         let offset = self.get_map_offset(entity);
 
@@ -831,8 +830,9 @@ impl UI {
             let glyph = slice.get(point);
             slice.set(point, glyph.with_fg(Color::black()).with_bg(0x400));
         }
-        for &(point, glyph) in entities {
-            slice.set(slice_point(point), glyph);
+        for &eid in &board.entity_order {
+            let entity = &board.entities[eid];
+            slice.set(slice_point(entity.pos), entity.glyph);
         }
         for other in &entity.known.entities {
             let color = if other.visible { 0x040 } else {
