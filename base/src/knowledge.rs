@@ -19,8 +19,6 @@ use crate::shadowcast::Vision;
 const MAX_ENTITY_MEMORY: usize = 64;
 const MAX_TILE_MEMORY: usize = 4096;
 
-pub const PLAYER_MAP_MEMORY: i32 = 0;
-
 //////////////////////////////////////////////////////////////////////////////
 
 // Timestamp
@@ -42,7 +40,6 @@ impl std::ops::Sub for Timestamp {
 type CellHandle = Handle<CellKnowledge>;
 type EntityHandle = Handle<EntityKnowledge>;
 
-#[derive(Clone)]
 pub struct CellKnowledge {
     handle: Option<EntityHandle>,
     pub last_see_entity_at: Timestamp,
@@ -52,7 +49,7 @@ pub struct CellKnowledge {
     pub tile: &'static Tile,
     visibility: i32,
 
-    // Small booleans, including some judgments.
+    // Flags:
     pub shade: bool,
     pub visible: bool,
     pub see_entity_at: bool,
@@ -68,13 +65,13 @@ pub struct EntityKnowledge {
     pub pos: Point,
     pub dir: Point,
     pub glyph: Glyph,
-
-    // Public info about the entity's status.
     pub name: &'static str,
+
+    // Stats:
     pub hp: f64,
     pub pp: f64,
 
-    // Small booleans, including some judgments.
+    // Flags:
     pub alive: bool,
     pub heard: bool,
     pub moved: bool,
@@ -116,7 +113,8 @@ impl CellKnowledge {
             point,
             tile,
             visibility: -1,
-            // Flags
+
+            // Flags:
             shade: false,
             visible: false,
             see_entity_at: false,
@@ -147,8 +145,7 @@ impl Knowledge {
         for x in &mut self.entities { x.age += 1; }
         if !player { return; }
 
-        while let Some(x) = self.cells.back() &&
-              self.time - x.last_seen >= PLAYER_MAP_MEMORY {
+        while let Some(x) = self.cells.back() && !x.visible {
             self.forget_last_cell();
         }
     }
@@ -266,11 +263,15 @@ impl Knowledge {
                 age: Default::default(),
                 pos: Default::default(),
                 dir: Default::default(),
+                glyph: Default::default(),
                 name: Default::default(),
+
+                // Stats:
                 hp: Default::default(),
                 pp: Default::default(),
+
+                // Flags:
                 alive: Default::default(),
-                glyph: Default::default(),
                 heard: Default::default(),
                 moved: Default::default(),
                 rival: Default::default(),
@@ -290,7 +291,6 @@ impl Knowledge {
         entry.age = 0;
         entry.pos = other.pos;
         entry.dir = other.dir;
-        entry.alive = other.cur_hp > 0;
         entry.glyph = other.glyph;
 
         entry.name = if other.player { "skishore" } else {
@@ -299,6 +299,7 @@ impl Knowledge {
         entry.hp = other.cur_hp as f64 / max(other.max_hp, 1) as f64;
         entry.pp = 1. - clamp(other.move_timer as f64 / MOVE_TIMER as f64, 0., 1.);
 
+        entry.alive = other.cur_hp > 0;
         entry.heard = heard;
         entry.moved = !seen;
         entry.rival = rival;
@@ -311,24 +312,19 @@ impl Knowledge {
         handle
     }
 
-    pub fn forget_cells_before(&mut self, limit: Timestamp) {
-        while let Some(x) = self.cells.back() && x.last_seen.0 < limit.0 {
-            self.forget_last_cell();
-        }
-    }
-
     pub fn remove_entity(&mut self, oid: EID) {
         let Some(handle) = self.entity_by_eid.remove(&oid) else { return };
+
         let EntityKnowledge { moved, pos, .. } = self.entities.remove(handle);
-        if !moved {
-            let cell_handle = self.cell_by_point.get(&pos);
-            let cell = &mut self.cells[*cell_handle.unwrap()];
-            assert!(cell.handle == Some(handle));
-            cell.handle = None;
-        }
+        if moved { return; }
+
+        let cell_handle = self.cell_by_point.get(&pos);
+        let cell = &mut self.cells[*cell_handle.unwrap()];
+        assert!(cell.handle == Some(handle));
+        cell.handle = None;
     }
 
-    // Private helpers
+    // Private helpers:
 
     fn forget(&mut self, player: bool) {
         for entity in &mut self.entities {

@@ -189,12 +189,11 @@ impl SharedAIState {
     }
 
     fn update(&mut self, entity: &Entity) {
-        if !entity.asleep {
-            self.till_assess = max(self.till_assess - 1, 0);
-            self.till_hunger = max(self.till_hunger - 1, 0);
-            self.till_thirst = max(self.till_thirst - 1, 0);
-            self.till_rested = max(self.till_rested - 1, 0);
-        }
+        if entity.asleep { return; }
+        self.till_assess = max(self.till_assess - 1, 0);
+        self.till_hunger = max(self.till_hunger - 1, 0);
+        self.till_thirst = max(self.till_thirst - 1, 0);
+        self.till_rested = max(self.till_rested - 1, 0);
     }
 }
 
@@ -1196,11 +1195,7 @@ impl AIState {
     pub fn plan(&mut self, entity: &Entity, env: &mut AIEnv) -> Action {
         // Step 0: update some initial, deterministic shared state.
         let known = &*entity.known;
-        let mut observations = vec![];
-        for cell in &known.cells {
-            if known.time - cell.last_seen > 0 { break; }
-            observations.push(cell);
-        }
+        let observations = known.cells.iter().take_while(|x| x.visible).collect();
         self.shared.update(entity);
 
         // Step 1: build a context object with all strategies' mutable state.
