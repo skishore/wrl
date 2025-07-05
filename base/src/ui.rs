@@ -159,15 +159,20 @@ impl Layout {
         let Point(x, y) = size;
         let w = UI_DEBUG_SIZE;
         let (col, row) = (UI_COL_SPACE, UI_ROW_SPACE);
-        let map = Rect { root: Point(1, 1), size: Point(2 * x, y) };
+        let map = Rect { root: Point(w + col + 1, 1), size: Point(2 * x, y) };
         let debug = Rect {
-            root: Point(map.root.0 + map.size.0 + col + 1, row + 1),
+            root: Point(0, row + 1),
             size: Point(w, y - 2 * row),
         };
-        let bounds = Point(debug.root.0 + debug.size.0, y + 2);
+        let log = Rect {
+            root: Point(0, map.root.1 + map.size.1 + row + 1),
+            size: Point(map.root.0 + map.size.0 + 1, UI_LOG_SIZE),
+        };
+        let bounds = log.root + log.size;
+        let bounds = Point(bounds.0, bounds.1 + row + 1);
 
         let x = Rect::default();
-        let (log, choice, rivals, status, target) = (x, x, x, x, x);
+        let (choice, rivals, status, target) = (x, x, x, x);
 
         Self { log, map, debug, choice, rivals, status, target, bounds }
     }
@@ -683,10 +688,12 @@ impl UI {
         let size = self.get_map_size();
         for y in 0..size.1 {
             for x in 0..size.0 {
-                let glyph = lookup(Point(x, y) + offset);
-                //let scent = entity.get_scent_at(Point(x, y) + offset);
-                //let color = Color::from((255, 128, 128)).fade(scent);
-                //let glyph = glyph.with_bg(color);
+                let mut glyph = lookup(Point(x, y) + offset);
+                if self.full {
+                    let scent = entity.get_scent_at(Point(x, y) + offset);
+                    let color = Color::from((255, 128, 128)).fade(scent);
+                    glyph = glyph.with_bg(color);
+                };
                 slice.set(Point(2 * x, y), glyph);
             }
         }
@@ -901,10 +908,13 @@ impl UI {
 
     fn render_log(&self, buffer: &mut Buffer, entity: &Entity) {
         let slice = &mut Slice::new(buffer, self.layout.log);
-        slice.write_str(&format!(
-            "Scent at {:?}: {:.2}; history = {} items",
-            entity.pos, entity.get_scent_at(entity.pos), entity.history.len()
-        )).newline();
+
+        let pos = entity.pos;
+        let time = entity.known.time;
+        let scent = entity.get_scent_at(pos);
+        slice.write_str(&format!("time: {:?}; pos: {:?}; scent: {:.2}",
+                                 time, pos, scent)).newline();
+
         for line in &self.log.lines {
             slice.set_fg(Some(line.color)).write_str(&line.text).newline();
         }
@@ -1208,8 +1218,7 @@ impl UI {
         self.render_title(buffer, uw, Point(0, uh - 1), "");
 
         if self.full {
-            let dl = self.layout.bounds.0 - mw;
-            self.render_title(buffer, dl, Point(ml + mw, 0), "Debug");
+            self.render_title(buffer, ml, Point(0, 0), "Debug");
         }
 
         self.render_box(buffer, &self.layout.map);
