@@ -166,19 +166,8 @@ struct SharedAIState {
     till_rested: i32,
 }
 
-impl Debug for SharedAIState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SharedAIState")
-         .field("till_assess", &self.till_assess)
-         .field("till_hunger", &self.till_hunger)
-         .field("till_rested", &self.till_rested)
-         .field("till_thirst", &self.till_thirst)
-         .finish()
-    }
-}
-
 impl SharedAIState {
-    pub fn new(predator: bool, rng: &mut RNG) -> Self {
+    fn new(predator: bool, rng: &mut RNG) -> Self {
         let max_hunger = if predator { MAX_HUNGER_CARNIVORE } else { MAX_HUNGER_HERBIVORE };
         Self {
             till_assess: rng.gen_range(0..MAX_ASSESS),
@@ -187,6 +176,15 @@ impl SharedAIState {
             till_thirst: rng.gen_range(0..MAX_THIRST),
         }
     }
+
+    fn debug(&self, slice: &mut Slice) {
+        slice.write_str("  SharedAIState:").newline();
+        slice.write_str(&format!("    till_assess: {}", self.till_assess)).newline();
+        slice.write_str(&format!("    till_hunger: {}", self.till_hunger)).newline();
+        slice.write_str(&format!("    till_thirst: {}", self.till_thirst)).newline();
+        slice.write_str(&format!("    till_rested: {}", self.till_rested)).newline();
+    }
+
 
     fn update(&mut self, entity: &Entity) {
         if entity.asleep { return; }
@@ -1190,6 +1188,7 @@ impl AIState {
             strategy.debug(slice);
             slice.newline();
         }
+        self.shared.debug(slice);
     }
 
     pub fn plan(&mut self, entity: &Entity, env: &mut AIEnv) -> Action {
