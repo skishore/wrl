@@ -34,10 +34,6 @@ impl Timedelta {
         self.0
     }
 
-    pub fn max() -> Self {
-        Self(i64::MAX)
-    }
-
     pub const fn to_seconds(self) -> f64 {
         let factor = (Self::LATCH * Self::SCALE) as f64;
         (1. / factor) * self.0 as f64
@@ -81,11 +77,11 @@ impl std::fmt::Debug for Timedelta {
 pub struct Timestamp(u64);
 
 impl Timestamp {
-    fn bump(self) -> Self {
+    pub fn bump(self) -> Self {
         self.latch(Timedelta::default())
     }
 
-    fn latch(self, other: Timedelta) -> Self {
+    pub fn latch(self, other: Timedelta) -> Self {
         let other = std::cmp::max(other, Timedelta(1));
         let value = self.0 + (other.0 as u64);
         let latch = value & !(Timedelta::LATCH as u64 - 1);
@@ -108,7 +104,9 @@ impl std::fmt::Debug for Timestamp {
         let (left, msec) = (left / scale, left % scale);
         let (left, sec) = (left / 60, left % 60);
         let (left, min) = (left / 60, left % 60);
-        write!(fmt, "{:0>2}:{:0>2}:{:0>2}.{:0>3} (+{})", left, min, sec, msec, tick)
+        let (left, hrs) = (left / 24, left % 24);
+        write!(fmt, "{}d {:0>2}:{:0>2}:{:0>2}.{:0>3} (+{})",
+               left, hrs, min, sec, msec, tick)
     }
 }
 
@@ -460,13 +458,13 @@ impl<'a> CellResult<'a> {
     pub fn get_cell(&self) -> Option<&CellKnowledge> { self.cell }
 
     pub fn time_since_seen(&self) -> Timedelta {
-        let Some(x) = self.cell else { return Timedelta::max() };
-        self.root.time - x.last_seen
+        let time = self.cell.map(|x| x.last_seen).unwrap_or_default();
+        self.root.time - time
     }
 
     pub fn time_since_entity_visible(&self) -> Timedelta {
-        let Some(x) = self.cell else { return Timedelta::max() };
-        self.root.time - x.last_see_entity_at
+        let time = self.cell.map(|x| x.last_see_entity_at).unwrap_or_default();
+        self.root.time - time
     }
 
     pub fn items(&self) -> &[Item] {

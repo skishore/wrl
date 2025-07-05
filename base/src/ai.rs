@@ -37,12 +37,18 @@ const MAX_THIRST: i32 = 256;
 const MAX_HUNGER_HERBIVORE: i32 = 1024;
 const MAX_HUNGER_CARNIVORE: i32 = 2048;
 
+// TODO: Express all flight logic in terms of time, not turns. We can't make
+// this change until we're back to a predator-prey environment.
+//
+// Introduce time-based logic for recomputing flight paths, too.
 const MIN_FLIGHT_TURNS: i32 = 16;
 const MAX_FLIGHT_TURNS: i32 = 64;
-const MAX_FLIGHT_TIME: Timedelta = Timedelta::from_seconds(128.);
+const MAX_FLIGHT_TIME: Timedelta = Timedelta::from_seconds(96.);
 
-const MIN_SEARCH_TIME: Timedelta = Timedelta::from_seconds(16.);
-const MAX_SEARCH_TIME: Timedelta = Timedelta::from_seconds(32.);
+const MIN_SEARCH_TIME: Timedelta = Timedelta::from_seconds(24.);
+const MAX_SEARCH_TIME: Timedelta = Timedelta::from_seconds(48.);
+
+const MAX_TRACKING_TIME: Timedelta = Timedelta::from_seconds(64.);
 
 const SLOWED_TURNS: f64 = 2.;
 const WANDER_TURNS: f64 = 2.;
@@ -539,11 +545,16 @@ impl Strategy for ExploreStrategy {
 
 //////////////////////////////////////////////////////////////////////////////
 
+struct TrackTarget {
+    age: Timedelta,
+    fresh: bool,
+    scent: Scent,
+}
+
 #[derive(Default)]
 struct TrackStrategy {
     path: CachedPath,
-    scent: Option<Scent>,
-    fresh: bool,
+    target: Option<TrackTarget>,
 }
 
 impl Strategy for TrackStrategy {
@@ -551,52 +562,51 @@ impl Strategy for TrackStrategy {
 
     fn debug(&self, slice: &mut Slice) {
         slice.write_str("Track").newline();
-        if let Some(x) = &self.scent {
-            slice.write_str(&format!("    scent.pos: {:?}", x.pos)).newline();
-            slice.write_str(&format!("    scent.time: {:?}", x.time)).newline();
-            slice.write_str(&format!("    fresh: {}", self.fresh)).newline();
+        if let Some(x) = &self.target {
+            slice.write_str(&format!("    age: {:?}", x.age)).newline();
+            slice.write_str(&format!("    pos: {:?}", x.scent.pos)).newline();
+            slice.write_str(&format!("    fresh: {}", x.fresh)).newline();
         }
     }
 
     fn bid(&mut self, ctx: &mut Context, _: bool) -> (Priority, i64) {
         if !self.path.check(ctx) { self.path.reset(); }
 
-        self.fresh = false;
+        if let Some(x) = &mut self.target {
+            x.age = ctx.known.time - x.scent.time;
+            x.fresh = false;
+        }
 
         for &scent in &ctx.known.scents {
-            let (fresh, newer) = match &self.scent {
-                Some(x) => (scent.pos != x.pos, scent.time < x.time),
+            let (fresh, newer) = match &self.target {
+                Some(x) => (scent.pos != x.scent.pos, scent.time > x.scent.time),
                 None => (true, true),
             };
             if !newer { continue; }
 
             if fresh { self.path.reset(); }
-            self.scent = Some(scent);
-            self.fresh = fresh;
+
+            let age = ctx.known.time - scent.time;
+            self.target = Some(TrackTarget { age, fresh, scent });
         }
 
-        let Some(x) = &self.scent else { return (Priority::Skip, 0) };
+        let old = matches!(&self.target, Some(x) if x.age > MAX_TRACKING_TIME);
+        if old { self.target = None; }
 
-        let age = ctx.known.time - x.time;
-        if age >= MAX_SEARCH_TIME {
-            self.scent = None;
-            self.fresh = false;
-            return (Priority::Skip, 0);
-        }
+        let Some(x) = &self.target else { return (Priority::Skip, 0) };
 
-        (Priority::Hunt, 2 * age.raw() + 1)
+        (Priority::Hunt, 2 * x.age.raw() + 1)
     }
 
     fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
-        let Some(x) = self.scent else { return None; };
+        let Some(x) = &self.target else { return None; };
 
-        if self.fresh { return Some(Action::SniffAround); }
+        if x.fresh { return Some(Action::SniffAround); }
 
         let turns = if !move_ready(ctx.entity) { SLOWED_TURNS } else { WANDER_TURNS };
         if let Some(x) = self.path.follow(ctx, turns) { return Some(x); }
 
-        let Scent { pos, time } = x;
-        let age = ctx.known.time - time;
+        let (age, pos) = (x.age, x.scent.pos);
         search_around(ctx, &mut self.path, age, Point(0, 0), pos, turns)
     }
 
@@ -625,10 +635,10 @@ impl Strategy for ChaseStrategy {
     fn debug(&self, slice: &mut Slice) {
         slice.write_str("Chase").newline();
         if let Some(x) = &self.target {
-            slice.write_str(&format!("    target.age: {:?}", x.age)).newline();
-            slice.write_str(&format!("    target.bias: {:?}", x.bias)).newline();
-            slice.write_str(&format!("    target.last: {:?}", x.last)).newline();
-            slice.write_str(&format!("    target.steps: {}", x.steps)).newline();
+            slice.write_str(&format!("    age: {:?}", x.age)).newline();
+            slice.write_str(&format!("    bias: {:?}", x.bias)).newline();
+            slice.write_str(&format!("    last: {:?}", x.last)).newline();
+            slice.write_str(&format!("    steps: {}", x.steps)).newline();
         }
     }
 
