@@ -11,7 +11,7 @@ use crate::base::{Buffer, Color, Glyph};
 use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs};
 use crate::effect::{Effect, Event, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
-use crate::knowledge::Knowledge;
+use crate::knowledge::{Knowledge, Scent, Timedelta, Timestamp};
 use crate::mapgen::mapgen_with_size as mapgen;
 use crate::pathing::Status;
 use crate::shadowcast::{INITIAL_VISIBILITY, VISIBILITY_LOSSES, Vision, VisionArgs};
@@ -168,10 +168,11 @@ static_assert_size!(Cell, 24);
 static_assert_size!(Cell, 32);
 
 pub struct Board {
+    map: Matrix<Cell>,
     active_entity_index: usize,
     pub entity_order: Vec<EID>,
     pub entities: EntityMap,
-    map: Matrix<Cell>,
+    pub time: Timestamp,
 
     // Animation:
     _effect: Effect,
@@ -195,10 +196,11 @@ impl Board {
         let cell = Cell { eid: None, items: thin_vec![], shadow: 0, tile: Tile::get('#') };
 
         let mut result = Self {
+            map: Matrix::new(size, cell),
             active_entity_index: 0,
             entity_order: vec![],
             entities: EntityMap::default(),
-            map: Matrix::new(size, cell),
+            time: Timestamp::default(),
 
             // Animation:
             _effect: Effect::default(),
@@ -406,15 +408,10 @@ impl Board {
 
         let me = &self.entities[eid];
         let other = &self.entities[oid];
-        known.update_entity(me, other, /*seen=*/false, /*heard=*/heard);
+        known.update_entity(me, other, /*seen=*/false, /*heard=*/heard, self.time);
 
         swap(&mut known, &mut self.entities[eid].known);
         self.known = Some(known);
-    }
-
-    fn start_next_turn(&mut self, eid: EID) {
-        let Some(entity) = self.entities.get_mut(eid) else { return; };
-        entity.known.start_next_turn(entity.player);
     }
 
     fn remove_known_entity(&mut self, eid: EID, oid: EID) {
@@ -836,11 +833,10 @@ fn update_state(state: &mut State) {
 
         let Some(entity) = state.board.entities.get_mut(eid) else { continue };
 
-        let history = &mut entity.history;
-        if history.len() == history.capacity() { history.pop_back(); }
-        history.push_front(entity.pos);
+        let trail = &mut entity.trail;
+        if trail.len() == trail.capacity() { trail.pop_back(); }
+        trail.push_front(Scent { pos: entity.pos, time: state.board.time });
 
-        entity.known.start_next_turn(player);
         drain(entity, &result);
     }
 

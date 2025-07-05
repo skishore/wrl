@@ -9,7 +9,7 @@ use slotmap::hop::HopSlotMap;
 use crate::static_assert_size;
 use crate::ai::AIState;
 use crate::base::{dirs, sample, Glyph, Point, RNG};
-use crate::knowledge::Knowledge;
+use crate::knowledge::{Knowledge, Scent};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -44,7 +44,7 @@ pub struct Entity {
     // Location:
     pub pos: Point,
     pub dir: Point,
-    pub history: VecDeque<Point>,
+    pub trail: VecDeque<Scent>,
 
     // Flags:
     pub asleep: bool,
@@ -70,7 +70,7 @@ impl Entity {
             // Location:
             pos: args.pos,
             dir: *sample(&dirs::ALL, rng),
-            history: VecDeque::with_capacity(HISTORY_SIZE),
+            trail: VecDeque::with_capacity(HISTORY_SIZE),
 
             // Flags:
             asleep: false,
@@ -82,14 +82,14 @@ impl Entity {
 
     pub fn get_scent_at(&self, p: Point) -> f64 {
         let mut total = 0.;
-        for age in 0..self.history.capacity() {
+        for age in 0..self.trail.capacity() {
             total += self.get_historical_scent_at(p, age);
         }
         if total > 1. { 1. } else { total }
     }
 
     pub fn get_historical_scent_at(&self, p: Point, age: usize) -> f64 {
-        let Some(&pos) = self.history.get(age) else { return 0. };
+        let Some(&Scent { pos, .. }) = self.trail.get(age) else { return 0. };
 
         let base = 0.2;
         let dropoff = 1. - 1. / (HISTORY_SIZE as f64);
