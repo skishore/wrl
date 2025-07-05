@@ -21,15 +21,94 @@ const MAX_TILE_MEMORY: usize = 4096;
 
 //////////////////////////////////////////////////////////////////////////////
 
+// Timedelta
+
+#[derive(Clone, Copy, Default, Eq, Ord, PartialEq, PartialOrd)]
+pub struct Timedelta(i64);
+
+impl Timedelta {
+    const LATCH: i64 = 1 << 20;
+    const SCALE: i64 = 1000;
+
+    pub fn raw(self) -> i64 {
+        self.0
+    }
+
+    pub fn max() -> Self {
+        Self(i64::MAX)
+    }
+
+    pub const fn to_seconds(self) -> f64 {
+        let factor = (Self::LATCH * Self::SCALE) as f64;
+        (1. / factor) * self.0 as f64
+    }
+
+    pub const fn from_seconds(seconds: f64) -> Self {
+        let factor = (Self::LATCH * Self::SCALE) as f64;
+        Self((factor * seconds) as i64)
+    }
+}
+
+impl std::ops::Add<Timedelta> for Timedelta {
+    type Output = Timedelta;
+    fn add(self, other: Timedelta) -> Self::Output {
+        Self(self.0 + other.0)
+    }
+}
+
+impl std::ops::Sub for Timedelta {
+    type Output = Timedelta;
+    fn sub(self, other: Timedelta) -> Self::Output {
+        Self(self.0 - other.0)
+    }
+}
+
+impl std::fmt::Debug for Timedelta {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        let latch = Timedelta::LATCH;
+        let scale = Timedelta::SCALE;
+        let (left, tick) = (self.0 / latch, self.0 % latch);
+        let (left, msec) = (left / scale, left % scale);
+        write!(fmt, "{}.{:0>3}s (+{})", left, msec, tick)
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 // Timestamp
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct Timestamp(u32);
+#[derive(Clone, Copy, Default, Eq, Ord, PartialEq, PartialOrd)]
+pub struct Timestamp(u64);
+
+impl Timestamp {
+    fn bump(self) -> Self {
+        self.latch(Timedelta::default())
+    }
+
+    fn latch(self, other: Timedelta) -> Self {
+        let other = std::cmp::max(other, Timedelta(1));
+        let value = self.0 + (other.0 as u64);
+        let latch = value & !(Timedelta::LATCH as u64 - 1);
+        Self(if latch > self.0 { latch } else { value })
+    }
+}
 
 impl std::ops::Sub for Timestamp {
-    type Output = i32;
+    type Output = Timedelta;
     fn sub(self, other: Timestamp) -> Self::Output {
-        self.0.wrapping_sub(other.0) as Self::Output
+        Timedelta(self.0.wrapping_sub(other.0) as i64)
+    }
+}
+
+impl std::fmt::Debug for Timestamp {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        let latch = Timedelta::LATCH as u64;
+        let scale = Timedelta::SCALE as u64;
+        let (left, tick) = (self.0 / latch, self.0 % latch);
+        let (left, msec) = (left / scale, left % scale);
+        let (left, sec) = (left / 60, left % 60);
+        let (left, min) = (left / 60, left % 60);
+        write!(fmt, "{:0>2}:{:0>2}:{:0>2}.{:0>3} (+{})", left, min, sec, msec, tick)
     }
 }
 
@@ -57,15 +136,15 @@ pub struct CellKnowledge {
 #[cfg(target_pointer_width = "32")]
 static_assert_size!(CellKnowledge, 36);
 #[cfg(target_pointer_width = "64")]
-static_assert_size!(CellKnowledge, 48);
+static_assert_size!(CellKnowledge, 56);
 
 pub struct EntityKnowledge {
     pub eid: EID,
-    pub age: i32,
     pub pos: Point,
     pub dir: Point,
     pub glyph: Glyph,
     pub name: &'static str,
+    pub time: Timestamp,
 
     // Stats:
     pub hp: f64,
@@ -85,12 +164,12 @@ pub struct EntityKnowledge {
 #[cfg(target_pointer_width = "32")]
 static_assert_size!(EntityKnowledge, 72);
 #[cfg(target_pointer_width = "64")]
-static_assert_size!(EntityKnowledge, 80);
+static_assert_size!(EntityKnowledge, 88);
 
 #[derive(Clone, Copy)]
 pub struct Scent {
-    pub age: i32,
     pub pos: Point,
+    pub time: Timestamp,
 }
 
 #[derive(Default)]
@@ -140,17 +219,8 @@ impl Knowledge {
 
     // Writes
 
-    pub fn start_next_turn(&mut self, player: bool) {
-        self.time.0 += 1;
-        for x in &mut self.entities { x.age += 1; }
-        if !player { return; }
-
-        while let Some(x) = self.cells.back() && !x.visible {
-            self.forget_last_cell();
-        }
-    }
-
     pub fn update(&mut self, me: &Entity, board: &Board, vision: &Vision, rng: &mut RNG) {
+        self.time = board.time;
         let (pos, time) = (me.pos, self.time);
         let dark = matches!(board.get_light(), Light::None);
 
@@ -159,10 +229,10 @@ impl Knowledge {
         for (oid, other) in &board.entities {
             if oid == me.eid || !other.player { continue; }
             let mut remainder = rng.gen::<f64>();
-            for age in 0..other.history.capacity() {
+            for age in 0..other.trail.capacity() {
                 remainder -= other.get_historical_scent_at(me.pos, age);
                 if remainder >= 0. { continue; }
-                self.scents.push(Scent { age: age as i32, pos: other.history[age] });
+                self.scents.push(other.trail[age]);
                 break;
             }
         }
@@ -207,7 +277,7 @@ impl Knowledge {
                 let big = other.player && !other.sneaking;
                 if !big && !see_all_entities { return None; }
                 let (seen, heard) = (true, false);
-                Some(self.update_entity(me, other, seen, heard))
+                Some(self.update_entity(me, other, seen, heard, time))
             })();
 
             let cell_handle = *self.cell_by_point.entry(point).and_modify(|&mut x| {
@@ -247,7 +317,7 @@ impl Knowledge {
     }
 
     pub fn update_entity(&mut self, entity: &Entity, other: &Entity,
-                         seen: bool, heard: bool) -> EntityHandle {
+                         seen: bool, heard: bool, time: Timestamp) -> EntityHandle {
         let handle = *self.entity_by_eid.entry(other.eid).and_modify(|&mut x| {
             self.entities.move_to_front(x);
             let existing = &mut self.entities[x];
@@ -260,11 +330,11 @@ impl Knowledge {
         }).or_insert_with(|| {
             self.entities.push_front(EntityKnowledge {
                 eid: other.eid,
-                age: Default::default(),
                 pos: Default::default(),
                 dir: Default::default(),
                 glyph: Default::default(),
                 name: Default::default(),
+                time: Default::default(),
 
                 // Stats:
                 hp: Default::default(),
@@ -288,7 +358,7 @@ impl Knowledge {
         let aggressor = |x: &Entity| x.predator;
         let rival = !same && (aggressor(entity) != aggressor(other));
 
-        entry.age = 0;
+        entry.time = time;
         entry.pos = other.pos;
         entry.dir = other.dir;
         entry.glyph = other.glyph;
@@ -332,7 +402,13 @@ impl Knowledge {
             let Some(&h) = self.cell_by_point.get(&entity.pos) else { continue; };
             if self.cells[h].see_entity_at { entity.heard = false; }
         }
-        if player { return; }
+
+        if player {
+            while let Some(x) = self.cells.back() && !x.visible {
+                self.forget_last_cell();
+            }
+            return;
+        }
 
         while self.cell_by_point.len() > MAX_TILE_MEMORY {
             // We don't need to check age, here; we can only see a bounded
@@ -342,7 +418,7 @@ impl Knowledge {
 
         while self.entity_by_eid.len() > MAX_ENTITY_MEMORY {
             let entity = self.entities.back().unwrap();
-            if entity.age == 0 { break; }
+            if entity.visible { break; }
 
             let handle = self.entity_by_eid.remove(&entity.eid).unwrap();
             if !entity.moved {
@@ -383,13 +459,13 @@ impl<'a> CellResult<'a> {
 
     pub fn get_cell(&self) -> Option<&CellKnowledge> { self.cell }
 
-    pub fn turns_since_seen(&self) -> i32 {
-        let Some(x) = self.cell else { return std::i32::MAX };
+    pub fn time_since_seen(&self) -> Timedelta {
+        let Some(x) = self.cell else { return Timedelta::max() };
         self.root.time - x.last_seen
     }
 
-    pub fn turns_since_entity_visible(&self) -> i32 {
-        let Some(x) = self.cell else { return std::i32::MAX };
+    pub fn time_since_entity_visible(&self) -> Timedelta {
+        let Some(x) = self.cell else { return Timedelta::max() };
         self.root.time - x.last_see_entity_at
     }
 
