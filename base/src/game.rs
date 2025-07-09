@@ -717,9 +717,10 @@ fn apply_damage(board: &Board, target: Point, callback: CB) -> Effect {
     let glyph = board.entities[eid].glyph;
     let flash = glyph.with_fg(Color::black()).with_bg(0x400);
     let particle = effect::Particle { glyph: flash, point: target };
+    let restored = effect::Particle { glyph, point: target };
     let mut effect = Effect::serial(vec![
         Effect::constant(particle, UI_DAMAGE_FLASH),
-        Effect::pause(UI_DAMAGE_TICKS),
+        Effect::constant(restored, UI_DAMAGE_TICKS),
     ]);
     let frame = effect.frames.len() as i32;
     effect.add_event(Event::Callback { frame, callback });
