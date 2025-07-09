@@ -14,8 +14,12 @@ use crate::knowledge::{Knowledge, Scent};
 //////////////////////////////////////////////////////////////////////////////
 
 const ATTACK_RANGE: i32 = 8;
-const HISTORY_SIZE: usize = 64;
 const MAX_HP: i32 = 3;
+
+const SCENT_TRAIL_SIZE: usize = 64;
+const SCENT_SPREAD: f64 = 1.;
+const SCENT_DECAY: f64 = 1.;
+const SCENT_BASE: f64 = 0.25;
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -70,7 +74,7 @@ impl Entity {
             // Location:
             pos: args.pos,
             dir: *sample(&dirs::ALL, rng),
-            trail: VecDeque::with_capacity(HISTORY_SIZE),
+            trail: VecDeque::with_capacity(SCENT_TRAIL_SIZE),
 
             // Flags:
             asleep: false,
@@ -91,9 +95,9 @@ impl Entity {
     pub fn get_historical_scent_at(&self, p: Point, age: usize) -> f64 {
         let Some(&Scent { pos, .. }) = self.trail.get(age) else { return 0. };
 
-        let base = 0.2;
-        let dropoff = 1. - 1. / (HISTORY_SIZE as f64);
-        let variance = 1. + 1. * age as f64;
+        let base = SCENT_BASE;
+        let dropoff = 1. - SCENT_DECAY / (SCENT_TRAIL_SIZE as f64);
+        let variance = SCENT_SPREAD * (1. + 1. * age as f64);
 
         let l2_squared = (pos - p).len_l2_squared() as f64;
         let num = (-l2_squared / (2. * variance)).exp();
