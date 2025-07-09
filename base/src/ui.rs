@@ -466,11 +466,12 @@ impl Log {
 struct Focused {
     active: bool,
     vision: Vision,
+    tile: Option<&'static Tile>,
 }
 
 impl Default for Focused {
     fn default() -> Self {
-        Self { active: false, vision: Vision::new(FOV_RADIUS_NPC) }
+        Self { active: false, vision: Vision::new(FOV_RADIUS_NPC), tile: None }
     }
 }
 
@@ -478,6 +479,8 @@ impl Focused {
     fn update(&mut self, entity: &Entity, target: &EntityKnowledge) {
         let known = &*entity.known;
         let (pos, dir) = (target.pos, target.dir);
+        self.tile = known.get(pos).tile();
+
         if target.asleep {
             self.vision.clear(target.pos);
         } else {
@@ -987,13 +990,10 @@ impl UI {
             return;
         }
 
-        // TODO: There are several bugs in this code:
+        // TODO: There are a few bugs in this code:
         //
         //   - EntityKnowledge for the focused entity can get cleaned up while
         //     the player is still focused on it.
-        //
-        //   - CellKnowledge for the tile under the focused entity can get
-        //     cleaned up while the player is still focused on it.
         //
         //   - If the player hears the targeted entity move, but does not see
         //     it, the knowledge update currently still update the entity's
@@ -1001,12 +1001,10 @@ impl UI {
         //     new location. Instead, noise knowledge updates for the player
         //     shouldn't be tied to a specific entity. The player can guess.
         //
-        // Unfortunately, the cleanest way to fix all of these bugs is to
-        // clone the focused entity's knowledge each frame on which the entity
-        // is visible. Is there a better way?
-        let (cell, view, header, seen) = match &self.target {
+        let (tile, view, header, seen) = match &self.target {
             Some(x) => {
                 let cell = known.get(x.target);
+                let tile = cell.tile();
                 let seen = cell.visible();
                 let view = if cell.can_see_entity_at() { cell.entity() } else { None };
                 let header = match &x.data {
@@ -1020,27 +1018,23 @@ impl UI {
                         format!("Sending out {}...", name)
                     }
                 };
-                (cell, view, header, seen)
+                (tile, view, header, seen)
             }
             None => {
+                let tile = self.focused.tile;
                 let view = self.focus.and_then(|x| known.entity(x));
                 let seen = view.map(|x| x.visible).unwrap_or(false);
-                let cell = view.map(|x| known.get(x.pos)).unwrap_or(known.default());
                 let header = if seen {
                     "Last target:"
                 } else {
                     "Last target: (remembered)"
                 }.into();
-                (cell, view, header, seen)
+                (tile, view, header, seen)
             },
         };
 
         let fg = if self.target.is_some() || seen { None } else { Some(0x111.into()) };
-        let text = if view.is_some() {
-            if seen { "Standing on: " } else { "Stood on: " }
-        } else {
-            if seen { "You see: " } else { "You saw: " }
-        };
+        let text = if view.is_some() { "Standing on: " } else { "You see: " };
 
         slice.newline();
         slice.set_fg(fg).write_str(&header).newline();
@@ -1052,7 +1046,7 @@ impl UI {
         }
 
         slice.set_fg(fg).write_str(text);
-        if let Some(x) = cell.tile() {
+        if let Some(x) = tile {
             slice.write_chr(x.glyph).space();
             slice.write_chr('(').write_str(x.description).write_chr(')').newline();
         } else {
