@@ -1,4 +1,4 @@
-use crate::base::{Color, HashSet, Glyph, LOS, Point, RNG, dirs, sample};
+use crate::base::{HashSet, Glyph, LOS, Point, RNG, dirs, sample};
 use crate::game::Board;
 
 //////////////////////////////////////////////////////////////////////////////
@@ -143,10 +143,9 @@ impl Event {
 
 //////////////////////////////////////////////////////////////////////////////
 
-type Sparkle<'a> = Vec<(i32, &'a str, Color)>;
+type Sparkle<'a> = Vec<(i32, &'a str, i32)>;
 
-fn add_sparkle(effect: &mut Effect, sparkle: &Sparkle,
-               mut frame: i32, point: Point) -> i32 {
+fn add_sparkle(effect: &mut Effect, sparkle: &Sparkle, mut frame: i32, point: Point) -> i32 {
     for &(delay, chars, color) in sparkle {
         for _ in 0..delay {
             let index = rand::random::<usize>() % chars.chars().count();
@@ -196,7 +195,7 @@ fn UnderlayEffect(effect: Effect, particle: Particle) -> Effect {
 
 #[allow(non_snake_case)]
 fn ExplosionEffect(point: Point) -> Effect {
-    let glyph = |ch: char| Glyph::wdfg(ch, 0x400);
+    let glyph = |ch: char| Glyph::wdfg(ch, 0xff0000);
     let base = vec![
         vec![Particle { point, glyph: glyph('*') }],
         vec![
@@ -222,7 +221,7 @@ fn ExplosionEffect(point: Point) -> Effect {
 
 #[allow(non_snake_case)]
 fn ImplosionEffect(point: Point) -> Effect {
-    let glyph = |ch: char| Glyph::wdfg(ch, 0x400);
+    let glyph = |ch: char| Glyph::wdfg(ch, 0xff0000);
     let base = vec![
         vec![
             Particle { point, glyph: glyph('*') },
@@ -250,7 +249,7 @@ fn RayEffect(source: Point, target: Point, speed: i32) -> Effect {
     if line.len() <= 2 { return Effect::default(); }
 
     let mut result = Vec::new();
-    let glyph = Glyph::wdfg(ray_character(target - source), 0x400);
+    let glyph = Glyph::wdfg(ray_character(target - source), 0xff0000);
     let denom = ((line.len() - 2 + speed as usize) % speed as usize) as i32;
     let start = if denom == 0 { speed } else { denom } as usize;
     for i in (start..line.len() - 1).step_by(speed as usize) {
@@ -263,7 +262,7 @@ fn RayEffect(source: Point, target: Point, speed: i32) -> Effect {
 pub fn SummonEffect(source: Point, target: Point) -> Effect {
     let mut effect = Effect::default();
     let line = LOS(source, target);
-    let ball = Glyph::wdfg('*', 0x400);
+    let ball = Glyph::wdfg('*', 0xff0000);
     for i in 1..line.len() - 1 {
         effect.frames.push(vec![Particle { point: line[i], glyph: ball }]);
     }
@@ -307,19 +306,19 @@ pub fn EmberEffect(_: &Board, _: &mut RNG, source: Point, target: Point) -> Effe
     let line = LOS(source, target);
 
     let trail = || vec![
-        (random_delay(0), "*^^",   0x400.into()),
-        (random_delay(1), "*^",    0x420.into()),
-        (random_delay(2), "**^",   0x440.into()),
-        (random_delay(3), "**^#%", 0x420.into()),
-        (random_delay(4), "#%",    0x400.into()),
+        (random_delay(0), "*^^",   0xff0000),
+        (random_delay(1), "*^",    0xffa800),
+        (random_delay(2), "**^",   0xffff00),
+        (random_delay(3), "**^#%", 0xffa800),
+        (random_delay(4), "#%",    0xff0000),
     ];
 
     let flame = || vec![
-        (random_delay(0), "*^^",   0x400.into()),
-        (random_delay(1), "*^",    0x420.into()),
-        (random_delay(2), "**^#%", 0x440.into()),
-        (random_delay(3), "*^#%",  0x420.into()),
-        (random_delay(4), "*^#%",  0x400.into()),
+        (random_delay(0), "*^^",   0xff0000),
+        (random_delay(1), "*^",    0xffa800),
+        (random_delay(2), "**^#%", 0xffff00),
+        (random_delay(3), "*^#%",  0xffa800),
+        (random_delay(4), "*^#%",  0xff0000),
     ];
 
     for i in 1..line.len() - 1 {
@@ -345,18 +344,18 @@ pub fn IceBeamEffect(_: &Board, _: &mut RNG, source: Point, target: Point) -> Ef
     let ray = ray_character(target - source).to_string();
 
     let trail: Sparkle = vec![
-        (2, &ray, 0x555.into()),
-        (2, &ray, 0x044.into()),
-        (2, &ray, 0x004.into()),
+        (2, &ray, 0xffffff),
+        (2, &ray, 0x00ffff),
+        (2, &ray, 0x0000ff),
     ];
 
     let flame: Sparkle = vec![
-        (2, "*", 0x555.into()),
-        (2, "*", 0x044.into()),
-        (2, "*", 0x004.into()),
-        (2, "*", 0x555.into()),
-        (2, "*", 0x044.into()),
-        (2, "*", 0x004.into()),
+        (2, "*", 0xffffff),
+        (2, "*", 0x00ffff),
+        (2, "*", 0x0000ff),
+        (2, "*", 0xffffff),
+        (2, "*", 0x00ffff),
+        (2, "*", 0x0000ff),
     ];
 
     for i in 1..line.len() {
@@ -384,18 +383,18 @@ pub fn BlizzardEffect(_: &Board, rng: &mut RNG, source: Point, target: Point) ->
     }
 
     let trail: Sparkle = vec![
-        (1, &ray, 0x555.into()),
-        (1, &ray, 0x044.into()),
-        (1, &ray, 0x004.into()),
+        (1, &ray, 0xffffff),
+        (1, &ray, 0x00ffff),
+        (1, &ray, 0x0000ff),
     ];
 
     let flame: Sparkle = vec![
-        (1, "*", 0x555.into()),
-        (1, "*", 0x044.into()),
-        (1, "*", 0x004.into()),
-        (1, "*", 0x555.into()),
-        (1, "*", 0x044.into()),
-        (1, "*", 0x004.into()),
+        (1, "*", 0xffffff),
+        (1, "*", 0x00ffff),
+        (1, "*", 0x0000ff),
+        (1, "*", 0xffffff),
+        (1, "*", 0x00ffff),
+        (1, "*", 0x0000ff),
     ];
 
     let mut hit: i32 = 0;
@@ -419,10 +418,10 @@ pub fn HeadbuttEffect(board: &Board, _: &mut RNG, source: Point, target: Point) 
     let underlying = get_underlying_glyph_at(board, source);
 
     let trail: Sparkle = vec![
-        (2, "#", 0x444.into()),
-        (2, "#", 0x333.into()),
-        (2, "#", 0x222.into()),
-        (2, "#", 0x111.into()),
+        (2, "#", 0xffffff),
+        (2, "#", 0xc0c0c0),
+        (2, "#", 0x808080),
+        (2, "#", 0x404040),
     ];
 
     let move_along_line = |line: &[Point], glyph: Glyph| {

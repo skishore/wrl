@@ -26,7 +26,7 @@ const UI_LOG_SIZE: i32 = 4;
 const UI_DEBUG_SIZE: i32 = 60;
 const UI_CHOICE_SIZE: i32 = 40;
 const UI_STATUS_SIZE: i32 = 30;
-const UI_COLOR: (u8, u8, u8) = (255, 192, 0);
+const UI_COLOR: i32 = 0xffc000;
 
 const UI_MOVE_ALPHA: f64 = 0.75;
 const UI_MOVE_FRAMES: i32 = 12;
@@ -39,8 +39,9 @@ const UI_SHADE_FADE: f64 = 0.50;
 const UI_TARGET_SHADE: u8 = 192;
 const UI_TARGET_FOV_SHADE: u8 = 32;
 
-const UI_LOG_MENU: (u8, u8, u8) = (128, 192, 255);
-const UI_LOG_FAILURE: (u8, u8, u8) = (255, 160, 160);
+const UI_LOG_MENU: i32 = 0x80c0ff;
+const UI_LOG_FAILURE: i32 = 0xff9090;
+const UI_GRAY_OPTION: i32 = 0x545454;
 
 const PLAYER_KEY: char = 'a';
 const SUMMON_KEYS: [char; 3] = ['s', 'd', 'f'];
@@ -668,7 +669,7 @@ impl UI {
             let glyph = if see_entity && let Some(x) = cell.entity() {
                 let big = x.player && !x.sneaking;
                 let glyph = if x.player && x.sneaking { Glyph::wide('e') } else { x.glyph };
-                if x.hp == 0. { Glyph::wdfg('%', 0x400) }
+                if x.hp == 0. { Glyph::wdfg('%', 0xff0000) }
                 else if obscured && !big { glyph.with_fg(tile.glyph.fg()) }
                 else { glyph }
             } else if let Some(x) = cell.items().last() {
@@ -694,7 +695,7 @@ impl UI {
                 let mut glyph = lookup(Point(x, y) + offset);
                 if self.full {
                     let scent = entity.get_scent_at(Point(x, y) + offset);
-                    let color = Color::from((255, 128, 128)).fade(scent);
+                    let color = Color::from(0xff8080).fade(scent);
                     glyph = glyph.with_bg(color);
                 };
                 slice.set(Point(2 * x, y), glyph);
@@ -762,7 +763,7 @@ impl UI {
         // Render the targeting UI on the map.
         if let Some(target) = &self.target {
             let shade = Color::gray(UI_TARGET_SHADE);
-            let color = if target.error.is_empty() { 0x440 } else { 0x400 };
+            let color = if target.error.is_empty() { 0xffff00 } else { 0xff0000 };
             highlight(slice, target.source, shade);
             highlight(slice, target.target, color.into());
 
@@ -773,7 +774,8 @@ impl UI {
             for i in 0..limit {
                 if !((i + count - frame) % count < 2) { continue; }
                 let point = target.path[i as usize];
-                let color = if (i as usize) < target.okay_until { 0x440 } else { 0x400 };
+                let valid = (i as usize) < target.okay_until;
+                let color = if valid { 0xffff00 } else { 0xff0000 };
                 set(slice, point, Glyph::wdfg(ch, color));
             }
         }
@@ -828,24 +830,26 @@ impl UI {
             let point = slice_point(p);
             let mut glyph = slice.get(point);
             if glyph.ch() == Glyph::wide(' ').ch() { glyph = Glyph::wide('.'); }
-            slice.set(point, glyph.with_fg(0x400));
+            slice.set(point, glyph.with_fg(0xff0000));
         }
         for &(p, score) in &self.debug.utility {
             let point = slice_point(p);
             let glyph = slice.get(point);
-            slice.set(point, glyph.with_bg((score, score, score / 2 + 128)));
+            let score = score as i32;
+            let color = (score << 16) | (score << 8) | (score / 2 + 128);
+            slice.set(point, glyph.with_bg(color));
         }
         if let Some(&p) = path.first() {
             let point = slice_point(p);
             let glyph = slice.get(point);
-            slice.set(point, glyph.with_fg(Color::black()).with_bg(0x400));
+            slice.set(point, glyph.with_fg(Color::black()).with_bg(0xff0000));
         }
         for (_, other) in &board.entities {
             slice.set(slice_point(other.pos), other.glyph);
         }
         for other in &entity.known.entities {
-            let color = if other.visible { 0x040 } else {
-                if other.moved { 0x400 } else { 0x440 }
+            let color = if other.visible { 0x00ff00 } else {
+                if other.moved { 0xff0000 } else { 0xffff00 }
             };
             let glyph = other.glyph.with_fg(Color::black()).with_bg(color);
             let Point(x, y) = other.pos - offset;
@@ -880,7 +884,8 @@ impl UI {
         }
 
         if rainfall.lightning > 0 {
-            let color = Color::from(0x111 * (rainfall.lightning / 2));
+            let value = min(255, 84 * rainfall.lightning / 2);
+            let color = Color::from((value << 16) | (value << 8) | value);
             for y in 0..size.1 {
                 for x in 0..size.0 {
                     let point = Point(2 * x, y);
@@ -982,7 +987,7 @@ impl UI {
         let slice = &mut Slice::new(buffer, self.layout.target);
         let known = &*entity.known;
         if self.target.is_none() && self.focus.is_none() {
-            let fg = Some(0x111.into());
+            let fg = Some(UI_GRAY_OPTION.into());
             slice.newline();
             slice.set_fg(fg).write_str("No target selected.").newline();
             slice.newline();
@@ -1033,7 +1038,7 @@ impl UI {
             },
         };
 
-        let fg = if self.target.is_some() || seen { None } else { Some(0x111.into()) };
+        let fg = if self.target.is_some() || seen { None } else { Some(UI_GRAY_OPTION.into()) };
         let text = if view.is_some() { "Standing on: " } else { "You see: " };
 
         slice.newline();
@@ -1099,7 +1104,7 @@ impl UI {
 
     fn render_empty_option(&self, key: char, space: i32, slice: &mut Slice) {
         let n = space as usize;
-        let fg = Some(0x111.into());
+        let fg = Some(UI_GRAY_OPTION.into());
         let prefix = UI::render_key(key);
 
         slice.newline();
@@ -1145,7 +1150,7 @@ impl UI {
 
         slice.newline();
         let (hp, pp) = (entity.hp, entity.pp);
-        let (hp_color, pp_color) = (Self::hp_color(hp), 0x123.into());
+        let (hp_color, pp_color) = (Self::hp_color(hp), 0x54a8fc.into());
         slice.set_fg(fg).write_str(&prefix).write_str(entity.name).newline();
         status_bar_line("HP: ", hp, hp_color, slice);
         status_bar_line("PP: ", pp, pp_color, slice);
@@ -1240,7 +1245,7 @@ impl UI {
     // Static helpers
 
     fn hp_color(hp: f64) -> Color {
-        (if hp <= 0.25 { 0x300 } else if hp <= 0.50 { 0x330 } else { 0x020 }).into()
+        (if hp <= 0.25 { 0xff0000 } else if hp <= 0.50 { 0xffff00 } else { 0x00a800 }).into()
     }
 
     fn render_key(key: char) -> String {
