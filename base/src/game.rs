@@ -61,6 +61,7 @@ const FLAGS_NONE: u32 = 0;
 const FLAGS_BLOCKED: u32 = FLAG_BLOCKS_MOVEMENT | FLAG_BLOCKS_VISION;
 const FLAGS_FRESH_WATER: u32 = FLAG_BLOCKS_MOVEMENT | FLAG_CAN_DRINK;
 const FLAGS_BERRY_TREE: u32 = FLAG_BLOCKS_MOVEMENT | FLAG_LIMITS_VISION | FLAG_CAN_EAT;
+const FLAGS_TALL_GRASS: u32 = FLAG_LIMITS_VISION;
 
 pub struct Tile {
     pub flags: u32,
@@ -110,16 +111,16 @@ impl PartialEq for &'static Tile {
 lazy_static! {
     static ref TILES: HashMap<char, Tile> = {
         let items = [
-            ('#', (FLAGS_BLOCKED,      Glyph::wdfg('#', (16, 96, 0)),     "a tree")),
-            ('.', (FLAGS_NONE,         Glyph::wdfg('.', (224, 255, 192)), "grass")),
-            (',', (FLAGS_NONE,         Glyph::wdfg('`', (96, 192, 96)),   "weeds")),
-            ('"', (FLAG_LIMITS_VISION, Glyph::wdfg('"', (96, 192, 0)),    "tall grass")),
-            ('|', (FLAG_LIMITS_VISION, Glyph::wdfg('|', (96, 192, 0)),    "reeds")),
-            ('+', (FLAGS_NONE,         Glyph::wdfg('+', (255, 96, 96)),   "a flower")),
-            ('~', (FLAGS_FRESH_WATER,  Glyph::wdfg('~', (0, 128, 255)),   "water")),
-            ('B', (FLAGS_BERRY_TREE,   Glyph::wdfg('#', (192, 128, 0)),   "a berry tree")),
-            ('=', (FLAGS_NONE,         Glyph::wdfg('=', (255, 128, 0)),   "a bridge")),
-            ('R', (FLAGS_NONE,         Glyph::wdfg('.', (255, 128, 0)),   "a path")),
+            ('#', (FLAGS_BLOCKED,     Glyph::wdfg('#', 0x106000), "a tree")),
+            ('.', (FLAGS_NONE,        Glyph::wdfg('.', 0xe0ffc0), "grass")),
+            (',', (FLAGS_NONE,        Glyph::wdfg('`', 0x60c060), "weeds")),
+            ('"', (FLAGS_TALL_GRASS,  Glyph::wdfg('"', 0x60c000), "tall grass")),
+            ('|', (FLAGS_TALL_GRASS,  Glyph::wdfg('|', 0x60c000), "reeds")),
+            ('+', (FLAGS_NONE,        Glyph::wdfg('+', 0xff6060), "a flower")),
+            ('~', (FLAGS_FRESH_WATER, Glyph::wdfg('~', 0x0080ff), "water")),
+            ('B', (FLAGS_BERRY_TREE,  Glyph::wdfg('#', 0xc08000), "a berry tree")),
+            ('=', (FLAGS_NONE,        Glyph::wdfg('=', 0xff8000), "a bridge")),
+            ('R', (FLAGS_NONE,        Glyph::wdfg('.', 0xff8000), "a path")),
         ];
         let mut result = HashMap::default();
         for (ch, (flags, glyph, description)) in items {
@@ -138,8 +139,8 @@ pub enum Item { Berry, Corpse }
 
 pub fn show_item(item: &Item) -> Glyph {
     match item {
-        Item::Berry => Glyph::wdfg('*', (192, 128, 0)),
-        Item::Corpse => Glyph::wdfg('%', (255, 255, 255)),
+        Item::Berry  => Glyph::wdfg('*', 0xc08000),
+        Item::Corpse => Glyph::wdfg('%', 0xffffff),
     }
 }
 
@@ -538,7 +539,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
         Action::WaitForInput => ActionResult::failure(),
         Action::SniffAround => {
             let entity = &mut state.board.entities[eid];
-            let (point, color) = (entity.pos, 0x440);
+            let (point, color) = (entity.pos, 0xffff00);
 
             let board = &mut state.board;
             let cb = Box::new(|_: &mut Board, _: &mut RNG| {});
@@ -559,7 +560,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
             let board = &mut state.board;
             let cb = Box::new(|_: &mut Board, _: &mut RNG| {});
-            board.add_effect(apply_flash(board, point, 0x004, cb), &mut state.rng);
+            board.add_effect(apply_flash(board, point, 0x0000ff, cb), &mut state.rng);
             ActionResult::success()
         }
         Action::Eat(EatAction { point, item }) => {
@@ -575,7 +576,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             if !okay { return ActionResult::failure(); }
 
             let board = &mut state.board;
-            let color = if item.is_some() { 0x400 } else { 0x440 };
+            let color = if item.is_some() { 0xff0000 } else { 0xffff00 };
             let cb = Box::new(move |board: &mut Board, _: &mut RNG| {
                 let Some(item) = item else { return };
                 board.remove_item(point, item);
@@ -702,7 +703,7 @@ fn apply_flash<T: Into<Color>>(board: &Board, target: Point, color: T, callback:
         cell.tile.glyph
     };
 
-    let flash = glyph.with_fg(Color::black()).with_bg(color.into());
+    let flash = glyph.with_fg(Color::black()).with_bg(color);
     let particle = effect::Particle { glyph: flash, point: target };
     let mut effect = Effect::constant(particle, UI_DAMAGE_FLASH);
     let frame = effect.frames.len() as i32;
@@ -715,7 +716,7 @@ fn apply_damage(board: &Board, target: Point, callback: CB) -> Effect {
     let Some(eid) = eid else { return Effect::default(); };
 
     let glyph = board.entities[eid].glyph;
-    let flash = glyph.with_fg(Color::black()).with_bg(0x400);
+    let flash = glyph.with_fg(Color::black()).with_bg(0xff0000);
     let particle = effect::Particle { glyph: flash, point: target };
     let restored = effect::Particle { glyph, point: target };
     let mut effect = Effect::serial(vec![
@@ -890,7 +891,7 @@ impl State {
         }
 
         let input = Action::WaitForInput;
-        let glyph = Glyph::wdfg('@', (255, 255, 255));
+        let glyph = Glyph::wdfg('@', 0xffffff);
         let (player, speed) = (true, SPEED_PC_);
         let args = EntityArgs { glyph, player, predator: false, pos, speed };
         let player = board.add_entity(&args, &mut rng);
@@ -906,8 +907,11 @@ impl State {
             if let Some(x) = pos(&board, &mut rng) {
                 let predator = i < NUM_PREDATORS;
                 let (player, speed) = (false, SPEED_NPC);
-                let letter = if predator { 'R' } else { 'P' };
-                let glyph = Glyph::wdfg(letter, (255, 255, 255));
+                let glyph = if predator {
+                    Glyph::wdfg('R', 0xa060ff)
+                } else {
+                    Glyph::wdfg('P', 0xd0a070)
+                };
                 let args = EntityArgs { glyph, player, predator, pos: x, speed };
                 board.add_entity(&args, &mut rng);
             }

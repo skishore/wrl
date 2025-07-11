@@ -58,17 +58,8 @@ pub struct Color(pub u32);
 static_assert_size!(Color, 4);
 
 impl From<i32> for Color {
-    fn from(val: i32) -> Self {
-        let scale = 84;
-        let r = min(0xff, scale * ((val >> 8) & 0xf));
-        let g = min(0xff, scale * ((val >> 4) & 0xf));
-        let b = min(0xff, scale * ((val & 0xf)));
-        Color(((r << 16) | (g << 8) | b) as u32)
-    }
-}
-
-impl From<(u8, u8, u8)> for Color {
-    fn from((r, g, b): (u8, u8, u8)) -> Self {
+    fn from(v: i32) -> Self {
+        let (r, g, b) = ((v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff);
         Color(((r as u32) << 16) | ((g as u32) << 8) | b as u32)
     }
 }
