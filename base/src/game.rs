@@ -229,12 +229,20 @@ impl Board {
     }
 
     fn advance_effect(&mut self, pov: EID, rng: &mut RNG) -> bool {
-        let mut visible = self._pov_sees_effect(pov);
+        let mut visible = self.pov_sees_effect(pov);
         while self._advance_one_frame(rng) {
-            visible = visible || self._pov_sees_effect(pov);
+            visible = visible || self.pov_sees_effect(pov);
             if visible { return true; }
         }
         false
+    }
+
+    fn pov_sees_effect(&self, pov: EID) -> bool {
+        let Some(frame) = self._effect.frames.get(0) else { return false };
+        let Some(entity) = self.entities.get(pov) else { return false };
+
+        let known = &entity.known;
+        frame.iter().any(|y| known.get(y.point).visible())
     }
 
     fn _advance_one_frame(&mut self, rng: &mut RNG) -> bool {
@@ -262,14 +270,6 @@ impl Board {
             Event::Other { .. } => (),
         }
         true
-    }
-
-    fn _pov_sees_effect(&self, pov: EID) -> bool {
-        if self._effect.frames.is_empty() { return false; }
-
-        let frame = &self._effect.frames[0];
-        let known = &self.entities[pov].known;
-        frame.iter().any(|y| known.get(y.point).visible())
     }
 
     // Getters
@@ -791,15 +791,17 @@ fn update_pov_entities(state: &mut State) {
 }
 
 fn update_state(state: &mut State) {
-    let Entity { eid, pos, .. } = *state.get_player();
+    let pos = state.get_player().pos;
     state.ui.update(pos, &mut state.rng);
 
-    let pov = state.pov.unwrap_or(eid);
+    // If an Effect is active, run it, skipping frames the POV entity can't see.
+    let pov = state.get_pov_entity().eid;
     if state.board.advance_effect(pov, &mut state.rng) {
         update_pov_entities(state);
         return;
     }
 
+    // The game loop is interrupted by animations, and if the player dies.
     let game_loop_active = |state: &State| {
         state.get_player().cur_hp > 0 && state.board.get_frame().is_none()
     };
@@ -841,6 +843,12 @@ fn update_state(state: &mut State) {
 
         state.board.active_entity = None;
         drain(entity, &result);
+    }
+
+    // Skip the prefix of Effect frames that the POV entity can't see.
+    let pov = state.get_pov_entity().eid;
+    if state.board.get_frame().is_some() && !state.board.pov_sees_effect(pov) {
+        state.board.advance_effect(pov, &mut state.rng);
     }
 
     if update { update_pov_entities(state); }
@@ -934,6 +942,10 @@ impl State {
         Self { board, input, inputs, player, pov, rng, ai, ui }
     }
 
+    fn get_pov_entity(&self) -> &Entity {
+        self.pov.and_then(|x| self.board.get_entity(x)).unwrap_or(self.get_player())
+    }
+
     fn get_player(&self) -> &Entity { &self.board.entities[self.player] }
 
     fn mut_player(&mut self) -> &mut Entity { &mut self.board.entities[self.player] }
@@ -945,8 +957,7 @@ impl State {
     pub fn update(&mut self) { update_state(self); }
 
     pub fn render(&self, buffer: &mut Buffer) {
-        let entity = self.pov.and_then(
-            |x| self.board.get_entity(x)).unwrap_or(self.get_player());
+        let entity = self.get_pov_entity();
         self.ui.render(buffer, entity, &self.board);
     }
 }
