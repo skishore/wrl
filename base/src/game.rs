@@ -36,8 +36,8 @@ const SPEED_NPC: f64 = 1.;
 
 const LIGHT: Light = Light::Sun(Point(2, 0));
 const WEATHER: Weather = Weather::None;
-const NUM_PREDATORS: i32 = 10;
-const NUM_PREY: i32 = 0;
+const NUM_PREDATORS: i32 = 5;
+const NUM_PREY: i32 = 15;
 
 const UI_DAMAGE_FLASH: i32 = 6;
 const UI_DAMAGE_TICKS: i32 = 6;

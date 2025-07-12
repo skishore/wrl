@@ -18,7 +18,7 @@ use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
 
 // Constants
 
-const ASTAR_LIMIT_ATTACK: i32 = 32;
+const ASTAR_LIMIT_ATTACK: i32 = 256;
 const ASTAR_LIMIT_WANDER: i32 = 1024;
 const BFS_LIMIT_ATTACK: i32 = 8;
 const HIDING_CELLS: i32 = 256;
@@ -572,6 +572,12 @@ impl Strategy for TrackStrategy {
     }
 
     fn bid(&mut self, ctx: &mut Context, _: bool) -> (Priority, i64) {
+        if !ctx.entity.predator { return (Priority::Skip, 0); }
+
+        let turns_left = ctx.shared.till_hunger;
+        let cutoff = max(MAX_HUNGER_CARNIVORE / 2, 1);
+        if turns_left >= cutoff { return (Priority::Skip, 0); }
+
         if !self.path.check(ctx) { self.path.reset(); }
 
         if let Some(x) = &mut self.target {
@@ -650,7 +656,7 @@ impl Strategy for ChaseStrategy {
         let prev = self.target.take();
 
         let turns_left = ctx.shared.till_hunger;
-        let cutoff = max(MAX_HUNGER_CARNIVORE, 1);
+        let cutoff = max(MAX_HUNGER_CARNIVORE / 2, 1);
         if turns_left >= cutoff { return (Priority::Skip, 0); }
 
         let Context { known, pos, .. } = *ctx;
@@ -1169,10 +1175,10 @@ impl AIState {
             Box::new(TrackStrategy::default()),
             Box::new(ChaseStrategy::default()),
             Box::new(FlightStrategy::default()),
-            //Box::new(RestStrategy::default()),
+            Box::new(RestStrategy::default()),
             Box::new(BasicNeedsStrategy::new(BasicNeed::EatMeat)),
-            //Box::new(BasicNeedsStrategy::new(BasicNeed::EatPlants)),
-            //Box::new(BasicNeedsStrategy::new(BasicNeed::Drink)),
+            Box::new(BasicNeedsStrategy::new(BasicNeed::EatPlants)),
+            Box::new(BasicNeedsStrategy::new(BasicNeed::Drink)),
             Box::new(AssessStrategy::default()),
             Box::new(ExploreStrategy::default()),
         ];
