@@ -19,6 +19,10 @@ use crate::shadowcast::Vision;
 const MAX_ENTITY_MEMORY: usize = 64;
 const MAX_TILE_MEMORY: usize = 4096;
 
+fn trophic_level(x: &Entity) -> i32 {
+    if x.player { 0 } else if !x.predator { 1 } else { 2 }
+}
+
 //////////////////////////////////////////////////////////////////////////////
 
 // Timedelta
@@ -147,14 +151,14 @@ pub struct EntityKnowledge {
     // Stats:
     pub hp: f64,
     pub pp: f64,
+    pub delta: i32,
 
     // Flags:
     pub alive: bool,
     pub heard: bool,
     pub moved: bool,
-    pub rival: bool,
-    pub friend: bool,
     pub asleep: bool,
+    pub friend: bool,
     pub player: bool,
     pub visible: bool,
     pub sneaking: bool,
@@ -305,7 +309,7 @@ impl Knowledge {
         self.forget(me.player);
     }
 
-    pub fn update_entity(&mut self, entity: &Entity, other: &Entity,
+    pub fn update_entity(&mut self, me: &Entity, other: &Entity,
                          seen: bool, heard: bool, time: Timestamp) -> EntityHandle {
         let handle = *self.entity_by_eid.entry(other.eid).and_modify(|&mut x| {
             self.entities.move_to_front(x);
@@ -328,24 +332,21 @@ impl Knowledge {
                 // Stats:
                 hp: Default::default(),
                 pp: Default::default(),
+                delta: Default::default(),
 
                 // Flags:
                 alive: Default::default(),
                 heard: Default::default(),
                 moved: Default::default(),
-                rival: Default::default(),
-                friend: Default::default(),
                 asleep: Default::default(),
+                friend: Default::default(),
                 player: Default::default(),
                 visible: Default::default(),
                 sneaking: Default::default(),
             })
         });
 
-        let same = other.eid == entity.eid;
         let entry = &mut self.entities[handle];
-        let aggressor = |x: &Entity| x.player || x.predator;
-        let rival = !same && (aggressor(entity) != aggressor(other));
 
         entry.time = time;
         entry.pos = other.pos;
@@ -357,13 +358,13 @@ impl Knowledge {
         };
         entry.hp = other.cur_hp as f64 / max(other.max_hp, 1) as f64;
         entry.pp = 1. - clamp(other.move_timer as f64 / MOVE_TIMER as f64, 0., 1.);
+        entry.delta = trophic_level(other) - trophic_level(me);
 
         entry.alive = other.cur_hp > 0;
         entry.heard = heard;
         entry.moved = !seen;
-        entry.rival = rival;
-        entry.friend = same;
         entry.asleep = other.asleep;
+        entry.friend = me.eid == other.eid;
         entry.player = other.player;
         entry.visible = seen;
         entry.sneaking = other.sneaking;
@@ -434,10 +435,12 @@ impl Knowledge {
     }
 
     fn update_scents(&mut self, me: &Entity, board: &Board, rng: &mut RNG) {
-        if me.asleep || !me.predator { return; }
+        if me.asleep { return; }
 
-        for (oid, other) in &board.entities {
-            if oid == me.eid || (other.player || other.predator) { continue; }
+        let level = trophic_level(me);
+
+        for (_, other) in &board.entities {
+            if trophic_level(other) >= level { continue; }
             let mut remainder = rng.random::<f64>();
 
             for age in 0..other.trail.capacity() {
