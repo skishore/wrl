@@ -572,11 +572,10 @@ impl Strategy for TrackStrategy {
     }
 
     fn bid(&mut self, ctx: &mut Context, _: bool) -> (Priority, i64) {
-        if !ctx.entity.predator { return (Priority::Skip, 0); }
-
+        let predator = ctx.entity.predator;
         let turns_left = ctx.shared.till_hunger;
         let cutoff = max(MAX_HUNGER_CARNIVORE / 2, 1);
-        if turns_left >= cutoff { return (Priority::Skip, 0); }
+        if predator && turns_left >= cutoff { return (Priority::Skip, 0); }
 
         if !self.path.check(ctx) { self.path.reset(); }
 
@@ -651,18 +650,17 @@ impl Strategy for ChaseStrategy {
     }
 
     fn bid(&mut self, ctx: &mut Context, _: bool) -> (Priority, i64) {
-        if !ctx.entity.predator { return (Priority::Skip, 0); }
-
         let prev = self.target.take();
 
+        let predator = ctx.entity.predator;
         let turns_left = ctx.shared.till_hunger;
         let cutoff = max(MAX_HUNGER_CARNIVORE / 2, 1);
-        if turns_left >= cutoff { return (Priority::Skip, 0); }
+        if predator && turns_left >= cutoff { return (Priority::Skip, 0); }
 
         let Context { known, pos, .. } = *ctx;
         let time = known.time;
         let mut targets: Vec<_> = known.entities.iter().filter(
-            |x| x.rival && (time - x.time) < MAX_SEARCH_TIME).collect();
+            |x| x.delta < 0 && (time - x.time) < MAX_SEARCH_TIME).collect();
         if targets.is_empty() { return (Priority::Skip, 0); }
 
         let target = *targets.select_nth_unstable_by_key(
@@ -784,14 +782,12 @@ impl Strategy for FlightStrategy {
     }
 
     fn bid(&mut self, ctx: &mut Context, _: bool) -> (Priority, i64) {
-        if ctx.entity.predator { return (Priority::Skip, 0); }
-
         let Context { entity, known, pos, .. } = *ctx;
         let time = known.time;
         let reset = known.entities.iter().any(
-            |x| x.rival && x.time > ctx.shared.prev_time);
+            |x| x.delta > 0 && x.time > ctx.shared.prev_time);
         let mut threats: Vec<_> = known.entities.iter().filter_map(|x| {
-            if !x.rival || (time - x.time) >= MAX_FLIGHT_TIME { return None; }
+            if !(x.delta > 0 && (time - x.time) < MAX_FLIGHT_TIME) { return None; }
             Some(Threat { asleep: x.asleep, pos: x.pos })
         }).collect();
         threats.sort_unstable_by_key(|x| (x.pos.0, x.pos.1));
