@@ -20,10 +20,20 @@ pub fn keydown(ch: i32, shift: bool) {
         Input::Escape
     } else if ch == 9 && shift {
         Input::BackTab
+    } else if ch == 13 {
+        Input::Char('\n')
     } else {
         Input::Char(ch as u8 as char)
     };
     STATE.with_borrow_mut(|(game, _)|{ game.add_input(input); });
+}
+
+#[wasm_bindgen]
+pub fn size() -> Vec<i32> {
+    STATE.with_borrow_mut(|(game, buffer)| {
+        game.render(buffer);
+        vec![buffer.size.0, buffer.size.1]
+    })
 }
 
 #[wasm_bindgen]

@@ -1,4 +1,4 @@
-import init, {keydown, tick} from '../pkg/wrl_wasm.js';
+import init, {keydown, size, tick} from '../pkg/wrl_wasm.js';
 
 const loadImage = async (uri) => new Promise((resolve, reject) => {
   const img = new Image();
@@ -81,75 +81,115 @@ const normalizeFont = (image) => {
       }
     }
   }
-  return upscaleAndCenterFont(image, image.width / 16);
+  return image;
 };
 
-const main = async () => {
-  const base = await loadImage('web/images/aquarius_8x8.png');
-  const image = normalizeFont(base);
-
-  const unit = 16;
-  const view = 50;
-  const fgColor = (x) => x === 1 ? 0xffffff : x;
-  const bgColor = (x) => x === 1 ? 0x1d1f21 : x;
-
-  const app = new PIXI.Application();
-  await app.init({width: unit * view, height: unit * view})
-  app.renderer.background.color = bgColor(1);
-  document.body.appendChild(app.canvas);
-
+const fontTexture = (image) => {
   const imageData = new ImageData(image.rgba, image.width, image.height);
   const canvas = document.createElement('canvas');
   canvas.width = image.width;
   canvas.height = image.height;
   const context = canvas.getContext('2d', {premultipliedAlpha: false});
   context.putImageData(imageData, 0, 0);
-  const font = PIXI.Texture.from(canvas);
-  const side = Math.floor(canvas.width / 16);
+  return PIXI.Texture.from(canvas);
+};
+
+const main = async () => {
+  let unifont = await loadImage('web/images/unifont_8x16.png');
+  unifont = normalizeFont(unifont);
+  let aquarius = await loadImage('web/images/aquarius_8x8.png');
+  aquarius = normalizeFont(aquarius);
+  aquarius = upscaleAndCenterFont(aquarius, aquarius.width / 16);
+
+  const wasm = await init();
+  const [viewX, viewY] = size();
+
+  const unitX = 8;
+  const unitY = 16;
+
+  const app = new PIXI.Application();
+  await app.init({width: unitX * viewX, height: unitY * viewY})
+  app.renderer.background.color = 0;
+  document.body.appendChild(app.canvas);
+  app.canvas.classList.add('main');
+
+  const aquariusFont = fontTexture(aquarius);
+  const unifontFont = fontTexture(unifont);
 
   const frame = (source, x, y) => {
-    const frame = new PIXI.Rectangle(x * side, y * side, side, side);
+    const frame = new PIXI.Rectangle(x * unitX, y * unitY, unitX, unitY);
     return new PIXI.Texture({source, frame});
   };
 
-  const ascii = [];
+  const aquariusFrames = [];
+  for (let i = 0; i < 512; i++) {
+    aquariusFrames.push(frame(aquariusFont, i & 0x1f, i >> 5));
+  }
+
+  const unifontFrames = [];
   for (let i = 0; i < 256; i++) {
-    ascii.push(frame(font, i & 0xf, i >> 4));
+    unifontFrames.push(frame(unifontFont, i & 0xf, i >> 4));
   }
 
   const map = [];
-  for (let y = 0; y < view; y++) {
-    for (let x = 0; x < view; x++) {
+  for (let y = 0; y < viewY; y++) {
+    for (let x = 0; x < viewX; x++) {
+      const items = [];
       for (let i = 0; i < 2; i++) {
-        const sprite = new PIXI.Sprite(ascii[0x20]);
-        sprite.scale = unit / sprite.texture.frame.width;
-        sprite.x = unit * x;
-        sprite.y = unit * y;
+        const sprite = new PIXI.Sprite(aquariusFrames[0]);
+        sprite.x = unitX * x;
+        sprite.y = unitY * y;
         app.stage.addChild(sprite);
-        map.push(sprite);
+        items.push(sprite);
       }
+      const [bg, fg] = items;
+      map.push({bg, fg});
     }
   }
 
-  const wasm = await init();
+  const boxDrawingChars = {
+    '┌': 0xda,
+    '┐': 0xbf,
+    '└': 0xc0,
+    '┘': 0xd9,
+    '│': 0xb3,
+    '─': 0xc4,
+  };
+  const boxDrawingMap = new Map();
+  for (const key in boxDrawingChars) {
+    if (!boxDrawingChars.hasOwnProperty(key)) continue;
+    boxDrawingMap.set(key.charCodeAt(0), boxDrawingChars[key]);
+  }
+
   window.wasmCallbacks = {
     render: (ptr, sx, sy) => {
       const buffer = new Uint32Array(wasm.memory.buffer, ptr, 2 * sx * sy);
-      for (let y = 0; y < view; y++) {
-        for (let x = 0; x < view; x++) {
-          const spriteIndex = x + y * view;
-          const backed = map[2 * spriteIndex + 0];
-          const sprite = map[2 * spriteIndex + 1];
-          const index = (2 * x + 1) + (y + 1) * sx;
+      for (let y = 0; y < viewY; y++) {
+        for (let x = 0; x < viewX; x++) {
+          const spriteIndex = x + y * viewX;
+          const cell = map[spriteIndex];
+          const index = x + y * sx;
           const glyph0 = buffer[2 * index + 0];
           const glyph1 = buffer[2 * index + 1];
           const fg = ((glyph0 >> 16) & 0xffff) | ((glyph1 & 0xff) << 16);
           const bg = (glyph1 >> 8) & 0xffffff;
-          const code = (glyph0 & 0xffff) - 0xff00 + 0x20;
-          backed.texture = ascii[0];
-          backed.tint = bgColor(bg);
-          sprite.texture = ascii[code];
-          sprite.tint = fgColor(fg);
+
+          let code = glyph0 & 0xffff;
+          code = boxDrawingMap.get(code) ?? code;
+
+          if (code <= 0xff) {
+            cell.fg.texture = unifontFrames[code];
+            cell.fg.tint = fg;
+            cell.bg.tint = bg;
+          } else if (code >= 0xff00) {
+            const wide = code - 0xff00 + 0x20;
+            const next = map[spriteIndex + 1];
+            cell.fg.texture = aquariusFrames[2 * wide + 0];
+            next.fg.texture = aquariusFrames[2 * wide + 1];
+            cell.fg.tint = next.fg.tint = fg;
+            cell.bg.tint = next.bg.tint = bg;
+            x++;
+          }
         }
       }
     },
@@ -157,6 +197,9 @@ const main = async () => {
   window.onkeydown = x => {
     const code = x.key.length === 1 ? x.key.charCodeAt(0) : x.keyCode;
     keydown(code, x.shiftKey);
+    if (x.keyCode !== 9) return;
+    x.preventDefault();
+    x.stopPropagation();
   }
   app.ticker.add(() => { tick(); });
 };
