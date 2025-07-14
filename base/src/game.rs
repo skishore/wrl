@@ -594,6 +594,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let noisy = turns <= 1.;
             let turns = step.len_l2() * turns;
             let color = entity.glyph.fg();
+            let player = entity.player;
             let source = entity.pos;
             let target = source + step;
 
@@ -604,6 +605,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 }
                 Status::Occupied => {
                     state.board.entities[eid].dir = step;
+                    if player { state.ui.log.log_failure("There's something in the way!"); }
                     ActionResult::failure()
                 }
                 Status::Free => {
