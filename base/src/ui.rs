@@ -428,6 +428,7 @@ fn process_ui_input(ui: &mut UI, entity: &Entity, input: Input) -> bool {
 
 pub struct LogLine {
     color: Color,
+    count: i32,
     menu: bool,
     text: String,
 }
@@ -442,20 +443,27 @@ impl Log {
         self.log_color(text, Color::white());
     }
 
-    pub fn log_color<S: Into<String>, T: Into<Color>>(&mut self, text: S, color: T) {
+    pub fn log_failure<S: Into<String>>(&mut self, text: S) {
+        self.log_color(text, UI_LOG_FAILURE);
+    }
+
+    fn log_color<S: Into<String>, T: Into<Color>>(&mut self, text: S, color: T) {
         let (color, text) = (color.into(), text.into());
-        self.lines.push(LogLine { color, menu: false, text });
+        if let Some(x) = self.lines.last_mut() {
+            if x.color == color && x.text == text { return x.count += 1; }
+        }
+        self.lines.push(LogLine { color, count: 1, menu: false, text });
         if self.lines.len() as i32 > UI_LOG_SIZE { self.lines.remove(0); }
     }
 
-    pub fn log_menu<S: Into<String>, T: Into<Color>>(&mut self, text: S, color: T) {
+    fn log_menu<S: Into<String>, T: Into<Color>>(&mut self, text: S, color: T) {
         let (color, text) = (color.into(), text.into());
         if self.lines.last().map(|x| x.menu).unwrap_or(false) { self.lines.pop(); }
-        self.lines.push(LogLine { color, menu: true, text });
+        self.lines.push(LogLine { color, count: 1, menu: true, text });
         if self.lines.len() as i32 > UI_LOG_SIZE { self.lines.remove(0); }
     }
 
-    pub fn end_menu_logging(&mut self) {
+    fn end_menu_logging(&mut self) {
         self.lines.last_mut().map(|x| x.menu = false);
     }
 }
@@ -926,7 +934,9 @@ impl UI {
         }
 
         for line in &self.log.lines {
-            slice.set_fg(Some(line.color)).write_str(&line.text).newline();
+            slice.set_fg(Some(line.color)).write_str(&line.text);
+            if line.count > 1 { slice.write_str(&format!(" (x{})", line.count)); }
+            slice.newline();
         }
     }
 
