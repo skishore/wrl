@@ -772,13 +772,8 @@ fn process_input(state: &mut State, input: Input) {
     }
 
     let player = state.get_player();
-    let cell = player.known.get(player.pos + dir);
-    if let Some(x) = cell.entity() && x.rival {
-        state.input = Action::Attack(player.pos + dir);
-    } else {
-        let turns = if player.sneaking { 2. } else { 1. };
-        state.input = Action::Move(MoveAction { look: dir, step: dir, turns });
-    }
+    let turns = if player.sneaking { 2. } else { 1. };
+    state.input = Action::Move(MoveAction { look: dir, step: dir, turns });
 }
 
 fn update_pov_entities(state: &mut State) {
