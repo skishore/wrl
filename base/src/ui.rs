@@ -167,7 +167,7 @@ impl Layout {
         };
         let log = Rect {
             root: Point(0, map.root.1 + map.size.1 + row + 1),
-            size: Point(map.root.0 + map.size.0 + 1, UI_LOG_SIZE),
+            size: Point(map.root.0 + map.size.0 + 1, UI_LOG_SIZE + 1),
         };
         let bounds = log.root + log.size;
         let bounds = Point(bounds.0, bounds.1 + row + 1);
@@ -917,11 +917,13 @@ impl UI {
     fn render_log(&self, buffer: &mut Buffer, entity: &Entity) {
         let slice = &mut Slice::new(buffer, self.layout.log);
 
-        let pos = entity.pos;
-        let time = entity.known.time;
-        let scent = entity.get_scent_at(pos);
-        slice.write_str(&format!("time: {:?}; pos: {:?}; scent: {:.2}",
-                                 time, pos, scent)).newline();
+        if self.full {
+            let pos = entity.pos;
+            let time = entity.known.time;
+            let scent = entity.get_scent_at(pos);
+            slice.write_str(&format!("time: {:?}; pos: {:?}; scent: {:.2}",
+                                     time, pos, scent)).newline();
+        }
 
         for line in &self.log.lines {
             slice.set_fg(Some(line.color)).write_str(&line.text).newline();
