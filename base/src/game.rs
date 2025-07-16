@@ -466,7 +466,7 @@ fn advance_turn(board: &mut Board) -> Option<EID> {
 
 // Action
 
-pub struct EatAction { pub point: Point, pub item: Option<Item> }
+pub struct EatAction { pub target: Point, pub item: Option<Item> }
 
 pub struct MoveAction { pub look: Point, pub step: Point, pub turns: f64 }
 
@@ -509,6 +509,10 @@ fn can_attack(board: &Board, entity: &Entity, target: Point, range: i32) -> bool
     })
 }
 
+fn face_direction(entity: &mut Entity, dir: Point) {
+    if dir != dirs::NONE { entity.dir = dir; }
+}
+
 fn plan(state: &mut State, eid: EID) -> Action {
     let player = eid == state.player;
     if player { return replace(&mut state.input, Action::WaitForInput); }
@@ -538,37 +542,35 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
         Action::Rest => ActionResult::success(),
         Action::WaitForInput => ActionResult::failure(),
         Action::SniffAround => {
-            let entity = &mut state.board.entities[eid];
-            let (point, color) = (entity.pos, 0xffff00);
-
+            let (pos, color) = (entity.pos, 0xffff00);
             let board = &mut state.board;
             let cb = Box::new(|_: &mut Board, _: &mut RNG| {});
-            board.add_effect(apply_flash(board, point, color, cb), &mut state.rng);
+            board.add_effect(apply_flash(board, pos, color, cb), &mut state.rng);
             ActionResult::success()
         }
         Action::Look(dir) => {
-            state.board.entities[eid].dir = dir;
+            face_direction(entity, dir);
             ActionResult::success()
         }
-        Action::Drink(point) => {
-            let entity = &mut state.board.entities[eid];
-            if (entity.pos - point).len_l1() > 1 { return ActionResult::failure(); }
+        Action::Drink(target) => {
+            let dir = target - entity.pos;
+            if dir.len_l1() > 1 { return ActionResult::failure(); }
 
-            if entity.pos != point { entity.dir = point - entity.pos; }
-            let okay = state.board.get_cell(point).tile.can_drink();
+            face_direction(entity, dir);
+            let okay = state.board.get_cell(target).tile.can_drink();
             if !okay { return ActionResult::failure(); }
 
             let board = &mut state.board;
             let cb = Box::new(|_: &mut Board, _: &mut RNG| {});
-            board.add_effect(apply_flash(board, point, 0x0000ff, cb), &mut state.rng);
+            board.add_effect(apply_flash(board, target, 0x0000ff, cb), &mut state.rng);
             ActionResult::success()
         }
-        Action::Eat(EatAction { point, item }) => {
-            let entity = &mut state.board.entities[eid];
-            if (entity.pos - point).len_l1() > 1 { return ActionResult::failure(); }
+        Action::Eat(EatAction { target, item }) => {
+            let dir = target - entity.pos;
+            if dir.len_l1() > 1 { return ActionResult::failure(); }
 
-            if entity.pos != point { entity.dir = point - entity.pos; }
-            let cell = state.board.get_cell(point);
+            face_direction(entity, dir);
+            let cell = state.board.get_cell(target);
             let okay = match item {
                 Some(x) => cell.items.iter().find(|&&y| y == x).is_some(),
                 None => cell.tile.can_eat(),
@@ -579,14 +581,13 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let color = if item.is_some() { 0xff0000 } else { 0xffff00 };
             let cb = Box::new(move |board: &mut Board, _: &mut RNG| {
                 let Some(item) = item else { return };
-                board.remove_item(point, item);
+                board.remove_item(target, item);
             });
-            board.add_effect(apply_flash(board, point, color, cb), &mut state.rng);
+            board.add_effect(apply_flash(board, target, color, cb), &mut state.rng);
             ActionResult::success()
         }
         Action::Move(MoveAction { look, step, turns }) => {
-            let entity = &mut state.board.entities[eid];
-            if look != dirs::NONE { entity.dir = look; }
+            face_direction(entity, look);
             if step == dirs::NONE { return ActionResult::success_turns(turns); }
             if step.len_l1() > 1 { return ActionResult::failure(); }
 
@@ -600,11 +601,11 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
             match state.board.get_status(target) {
                 Status::Blocked | Status::Unknown => {
-                    state.board.entities[eid].dir = step;
+                    face_direction(&mut state.board.entities[eid], step);
                     ActionResult::failure()
                 }
                 Status::Occupied => {
-                    state.board.entities[eid].dir = step;
+                    face_direction(&mut state.board.entities[eid], step);
                     if player { state.ui.log.log_failure("There's something in the way!"); }
                     ActionResult::failure()
                 }
@@ -651,7 +652,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
             let oid = state.board.get_cell(target).eid;
             let entity = &mut state.board.entities[eid];
-            entity.dir = target - source;
+            face_direction(entity, target - source);
 
             let cb = move |board: &mut Board, rng: &mut RNG| {
                 let Some(oid) = oid else { return; };
