@@ -20,7 +20,7 @@ const MAX_ENTITY_MEMORY: usize = 64;
 const MAX_TILE_MEMORY: usize = 4096;
 
 fn trophic_level(x: &Entity) -> i32 {
-    if x.player { 0 } else if !x.predator { 1 } else { 2 }
+    if x.player { 3 } else if !x.predator { 1 } else { 2 }
 }
 
 //////////////////////////////////////////////////////////////////////////////
