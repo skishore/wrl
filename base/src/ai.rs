@@ -260,11 +260,11 @@ impl BasicNeedsStrategy {
         Self { last: None, need, path }
     }
 
-    fn action(&self, point: Point) -> Action {
+    fn action(&self, target: Point) -> Action {
         match self.need {
-            BasicNeed::EatMeat => Action::Eat(EatAction { point, item: Some(Item::Corpse) }),
-            BasicNeed::EatPlants => Action::Eat(EatAction { point, item: None }),
-            BasicNeed::Drink => Action::Drink(point),
+            BasicNeed::EatMeat => Action::Eat(EatAction { target, item: Some(Item::Corpse) }),
+            BasicNeed::EatPlants => Action::Eat(EatAction { target, item: None }),
+            BasicNeed::Drink => Action::Drink(target),
         }
     }
 
