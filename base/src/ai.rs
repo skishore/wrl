@@ -41,6 +41,7 @@ const MAX_HUNGER_CARNIVORE: i32 = 2048;
 // this change until we're back to a predator-prey environment.
 //
 // Introduce time-based logic for recomputing flight paths, too.
+const FLIGHT_PATH_TURNS: i32 = 8;
 const MIN_FLIGHT_TURNS: i32 = 16;
 const MAX_FLIGHT_TURNS: i32 = 64;
 const MAX_FLIGHT_TIME: Timedelta = Timedelta::from_seconds(96.);
@@ -706,6 +707,7 @@ struct FlightStrategy {
     dirs: Vec<Point>,
     path: CachedPath,
     stage: FlightStage,
+    needs_path: bool,
     since_path: i32,
     since_seen: i32,
     turn_limit: i32,
@@ -741,6 +743,7 @@ impl Default for FlightStrategy {
             dirs: vec![],
             path: Default::default(),
             stage: FlightStage::Done,
+            needs_path: false,
             since_path: 0,
             since_seen: 0,
             turn_limit: MIN_FLIGHT_TURNS,
@@ -755,6 +758,7 @@ impl Strategy for FlightStrategy {
     fn debug(&self, slice: &mut Slice) {
         slice.write_str("Flight").newline();
         slice.write_str(&format!("    stage: {:?}", self.stage)).newline();
+        slice.write_str(&format!("    needs_path: {}", self.needs_path)).newline();
         slice.write_str(&format!("    since_path: {}", self.since_path)).newline();
         slice.write_str(&format!("    since_seen: {}", self.since_seen)).newline();
         slice.write_str(&format!("    turn_limit: {}", self.turn_limit)).newline();
@@ -782,10 +786,14 @@ impl Strategy for FlightStrategy {
 
         if reset || changed {
             self.dirs.clear();
-            if self.stage > stage || self.since_path >= 8 { self.path.reset(); }
+            self.needs_path = true;
         }
-        if !self.path.check(ctx) {
+
+        let path_stale = self.since_path >= FLIGHT_PATH_TURNS;
+        let compute_path = self.needs_path && (self.stage > stage || path_stale);
+        if compute_path || !self.path.check(ctx) {
             self.path.reset();
+            self.needs_path = false;
         }
 
         self.stage = if reset { min(self.stage, stage) } else { self.stage };
@@ -806,6 +814,7 @@ impl Strategy for FlightStrategy {
 
         if !self.dirs.is_empty() || self.since_seen >= self.turn_limit {
             self.path.reset();
+            self.needs_path = false;
             return self.look(ctx);
         }
 
@@ -849,6 +858,7 @@ impl Strategy for FlightStrategy {
     fn reject(&mut self) {
         self.dirs.clear();
         self.path.reset();
+        self.needs_path = false;
     }
 }
 
