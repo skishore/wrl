@@ -50,6 +50,7 @@ const MIN_SEARCH_TIME: Timedelta = Timedelta::from_seconds(24.);
 const MAX_SEARCH_TIME: Timedelta = Timedelta::from_seconds(48.);
 
 const MAX_TRACKING_TIME: Timedelta = Timedelta::from_seconds(64.);
+const SCENT_AGE_PENALTY: Timedelta = Timedelta::from_seconds(1.);
 
 const SLOWED_TURNS: f64 = 2.;
 const WANDER_TURNS: f64 = 2.;
@@ -596,7 +597,7 @@ impl Strategy for TrackStrategy {
 
         let Some(x) = &self.target else { return (Priority::Skip, 0) };
 
-        (Priority::Hunt, 2 * x.age.raw() + 1)
+        (Priority::Hunt, (x.age + SCENT_AGE_PENALTY).raw())
     }
 
     fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
@@ -670,7 +671,7 @@ impl Strategy for ChaseStrategy {
             (target.pos - pos, 0)
         };
         self.target = Some(ChaseTarget { age, bias, last, steps });
-        (Priority::Hunt, 2 * age.raw())
+        (Priority::Hunt, age.raw())
     }
 
     fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
