@@ -710,7 +710,6 @@ struct FlightStrategy {
     since_seen: i32,
     turn_limit: i32,
     threats: Vec<Threat>,
-    utility: Vec<String>,
 }
 
 impl FlightStrategy {
@@ -746,7 +745,6 @@ impl Default for FlightStrategy {
             since_seen: 0,
             turn_limit: MIN_FLIGHT_TURNS,
             threats: vec![],
-            utility: vec![],
         }
     }
 }
@@ -760,10 +758,6 @@ impl Strategy for FlightStrategy {
         slice.write_str(&format!("    since_path: {}", self.since_path)).newline();
         slice.write_str(&format!("    since_seen: {}", self.since_seen)).newline();
         slice.write_str(&format!("    turn_limit: {}", self.turn_limit)).newline();
-        slice.write_str("    utility:").newline();
-        for line in &self.utility {
-            slice.write_str("      ").write_str(line).newline();
-        }
     }
 
     fn bid(&mut self, ctx: &mut Context, _: bool) -> (Priority, i64) {
@@ -833,7 +827,7 @@ impl Strategy for FlightStrategy {
         if !all_asleep && is_hiding_place(entity, pos, &self.threats) {
             ensure_sneakable(ctx, &self.threats);
 
-            if let Some(target) = flight_cell(ctx, &self.threats, &mut self.utility, true) {
+            if let Some(target) = flight_cell(ctx, &self.threats, true) {
                 self.stage = FlightStage::Hide;
                 if target == pos { return self.look(ctx); }
                 return self.path.sneak(ctx, target, WANDER_TURNS, &self.threats);
@@ -842,7 +836,7 @@ impl Strategy for FlightStrategy {
 
         ensure_neighborhood(ctx);
 
-        if let Some(target) = flight_cell(ctx, &self.threats, &mut self.utility, false) {
+        if let Some(target) = flight_cell(ctx, &self.threats, false) {
             self.stage = FlightStage::Flee;
             if target == pos { return self.look(ctx); }
             return self.path.start(ctx, target, pick_turns(self.stage));
@@ -970,15 +964,14 @@ fn search_around(ctx: &mut Context, path: &mut CachedPath, age: Timedelta,
 
 // Helpers for FlightStrategy
 
-fn flight_cell(ctx: &mut Context, threats: &[Threat],
-               utility: &mut Vec<String>, hiding: bool) -> Option<Point> {
+fn flight_cell(ctx: &mut Context, threats: &[Threat], hiding: bool) -> Option<Point> {
     let Context { entity, known, pos, .. } = *ctx;
 
     let threat_inv_l2s: Vec<_> = threats.iter().map(
         |&x| (x.pos, safe_inv_l2(pos - x.pos))).collect();
     let scale = 1. / DijkstraLength(Point(1, 0)) as f64;
 
-    let score = |p: Point, source_distance: i32, debug: Option<&mut String>| -> f64 {
+    let score = |p: Point, source_distance: i32| -> f64 {
         let mut inv_l2 = 0.;
         let mut threat = Point::default();
         let mut threat_distance = std::i32::MAX;
@@ -998,13 +991,6 @@ fn flight_cell(ctx: &mut Context, threats: &[Threat],
         let inv_delta_l2 = safe_inv_l2(delta);
         let cos = delta.dot(pos - threat) as f64 * inv_delta_l2 * inv_l2;
 
-        if let Some(x) = debug {
-            x.push_str(if blocked { "B" } else { "." });
-            x.push_str(if frontier { "F" } else { "." });
-            x.push_str(if hidden { "H" } else { "." });
-            x.push_str(&format!(" cos: {:.2}; threat: {:?}", cos, threat));
-        }
-
         // WARNING: This heuristic can cause a piece to be "checkmated" in a
         // corner, if the Dijkstra search below isn't wide enough for us to
         // find a cell which is further from the threat than the corner cell.
@@ -1016,44 +1002,13 @@ fn flight_cell(ctx: &mut Context, threats: &[Threat],
         (cos + 1.).pow(0) * base.pow(1)
     };
 
-    let min_score = score(pos, 0, None);
+    let min_score = score(pos, 0);
     let map = if hiding { &ctx.sneakable.visited } else { &ctx.neighborhood.visited };
     let scores: Vec<_> = map.iter().filter_map(|&(p, distance)| {
-        let delta = score(p, distance, None) - min_score;
+        let delta = score(p, distance) - min_score;
         if delta >= 0. { Some((p, delta)) } else { None }
     }).collect();
-    let result = select_target_softmax(&scores, ctx.env, 0.1);
-
-    if let Some(p) = result {
-        let mut threat_distance = std::i32::MAX;
-        let mut cur_threat_distance = std::i32::MAX;
-        for &(x, _) in &threat_inv_l2s {
-            threat_distance = min(threat_distance, DijkstraLength(x - p));
-            cur_threat_distance = min(cur_threat_distance, DijkstraLength(x - pos));
-        }
-        let sd = scale * DijkstraLength(pos - p) as f64;
-        let td = scale * threat_distance as f64;
-        let cur_td = scale * cur_threat_distance as f64;
-
-        let mut distance = None;
-        for &(q, d) in map { if p == q { distance = Some(d); } }
-
-        let mut move_debug = String::new();
-        let mut stay_debug = String::new();
-        let move_score = score(p, distance.unwrap(), Some(&mut move_debug));
-        let stay_score = score(pos, 0, Some(&mut stay_debug));
-
-        utility.clear();
-        utility.push(format!("move: sd = {:.2}; td = {:.2}; score = {:.2}",
-                             sd, td, move_score));
-        utility.push(format!("      {}", move_debug));
-        utility.push(format!("stay: sd = {:.2}; td = {:.2}; score = {:.2}",
-                             0., cur_td, stay_score));
-        utility.push(format!("      {}", stay_debug));
-        let prob = 2. / (1. + (-0.025 * move_score).exp()) - 1.;
-        utility.push(format!("escape_probability: {:.2}", prob));
-    }
-    result
+    select_target_softmax(&scores, ctx.env, 0.1)
 }
 
 //////////////////////////////////////////////////////////////////////////////
