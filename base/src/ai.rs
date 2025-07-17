@@ -727,13 +727,25 @@ impl FlightStrategy {
             self.dirs.reverse();
         }
 
-        let target = self.dirs.pop()?;
+        // Look in the next guess at a threat direction, unless there's a
+        // visible threat, in which case we'll watch the closest one.
+        let mut dir = self.dirs.pop()?;
+        let mut visible_threats: Vec<_> = self.threats.iter().filter_map(|x| {
+            let entity = ctx.known.get(x.pos).entity()?;
+            if entity.delta > 0 && entity.visible { Some(x.pos) } else { None }
+        }).collect();
+        if !visible_threats.is_empty() {
+            let threat = *visible_threats.select_nth_unstable_by_key(
+                0, |&p| ((p - pos).len_l2_squared(), p.0, p.1)).1;
+            dir = threat - pos;
+        }
+
         if self.dirs.is_empty() {
             ctx.shared.till_assess = rng.gen_range(0..MAX_ASSESS);
             self.turn_limit = MIN_FLIGHT_TURNS;
             self.stage = FlightStage::Done;
         }
-        Some(Action::Look(target))
+        Some(Action::Look(dir))
     }
 }
 
