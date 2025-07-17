@@ -115,12 +115,6 @@ impl Entity {
 pub struct EID(NonZeroU64);
 static_assert_size!(Option<EID>, 8);
 
-impl Default for EID {
-    fn default() -> Self {
-        to_eid(DefaultKey::null())
-    }
-}
-
 fn to_key(eid: EID) -> DefaultKey {
     KeyData::from_ffi(eid.0.get()).into()
 }
