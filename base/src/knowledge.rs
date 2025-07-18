@@ -19,6 +19,8 @@ use crate::shadowcast::Vision;
 const MAX_ENTITY_MEMORY: usize = 64;
 const MAX_TILE_MEMORY: usize = 4096;
 
+pub const PLAYER_EVENT_MEMORY: i32 = 4;
+
 fn trophic_level(x: &Entity) -> i32 {
     if x.player { 3 } else if !x.predator { 1 } else { 2 }
 }
@@ -116,6 +118,34 @@ impl std::fmt::Debug for Timestamp {
 
 //////////////////////////////////////////////////////////////////////////////
 
+// Events
+
+#[derive(Clone, Copy, Debug)]
+pub enum Sense { Sight, Sound, Smell }
+
+#[derive(Clone, Debug)]
+pub struct AttackEvent { pub target: Point }
+
+#[derive(Clone, Debug)]
+pub struct MoveEvent { pub from: Point }
+
+#[derive(Clone, Debug)]
+pub enum EventData {
+    Attack(AttackEvent),
+    Move(MoveEvent),
+}
+
+#[derive(Clone, Debug)]
+pub struct SenseEvent {
+    pub data: EventData,
+    pub time: Timestamp,
+    pub point: Point,
+    pub sense: Sense,
+    pub turns: i32,
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 // Knowledge
 
 type CellHandle = Handle<CellKnowledge>;
@@ -176,6 +206,7 @@ pub struct Knowledge {
     entity_by_eid: HashMap<EID, EntityHandle>,
     pub cells: List<CellKnowledge>,
     pub entities: List<EntityKnowledge>,
+    pub events: Vec<SenseEvent>,
     pub scents: Vec<Scent>,
     pub time: Timestamp,
 }
@@ -378,6 +409,23 @@ impl Knowledge {
         let cell = &mut self.cells[*cell_handle.unwrap()];
         assert!(cell.handle == Some(handle));
         cell.handle = None;
+    }
+
+    // Events helpers:
+
+    pub fn forget_events(&mut self, player: bool) {
+        if !player {
+            self.events.clear();
+            return;
+        }
+        self.events.retain_mut(|x| {
+            x.turns += 1;
+            x.turns < PLAYER_EVENT_MEMORY
+        });
+    }
+
+    pub fn observe_event(&mut self, _: &Entity, event: &SenseEvent) {
+        self.events.push(event.clone());
     }
 
     // Private helpers:

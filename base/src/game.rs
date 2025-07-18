@@ -12,6 +12,7 @@ use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs};
 use crate::effect::{Effect, Event, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
 use crate::knowledge::{Knowledge, Scent, Timedelta, Timestamp};
+use crate::knowledge::{EventData, MoveEvent, Sense, SenseEvent};
 use crate::mapgen::mapgen_with_size as mapgen;
 use crate::pathing::Status;
 use crate::shadowcast::{INITIAL_VISIBILITY, VISIBILITY_LOSSES, Vision, VisionArgs};
@@ -169,9 +170,37 @@ impl Default for FOV {
 }
 
 impl FOV {
-    fn compute(&mut self, board: &Board, entity: &Entity) -> &Vision {
+    fn select_vision(&mut self, entity: &Entity) -> &mut Vision {
+        if entity.player { &mut self._pc_vision } else { &mut self.npc_vision }
+    }
+
+    fn can_see(&mut self, board: &Board, entity: &Entity, point: Point) -> bool {
         let Entity { pos, dir, asleep, player, .. } = *entity;
-        let vision = if player { &mut self._pc_vision } else { &mut self.npc_vision };
+        if asleep { return pos == point; }
+
+        let vision = self.select_vision(entity);
+
+        let map = &board.map;
+        let dir = if player { Point::default() } else { dir };
+        let opacity_lookup = |x| map.get(x).tile.opacity();
+        vision.check_point(&VisionArgs { pos, dir, opacity_lookup }, point)
+    }
+
+    fn can_see_entity_at(&mut self, board: &Board, entity: &Entity, point: Point) -> bool {
+        if !self.can_see(board, entity, point) { return false; }
+
+        let nearby = (point - entity.pos).len_l1() <= 1;
+        if nearby { return true; }
+
+        let cell = board.get_cell(point);
+        let dark = matches!(board.get_light(), Light::None);
+        let shade = dark || cell.shadow > 0;
+        nearby || !(shade || cell.tile.limits_vision())
+    }
+
+    fn compute(&mut self, board: &Board, entity: &Entity) -> &Vision {
+        let vision = self.select_vision(entity);
+        let Entity { pos, dir, asleep, player, .. } = *entity;
         if asleep {
             vision.clear(pos);
         } else {
@@ -397,6 +426,13 @@ impl Board {
         let other = &self.entities[oid];
         known.update_entity(me, other, /*seen=*/false, /*heard=*/heard, self.time);
 
+        swap(known, &mut self.entities[eid].known);
+    }
+
+    fn observe_event(&mut self, eid: EID, event: &SenseEvent, env: &mut UpdateEnv) {
+        let known = &mut env.known;
+        swap(known, &mut self.entities[eid].known);
+        known.observe_event(&mut self.entities[eid], event);
         swap(known, &mut self.entities[eid].known);
     }
 
@@ -626,18 +662,41 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                     }
                     state.board.move_entity(eid, target);
                     for (oid, heard) in updated {
+                        if oid == state.player { continue; }
                         state.board.update_known_entity(oid, eid, heard, &mut state.env);
                     }
 
-                    // Move animations, only for the player.
-                    if eid != state.player {
-                        let known = &state.board.entities[state.player].known;
-                        let source_seen = known.get(source).can_see_entity_at();
-                        let target_seen = known.get(target).can_see_entity_at();
-                        if source_seen || target_seen {
-                            state.ui.animate_move(color, 0, source);
-                            if !target_seen { state.ui.animate_move(color, 1, target); }
-                        }
+                    // Compute the list of entities that see or hear the move.
+                    let board = &state.board;
+                    let mut updated = vec![];
+                    for (oid, other) in &board.entities {
+                        if oid == eid { continue; }
+                        if other.asleep && !noisy { continue; }
+
+                        let fov = &mut state.env.fov;
+                        let source_seen = fov.can_see_entity_at(board, other, source);
+                        let target_seen = fov.can_see_entity_at(board, other, target);
+                        let seen = source_seen || target_seen;
+
+                        let source_heard = (other.pos - source).len_nethack() <= max;
+                        let target_heard = (other.pos - target).len_nethack() <= max;
+                        let heard = source_heard || target_heard;
+
+                        if seen || heard { updated.push((oid, seen, target_seen)); }
+                    }
+
+                    // Deliver the MoveEvent to each entity in the list.
+                    let (sense, time) = (Sense::Sight, state.board.time);
+                    let data = EventData::Move(MoveEvent { from: source });
+                    let mut event = SenseEvent { data, time, point: target, sense, turns: 0 };
+                    for (oid, seen, target_seen) in updated {
+                        event.sense = if seen { Sense::Sight } else { Sense::Sound };
+                        state.board.observe_event(oid, &event, &mut state.env);
+                        if oid != state.player { continue; }
+
+                        let color = if seen { color } else { Color::white() };
+                        state.ui.animate_move(color, 0, source);
+                        if !target_seen { state.ui.animate_move(color, 1, target); }
                     }
                     ActionResult::success_turns(turns)
                 }
@@ -826,7 +885,6 @@ fn update_state(state: &mut State) {
         if player && needs_input(state) { break; }
 
         state.board.update_known(eid, &mut state.env);
-        state.board.update_known(state.player, &mut state.env);
 
         update = true;
         let action = plan(state, eid);
@@ -836,6 +894,8 @@ fn update_state(state: &mut State) {
         let Some(entity) = state.board.entities.get_mut(eid) else { continue };
 
         state.board.time = state.board.time.bump();
+
+        entity.known.forget_events(player);
 
         let trail = &mut entity.trail;
         if trail.len() == trail.capacity() { trail.pop_back(); }
