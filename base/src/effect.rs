@@ -1,5 +1,5 @@
 use crate::base::{HashSet, Glyph, LOS, Point, RNG, dirs, sample};
-use crate::game::Board;
+use crate::game::{Board, UpdateEnv};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -9,7 +9,7 @@ use crate::game::Board;
 pub enum FT { Fire, Ice, Hit, Summon, Withdraw }
 
 pub enum Event {
-    Callback { frame: i32, callback: Box<dyn Fn(&mut Board, &mut RNG)> },
+    Callback { frame: i32, callback: Box<dyn Fn(&mut Board, &mut UpdateEnv)> },
     Other { frame: i32, point: Point, what: FT },
 }
 
