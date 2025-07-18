@@ -166,7 +166,7 @@ impl Point {
 
     pub fn len_nethack(&self) -> i32 {
         let (ax, ay) = (self.0.abs() as i64, self.1.abs() as i64);
-        let (min, max) = (std::cmp::min(ax, ay), std::cmp::max(ax, ay));
+        let (min, max) = (min(ax, ay), max(ax, ay));
         ((46 * min + 95 * max + 25) / 100) as i32
     }
 
