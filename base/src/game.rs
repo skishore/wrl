@@ -154,14 +154,14 @@ enum Weather { None, Rain(Point, usize) }
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Vision
+// FOV
 
-struct EntityVision {
+struct FOV {
     npc_vision: Vision,
     _pc_vision: Vision,
 }
 
-impl Default for EntityVision {
+impl Default for FOV {
     fn default() -> Self {
         Self {
             npc_vision: Vision::new(FOV_RADIUS_NPC),
@@ -170,21 +170,19 @@ impl Default for EntityVision {
     }
 }
 
-impl EntityVision {
-    fn get(&self, entity: &Entity) -> &Vision {
-        if entity.player { &self._pc_vision } else { &self.npc_vision }
-    }
-
-    fn compute(&mut self, entity: &Entity, map: &Matrix<Cell>) {
+impl FOV {
+    fn compute(&mut self, board: &Board, entity: &Entity) -> &Vision {
         let Entity { pos, dir, asleep, player, .. } = *entity;
         let vision = if player { &mut self._pc_vision } else { &mut self.npc_vision };
         if asleep {
             vision.clear(pos);
         } else {
+            let map = &board.map;
             let dir = if player { Point::default() } else { dir };
             let opacity_lookup = |x| map.get(x).tile.opacity();
             vision.compute(&VisionArgs { pos, dir, opacity_lookup });
         }
+        vision
     }
 }
 
@@ -209,15 +207,9 @@ pub struct Board {
     active_entity: Option<EID>,
     pub entities: EntityMap,
     pub time: Timestamp,
-
-    // Animation:
     _effect: Effect,
 
-    // Knowledge state:
-    known: Option<Box<Knowledge>>,
-    vision: EntityVision,
-
-    // Environmental effects:
+    // Environment:
     light: Light,
     shadow: Vec<Point>,
 }
@@ -237,15 +229,9 @@ impl Board {
             active_entity: None,
             entities: EntityMap::default(),
             time: Timestamp::default().latch(time),
-
-            // Animation:
             _effect: Effect::default(),
 
-            // Knowledge state:
-            known: Some(Box::default()),
-            vision: EntityVision::default(),
-
-            // Environmental effects:
+            // Environment:
             light,
             shadow,
         };
@@ -255,16 +241,16 @@ impl Board {
 
     // Animation
 
-    fn add_effect(&mut self, effect: Effect, rng: &mut RNG) {
+    fn add_effect(&mut self, effect: Effect, env: &mut UpdateEnv) {
         let mut existing = Effect::default();
         swap(&mut self._effect, &mut existing);
         self._effect = existing.and(effect);
-        self._execute_effect_callbacks(rng);
+        self._execute_effect_callbacks(env);
     }
 
-    fn advance_effect(&mut self, pov: EID, rng: &mut RNG) -> bool {
+    fn advance_effect(&mut self, pov: EID, env: &mut UpdateEnv) -> bool {
         let mut visible = self.pov_sees_effect(pov);
-        while self._advance_one_frame(rng) {
+        while self._advance_one_frame(env) {
             visible = visible || self.pov_sees_effect(pov);
             if visible { return true; }
         }
@@ -279,7 +265,7 @@ impl Board {
         frame.iter().any(|y| known.get(y.point).visible())
     }
 
-    fn _advance_one_frame(&mut self, rng: &mut RNG) -> bool {
+    fn _advance_one_frame(&mut self, env: &mut UpdateEnv) -> bool {
         if self._effect.frames.is_empty() {
             assert!(self._effect.events.is_empty());
             return false;
@@ -287,20 +273,20 @@ impl Board {
         self.time = self.time.bump();
         self._effect.frames.remove(0);
         self._effect.events.iter_mut().for_each(|x| x.update_frame(|y| y - 1));
-        self._execute_effect_callbacks(rng);
+        self._execute_effect_callbacks(env);
         true
     }
 
-    fn _execute_effect_callbacks(&mut self, rng: &mut RNG) {
-        while self._execute_one_effect_callback(rng) {}
+    fn _execute_effect_callbacks(&mut self, env: &mut UpdateEnv) {
+        while self._execute_one_effect_callback(env) {}
     }
 
-    fn _execute_one_effect_callback(&mut self, rng: &mut RNG) -> bool {
+    fn _execute_one_effect_callback(&mut self, env: &mut UpdateEnv) -> bool {
         if self._effect.events.is_empty() { return false; }
         let event = &self._effect.events[0];
         if !self._effect.frames.is_empty() && event.frame() > 0 { return false; }
         match self._effect.events.remove(0) {
-            Event::Callback { callback, .. } => callback(self, rng),
+            Event::Callback { callback, .. } => callback(self, env),
             Event::Other { .. } => (),
         }
         true
@@ -342,13 +328,13 @@ impl Board {
 
     // Entity setters
 
-    fn add_entity(&mut self, args: &EntityArgs, rng: &mut RNG) -> EID {
+    fn add_entity(&mut self, args: &EntityArgs, env: &mut UpdateEnv) -> EID {
         let pos = args.pos;
-        let eid = self.entities.add(args, rng);
+        let eid = self.entities.add(args, &mut env.rng);
         let cell = self.map.entry_mut(pos).unwrap();
         let prev = replace(&mut cell.eid, Some(eid));
         assert!(prev.is_none());
-        self.update_known(eid, rng);
+        self.update_known(eid, env);
         eid
     }
 
@@ -396,29 +382,26 @@ impl Board {
 
     // Knowledge
 
-    fn update_known(&mut self, eid: EID, rng: &mut RNG) {
-        let mut known = self.known.take().unwrap_or_default();
-        swap(&mut known, &mut self.entities[eid].known);
+    fn update_known(&mut self, eid: EID, env: &mut UpdateEnv) {
+        let UpdateEnv { known, fov, rng } = env;
+        swap(known, &mut self.entities[eid].known);
 
         let me = &self.entities[eid];
-        self.vision.compute(me, &self.map);
-        let vision = self.vision.get(me);
+        let vision = fov.compute(&self, me);
         known.update(me, &self, vision, rng);
 
-        swap(&mut known, &mut self.entities[eid].known);
-        self.known = Some(known);
+        swap(known, &mut self.entities[eid].known);
     }
 
-    fn update_known_entity(&mut self, eid: EID, oid: EID, heard: bool) {
-        let mut known = self.known.take().unwrap_or_default();
-        swap(&mut known, &mut self.entities[eid].known);
+    fn update_known_entity(&mut self, eid: EID, oid: EID, heard: bool, env: &mut UpdateEnv) {
+        let known = &mut env.known;
+        swap(known, &mut self.entities[eid].known);
 
         let me = &self.entities[eid];
         let other = &self.entities[oid];
         known.update_entity(me, other, /*seen=*/false, /*heard=*/heard, self.time);
 
-        swap(&mut known, &mut self.entities[eid].known);
-        self.known = Some(known);
+        swap(known, &mut self.entities[eid].known);
     }
 
     fn remove_known_entity(&mut self, eid: EID, oid: EID) {
@@ -543,13 +526,13 @@ fn plan(state: &mut State, eid: EID) -> Action {
     let player = eid == state.player;
     if player { return replace(&mut state.input, Action::WaitForInput); }
 
-    let State { ai, board, rng, ui: UI { debug, .. }, .. } = state;
-    let vision = &mut board.vision.npc_vision;
+    let State { ai, board, env, ui: UI { debug, .. }, .. } = state;
+    let vision = &mut env.fov.npc_vision;
     let entity = &mut board.entities[eid];
     swap(ai, &mut entity.ai);
 
     let debug = if state.pov == Some(eid) { Some(debug) } else { None };
-    let mut env = AIEnv { debug, fov: vision, rng };
+    let mut env = AIEnv { debug, fov: vision, rng: &mut env.rng };
     let action = ai.plan(&entity, &mut env);
 
     swap(ai, &mut entity.ai);
@@ -567,8 +550,8 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
         Action::SniffAround => {
             let (pos, color) = (entity.pos, 0xffff00);
             let board = &mut state.board;
-            let cb = Box::new(|_: &mut Board, _: &mut RNG| {});
-            board.add_effect(apply_flash(board, pos, color, cb), &mut state.rng);
+            let cb = Box::new(|_: &mut Board, _: &mut UpdateEnv| {});
+            board.add_effect(apply_flash(board, pos, color, cb), &mut state.env);
             ActionResult::success()
         }
         Action::Look(dir) => {
@@ -584,8 +567,8 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             if !okay { return ActionResult::failure(); }
 
             let board = &mut state.board;
-            let cb = Box::new(|_: &mut Board, _: &mut RNG| {});
-            board.add_effect(apply_flash(board, target, 0x0000ff, cb), &mut state.rng);
+            let cb = Box::new(|_: &mut Board, _: &mut UpdateEnv| {});
+            board.add_effect(apply_flash(board, target, 0x0000ff, cb), &mut state.env);
             ActionResult::success()
         }
         Action::Eat(EatAction { target, item }) => {
@@ -602,11 +585,11 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
             let board = &mut state.board;
             let color = if item.is_some() { 0xff0000 } else { 0xffff00 };
-            let cb = Box::new(move |board: &mut Board, _: &mut RNG| {
+            let cb = Box::new(move |board: &mut Board, _: &mut UpdateEnv| {
                 let Some(item) = item else { return };
                 board.remove_item(target, item);
             });
-            board.add_effect(apply_flash(board, target, color, cb), &mut state.rng);
+            board.add_effect(apply_flash(board, target, color, cb), &mut state.env);
             ActionResult::success()
         }
         Action::Move(MoveAction { look, step, turns }) => {
@@ -647,7 +630,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                     }
                     state.board.move_entity(eid, target);
                     for (oid, heard) in updated {
-                        state.board.update_known_entity(oid, eid, heard);
+                        state.board.update_known_entity(oid, eid, heard, &mut state.env);
                     }
 
                     // Move animations, only for the player.
@@ -677,15 +660,15 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let entity = &mut state.board.entities[eid];
             face_direction(entity, target - source);
 
-            let cb = move |board: &mut Board, rng: &mut RNG| {
+            let cb = move |board: &mut Board, env: &mut UpdateEnv| {
                 let Some(oid) = oid else { return; };
-                let cb = move |board: &mut Board, _: &mut RNG| {
+                let cb = move |board: &mut Board, env: &mut UpdateEnv| {
                     let Some(other) = board.entities.get_mut(oid) else { return; };
 
                     let damage = 1;
                     if other.cur_hp > damage {
                         other.cur_hp -= damage;
-                        board.update_known_entity(oid, eid, /*heard=*/true);
+                        board.update_known_entity(oid, eid, /*heard=*/true, env);
                     } else {
                         let pos = other.pos;
                         board.remove_entity(oid);
@@ -693,10 +676,10 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                         board.remove_known_entity(eid, oid);
                     }
                 };
-                board.add_effect(apply_damage(board, target, Box::new(cb)), rng);
+                board.add_effect(apply_damage(board, target, Box::new(cb)), env);
             };
 
-            let rng = &mut state.rng;
+            let rng = &mut state.env.rng;
             let effect = effect::HeadbuttEffect(&state.board, rng, source, target);
             state.add_effect(apply_effect(effect, FT::Hit, Box::new(cb)));
             ActionResult::success_moves(1.)
@@ -717,7 +700,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 //
 // We also need to figure out if items are "hidden" the same way entities are.
 
-type CB = Box<dyn Fn(&mut Board, &mut RNG)>;
+type CB = Box<dyn Fn(&mut Board, &mut UpdateEnv)>;
 
 fn apply_flash<T: Into<Color>>(board: &Board, target: Point, color: T, callback: CB) -> Effect {
     let cell = board.get_cell(target);
@@ -803,9 +786,9 @@ fn process_input(state: &mut State, input: Input) {
 }
 
 fn update_pov_entities(state: &mut State) {
-    state.board.update_known(state.player, &mut state.rng);
+    state.board.update_known(state.player, &mut state.env);
     if let Some(x) = state.pov && state.board.entities.has(x) {
-        state.board.update_known(x, &mut state.rng);
+        state.board.update_known(x, &mut state.env);
     }
     let player = &state.board.entities[state.player];
     state.ui.update_focus(player);
@@ -813,11 +796,11 @@ fn update_pov_entities(state: &mut State) {
 
 fn update_state(state: &mut State) {
     let pos = state.get_player().pos;
-    state.ui.update(pos, &mut state.rng);
+    state.ui.update(pos, &mut state.env.rng);
 
     // If an Effect is active, run it, skipping frames the POV entity can't see.
     let pov = state.get_pov_entity().eid;
-    if state.board.advance_effect(pov, &mut state.rng) {
+    if state.board.advance_effect(pov, &mut state.env) {
         update_pov_entities(state);
         return;
     }
@@ -846,8 +829,8 @@ fn update_state(state: &mut State) {
         let player = entity.player;
         if player && needs_input(state) { break; }
 
-        state.board.update_known(eid, &mut state.rng);
-        state.board.update_known(state.player, &mut state.rng);
+        state.board.update_known(eid, &mut state.env);
+        state.board.update_known(state.player, &mut state.env);
 
         update = true;
         let action = plan(state, eid);
@@ -869,7 +852,7 @@ fn update_state(state: &mut State) {
     // Skip the prefix of Effect frames that the POV entity can't see.
     let pov = state.get_pov_entity().eid;
     if state.board.get_frame().is_some() && !state.board.pov_sees_effect(pov) {
-        state.board.advance_effect(pov, &mut state.rng);
+        state.board.advance_effect(pov, &mut state.env);
     }
 
     if update { update_pov_entities(state); }
@@ -879,13 +862,19 @@ fn update_state(state: &mut State) {
 
 // State
 
+pub struct UpdateEnv {
+    known: Box<Knowledge>,
+    fov: FOV,
+    rng: RNG,
+}
+
 pub struct State {
     board: Board,
     input: Action,
     inputs: Vec<Input>,
     player: EID,
+    env: UpdateEnv,
     pov: Option<EID>,
-    rng: RNG,
     ai: Box<AIState>,
     ui: UI,
 }
@@ -900,12 +889,17 @@ impl State {
     pub fn new(seed: Option<u64>, full: bool) -> Self {
         let size = Point(WORLD_SIZE, WORLD_SIZE);
         let rng = seed.map(|x| RNG::seed_from_u64(x));
-        let mut rng = rng.unwrap_or_else(|| RNG::from_os_rng());
+        let rng = rng.unwrap_or_else(|| RNG::from_os_rng());
+        let mut env = UpdateEnv {
+            known: Default::default(),
+            fov: Default::default(),
+            rng,
+        };
         let mut pos = Point(size.0 / 2, size.1 / 2);
         let mut board = Board::new(size, LIGHT);
 
         loop {
-            let map = mapgen(size, &mut rng);
+            let map = mapgen(size, &mut env.rng);
             for x in 0..size.0 {
                 for y in 0..size.1 {
                     let p = Point(x, y);
@@ -923,7 +917,7 @@ impl State {
         let glyph = Glyph::wdfg('@', 0xffffff);
         let (player, speed) = (true, SPEED_PC_);
         let args = EntityArgs { glyph, player, predator: false, pos, speed };
-        let player = board.add_entity(&args, &mut rng);
+        let player = board.add_entity(&args, &mut env);
 
         let pos = |board: &Board, rng: &mut RNG| {
             for _ in 0..100 {
@@ -933,7 +927,7 @@ impl State {
             None
         };
         for i in 0..(NUM_PREDATORS + NUM_PREY) {
-            if let Some(x) = pos(&board, &mut rng) {
+            if let Some(x) = pos(&board, &mut env.rng) {
                 let predator = i < NUM_PREDATORS;
                 let (player, speed) = (false, SPEED_NPC);
                 let glyph = if predator {
@@ -942,14 +936,14 @@ impl State {
                     Glyph::wdfg('P', 0xd0a070)
                 };
                 let args = EntityArgs { glyph, player, predator, pos: x, speed };
-                board.add_entity(&args, &mut rng);
+                board.add_entity(&args, &mut env);
             }
         }
         board.entities[player].dir = dirs::S;
-        board.update_known(player, &mut rng);
+        board.update_known(player, &mut env);
 
         let inputs = Default::default();
-        let ai = Box::new(AIState::new(/*predator=*/false, &mut rng));
+        let ai = Box::new(AIState::new(/*predator=*/false, &mut env.rng));
         let pov = None;
 
         let mut ui = UI::default();
@@ -960,7 +954,7 @@ impl State {
         ui.log.log("Welcome to WildsRL! Use vikeys (h/j/k/l/y/u/b/n) to move.");
         if full { ui.show_full_view(); }
 
-        Self { board, input, inputs, player, pov, rng, ai, ui }
+        Self { board, input, inputs, player, env, pov, ai, ui }
     }
 
     fn get_pov_entity(&self) -> &Entity {
@@ -971,7 +965,7 @@ impl State {
 
     fn mut_player(&mut self) -> &mut Entity { &mut self.board.entities[self.player] }
 
-    pub fn add_effect(&mut self, x: Effect) { self.board.add_effect(x, &mut self.rng) }
+    pub fn add_effect(&mut self, x: Effect) { self.board.add_effect(x, &mut self.env) }
 
     pub fn add_input(&mut self, input: Input) { self.inputs.push(input) }
 
