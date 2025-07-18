@@ -154,6 +154,42 @@ enum Weather { None, Rain(Point, usize) }
 
 //////////////////////////////////////////////////////////////////////////////
 
+// Vision
+
+struct EntityVision {
+    npc_vision: Vision,
+    _pc_vision: Vision,
+}
+
+impl Default for EntityVision {
+    fn default() -> Self {
+        Self {
+            npc_vision: Vision::new(FOV_RADIUS_NPC),
+            _pc_vision: Vision::new(FOV_RADIUS_PC_),
+        }
+    }
+}
+
+impl EntityVision {
+    fn get(&self, entity: &Entity) -> &Vision {
+        if entity.player { &self._pc_vision } else { &self.npc_vision }
+    }
+
+    fn compute(&mut self, entity: &Entity, map: &Matrix<Cell>) {
+        let Entity { pos, dir, asleep, player, .. } = *entity;
+        let vision = if player { &mut self._pc_vision } else { &mut self.npc_vision };
+        if asleep {
+            vision.clear(pos);
+        } else {
+            let dir = if player { Point::default() } else { dir };
+            let opacity_lookup = |x| map.get(x).tile.opacity();
+            vision.compute(&VisionArgs { pos, dir, opacity_lookup });
+        }
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 // Board
 
 #[derive(Clone)]
@@ -179,8 +215,7 @@ pub struct Board {
 
     // Knowledge state:
     known: Option<Box<Knowledge>>,
-    npc_vision: Vision,
-    _pc_vision: Vision,
+    vision: EntityVision,
 
     // Environmental effects:
     light: Light,
@@ -208,8 +243,7 @@ impl Board {
 
             // Knowledge state:
             known: Some(Box::default()),
-            npc_vision: Vision::new(FOV_RADIUS_NPC),
-            _pc_vision: Vision::new(FOV_RADIUS_PC_),
+            vision: EntityVision::default(),
 
             // Environmental effects:
             light,
@@ -223,7 +257,7 @@ impl Board {
 
     fn add_effect(&mut self, effect: Effect, rng: &mut RNG) {
         let mut existing = Effect::default();
-        std::mem::swap(&mut self._effect, &mut existing);
+        swap(&mut self._effect, &mut existing);
         self._effect = existing.and(effect);
         self._execute_effect_callbacks(rng);
     }
@@ -367,16 +401,8 @@ impl Board {
         swap(&mut known, &mut self.entities[eid].known);
 
         let me = &self.entities[eid];
-        let Entity { pos, dir, asleep, player, .. } = *me;
-        let vision = if player { &mut self._pc_vision } else { &mut self.npc_vision };
-        if asleep {
-            vision.clear(pos);
-        } else {
-            let dir = if player { Point::default() } else { dir };
-            let opacity_lookup = |x| self.map.get(x).tile.opacity();
-            vision.compute(&VisionArgs { pos, dir, opacity_lookup });
-        }
-        let vision = if player { &self._pc_vision } else { &self.npc_vision };
+        self.vision.compute(me, &self.map);
+        let vision = self.vision.get(me);
         known.update(me, &self, vision, rng);
 
         swap(&mut known, &mut self.entities[eid].known);
@@ -517,19 +543,16 @@ fn plan(state: &mut State, eid: EID) -> Action {
     let player = eid == state.player;
     if player { return replace(&mut state.input, Action::WaitForInput); }
 
-    let entity = &mut state.board.entities[eid];
-    let mut ai = state.ai.take().unwrap_or_else(
-        || Box::new(AIState::new(false, &mut state.rng)));
-    swap(&mut ai, &mut entity.ai);
-
-    let board = &mut state.board;
-    let debug = if state.pov == Some(eid) { Some(&mut state.ui.debug) } else { None };
-    let mut env = AIEnv { debug, fov: &mut board.npc_vision, rng: &mut state.rng };
-    let action = ai.plan(&board.entities[eid], &mut env);
-
+    let State { ai, board, rng, ui: UI { debug, .. }, .. } = state;
+    let vision = &mut board.vision.npc_vision;
     let entity = &mut board.entities[eid];
-    swap(&mut ai, &mut entity.ai);
-    state.ai = Some(ai);
+    swap(ai, &mut entity.ai);
+
+    let debug = if state.pov == Some(eid) { Some(debug) } else { None };
+    let mut env = AIEnv { debug, fov: vision, rng };
+    let action = ai.plan(&entity, &mut env);
+
+    swap(ai, &mut entity.ai);
     action
 }
 
@@ -863,7 +886,7 @@ pub struct State {
     player: EID,
     pov: Option<EID>,
     rng: RNG,
-    ai: Option<Box<AIState>>,
+    ai: Box<AIState>,
     ui: UI,
 }
 
@@ -926,7 +949,7 @@ impl State {
         board.update_known(player, &mut rng);
 
         let inputs = Default::default();
-        let ai = Default::default();
+        let ai = Box::new(AIState::new(/*predator=*/false, &mut rng));
         let pov = None;
 
         let mut ui = UI::default();
