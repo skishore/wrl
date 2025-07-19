@@ -10,7 +10,7 @@ use crate::effect::{Frame, self};
 use crate::entity::{EID, Entity};
 use crate::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_, WORLD_SIZE};
 use crate::game::{Board, Input, Tile, show_item};
-use crate::knowledge::{EntityKnowledge, Knowledge};
+use crate::knowledge::{EntityKnowledge, Knowledge, Sense};
 use crate::pathing::Status;
 use crate::shadowcast::{Vision, VisionArgs};
 
@@ -715,7 +715,7 @@ impl UI {
 
         // Render ephemeral state: sounds we've heard and moves we've glimpsed.
         for entity in &known.entities {
-            if !entity.heard { continue; }
+            if entity.sense != Sense::Sound { continue; }
             let Point(x, y) = entity.pos - offset;
             slice.set(Point(2 * x, y), Glyph::wide('?'));
         }
@@ -860,7 +860,9 @@ impl UI {
         }
         for other in &entity.known.entities {
             let color = if other.visible { 0x00ff00 } else {
-                if other.moved { 0xff0000 } else { 0xffff00 }
+                let entity_at_pos = entity.known.get(other.pos).entity();
+                let moved = entity_at_pos.map(|x| x.eid) != Some(other.eid);
+                if moved { 0xff0000 } else { 0xffff00 }
             };
             let glyph = other.glyph.with_fg(Color::black()).with_bg(color);
             let Point(x, y) = other.pos - offset;

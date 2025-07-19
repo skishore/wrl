@@ -418,13 +418,13 @@ impl Board {
         swap(known, &mut self.entities[eid].known);
     }
 
-    fn update_known_entity(&mut self, eid: EID, oid: EID, heard: bool, env: &mut UpdateEnv) {
+    fn hear_entity(&mut self, eid: EID, oid: EID, env: &mut UpdateEnv) {
         let known = &mut env.known;
         swap(known, &mut self.entities[eid].known);
 
         let me = &self.entities[eid];
         let other = &self.entities[oid];
-        known.update_entity(me, other, /*seen=*/false, /*heard=*/heard, self.time);
+        known.update_entity(me, other, Sense::Sound, self.time);
 
         swap(known, &mut self.entities[eid].known);
     }
@@ -658,12 +658,12 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                         if other.asleep && !noisy { continue; }
                         let sr = (other.pos - source).len_nethack() <= max;
                         let tr = (other.pos - target).len_nethack() <= max;
-                        if sr || tr { updated.push((oid, tr)); }
+                        if sr || tr { updated.push(oid); }
                     }
                     state.board.move_entity(eid, target);
-                    for (oid, heard) in updated {
+                    for oid in updated {
                         if oid == state.player { continue; }
-                        state.board.update_known_entity(oid, eid, heard, &mut state.env);
+                        state.board.hear_entity(oid, eid, &mut state.env);
                     }
 
                     // Compute the list of entities that see or hear the move.
@@ -723,7 +723,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                     let damage = 1;
                     if other.cur_hp > damage {
                         other.cur_hp -= damage;
-                        board.update_known_entity(oid, eid, /*heard=*/true, env);
+                        board.hear_entity(oid, eid, env);
                     } else {
                         let pos = other.pos;
                         board.remove_entity(oid);
