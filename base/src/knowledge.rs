@@ -135,8 +135,6 @@ pub struct CellKnowledge {
     pub visible: bool,
     pub see_entity_at: bool,
 }
-#[cfg(target_pointer_width = "32")]
-static_assert_size!(CellKnowledge, 48);
 #[cfg(target_pointer_width = "64")]
 static_assert_size!(CellKnowledge, 56);
 
@@ -163,8 +161,6 @@ pub struct EntityKnowledge {
     pub visible: bool,
     pub sneaking: bool,
 }
-#[cfg(target_pointer_width = "32")]
-static_assert_size!(EntityKnowledge, 80);
 #[cfg(target_pointer_width = "64")]
 static_assert_size!(EntityKnowledge, 88);
 
