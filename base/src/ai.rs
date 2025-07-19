@@ -315,7 +315,7 @@ impl BasicNeedsStrategy {
         // If we can see `last` and it no longer satisfies our need, drop it.
         let Context { known, pos, .. } = *ctx;
         let cell = known.get(last);
-        if cell.visible() && !self.satisfies_need(cell.get_cell()) {
+        if cell.visible() && !self.satisfies_need(cell.cell()) {
             self.last = None;
             return;
         }
@@ -344,7 +344,7 @@ impl Strategy for BasicNeedsStrategy {
 
         // Clear the cached path, if it's no longer good.
         let known = ctx.known;
-        let valid = |p: Point| self.satisfies_need(known.get(p).get_cell());
+        let valid = |p: Point| self.satisfies_need(known.get(p).cell());
         if !(self.path.check(ctx) && valid(self.path.steps[0])) { self.path.reset(); }
 
         // Compute a priority for satisfying this need.
@@ -361,7 +361,7 @@ impl Strategy for BasicNeedsStrategy {
         if let Some(x) = self.path.follow(ctx, turns) { return Some(x); }
 
         let Context { known, pos, .. } = *ctx;
-        let valid = |p: Point| self.satisfies_need(known.get(p).get_cell());
+        let valid = |p: Point| self.satisfies_need(known.get(p).cell());
         for &dir in [dirs::NONE].iter().chain(&dirs::ALL) {
             if valid(pos + dir) {
                 *self.turns_left(ctx) = max(*self.turns_left(ctx), self.timeout());
@@ -373,7 +373,7 @@ impl Strategy for BasicNeedsStrategy {
 
         let n = &ctx.neighborhood;
         for &(point, _) in n.blocked.iter().chain(&n.visited) {
-            if !self.satisfies_need(known.get(point).get_cell()) { continue; }
+            if !self.satisfies_need(known.get(point).cell()) { continue; }
 
             // Compute at most one path to a point in the neighborhood.
             let action = self.path.start(ctx, point, turns);
