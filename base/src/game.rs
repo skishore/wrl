@@ -9,10 +9,10 @@ use crate::static_assert_size;
 use crate::ai::{AIEnv, AIState};
 use crate::base::{Buffer, Color, Glyph};
 use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs};
-use crate::effect::{Effect, Event, Frame, FT, self};
+use crate::effect::{Effect, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
 use crate::knowledge::{Knowledge, Scent, Timedelta, Timestamp};
-use crate::knowledge::{EventData, MoveEvent, Sense, SenseEvent};
+use crate::knowledge::{EventData, MoveEvent, Sense, Event};
 use crate::mapgen::mapgen_with_size as mapgen;
 use crate::pathing::Status;
 use crate::shadowcast::{INITIAL_VISIBILITY, VISIBILITY_LOSSES, Vision, VisionArgs};
@@ -311,8 +311,8 @@ impl Board {
         let event = &self._effect.events[0];
         if !self._effect.frames.is_empty() && event.frame() > 0 { return false; }
         match self._effect.events.remove(0) {
-            Event::Callback { callback, .. } => callback(self, env),
-            Event::Other { .. } => (),
+            effect::Event::Callback { callback, .. } => callback(self, env),
+            effect::Event::Other { .. } => (),
         }
         true
     }
@@ -429,7 +429,7 @@ impl Board {
         swap(known, &mut self.entities[eid].known);
     }
 
-    fn observe_event(&mut self, eid: EID, event: &SenseEvent, env: &mut UpdateEnv) {
+    fn observe_event(&mut self, eid: EID, event: &Event, env: &mut UpdateEnv) {
         let known = &mut env.known;
         swap(known, &mut self.entities[eid].known);
         known.observe_event(&mut self.entities[eid], event);
@@ -688,7 +688,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                     // Deliver the MoveEvent to each entity in the list.
                     let (sense, time) = (Sense::Sight, state.board.time);
                     let data = EventData::Move(MoveEvent { from: source });
-                    let mut event = SenseEvent { data, time, point: target, sense, turns: 0 };
+                    let mut event = Event { data, time, point: target, sense, turns: 0 };
                     for (oid, seen, target_seen) in updated {
                         event.sense = if seen { Sense::Sight } else { Sense::Sound };
                         state.board.observe_event(oid, &event, &mut state.env);
@@ -771,7 +771,7 @@ fn apply_flash<T: Into<Color>>(board: &Board, target: Point, color: T, callback:
     let particle = effect::Particle { glyph: flash, point: target };
     let mut effect = Effect::constant(particle, UI_DAMAGE_FLASH);
     let frame = effect.frames.len() as i32;
-    effect.add_event(Event::Callback { frame, callback });
+    effect.add_event(effect::Event::Callback { frame, callback });
     effect
 }
 
@@ -788,7 +788,7 @@ fn apply_damage(board: &Board, target: Point, callback: CB) -> Effect {
         Effect::constant(restored, UI_DAMAGE_TICKS),
     ]);
     let frame = effect.frames.len() as i32;
-    effect.add_event(Event::Callback { frame, callback });
+    effect.add_event(effect::Event::Callback { frame, callback });
     effect
 }
 
@@ -796,7 +796,7 @@ fn apply_effect(mut effect: Effect, what: FT, callback: CB) -> Effect {
     let frame = effect.events.iter().find_map(
         |x| if x.what() == Some(what) { Some(x.frame()) } else { None });
     if let Some(frame) = frame {
-        effect.add_event(Event::Callback { frame, callback });
+        effect.add_event(effect::Event::Callback { frame, callback });
     }
     effect
 }
