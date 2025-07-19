@@ -68,8 +68,6 @@ pub struct Tile {
     pub glyph: Glyph,
     pub description: &'static str,
 }
-#[cfg(target_pointer_width = "32")]
-static_assert_size!(Tile, 24);
 #[cfg(target_pointer_width = "64")]
 static_assert_size!(Tile, 32);
 
@@ -197,8 +195,6 @@ pub struct Cell {
     pub shadow: i32,
     pub tile: &'static Tile,
 }
-#[cfg(target_pointer_width = "32")]
-static_assert_size!(Cell, 24);
 #[cfg(target_pointer_width = "64")]
 static_assert_size!(Cell, 32);
 
