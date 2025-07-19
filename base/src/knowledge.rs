@@ -136,7 +136,7 @@ pub enum EventData {
 }
 
 #[derive(Clone, Debug)]
-pub struct SenseEvent {
+pub struct Event {
     pub data: EventData,
     pub time: Timestamp,
     pub point: Point,
@@ -158,7 +158,6 @@ pub struct CellKnowledge {
     pub items: ThinVec<Item>,
     pub point: Point,
     pub tile: &'static Tile,
-    visibility: i32,
 
     // Flags:
     pub shade: bool,
@@ -166,7 +165,7 @@ pub struct CellKnowledge {
     pub see_entity_at: bool,
 }
 #[cfg(target_pointer_width = "64")]
-static_assert_size!(CellKnowledge, 56);
+static_assert_size!(CellKnowledge, 48);
 
 pub struct EntityKnowledge {
     pub eid: EID,
@@ -182,7 +181,6 @@ pub struct EntityKnowledge {
     pub delta: i32,
 
     // Flags:
-    pub alive: bool,
     pub heard: bool,
     pub moved: bool,
     pub asleep: bool,
@@ -206,7 +204,7 @@ pub struct Knowledge {
     entity_by_eid: HashMap<EID, EntityHandle>,
     pub cells: List<CellKnowledge>,
     pub entities: List<EntityKnowledge>,
-    pub events: Vec<SenseEvent>,
+    pub events: Vec<Event>,
     pub scents: Vec<Scent>,
     pub time: Timestamp,
 }
@@ -220,7 +218,6 @@ impl CellKnowledge {
             last_see_entity_at: Default::default(),
             point,
             tile,
-            visibility: -1,
 
             // Flags:
             shade: false,
@@ -362,7 +359,6 @@ impl Knowledge {
                 delta: Default::default(),
 
                 // Flags:
-                alive: Default::default(),
                 heard: Default::default(),
                 moved: Default::default(),
                 asleep: Default::default(),
@@ -387,7 +383,6 @@ impl Knowledge {
         entry.pp = 1. - clamp(other.move_timer as f64 / MOVE_TIMER as f64, 0., 1.);
         entry.delta = trophic_level(other) - trophic_level(me);
 
-        entry.alive = other.cur_hp > 0;
         entry.heard = heard;
         entry.moved = !seen;
         entry.asleep = other.asleep;
@@ -424,7 +419,7 @@ impl Knowledge {
         });
     }
 
-    pub fn observe_event(&mut self, _: &Entity, event: &SenseEvent) {
+    pub fn observe_event(&mut self, _: &Entity, event: &Event) {
         self.events.push(event.clone());
     }
 
@@ -531,11 +526,6 @@ impl<'a> CellResult<'a> {
 
     pub fn tile(&self) -> Option<&'static Tile> {
         self.cell.map(|x| x.tile)
-    }
-
-    pub fn visibility(&self) -> i32 {
-        let Some(x) = self.cell else { return -1 };
-        if x.visible { x.visibility } else { -1 }
     }
 
     // Derived fields
