@@ -674,11 +674,10 @@ impl UI {
             let cell = known.get(point);
             let Some(tile) = cell.tile() else { return unseen; };
 
-            let see_entity = cell.can_see_entity_at();
             let obscured = tile.limits_vision();
             let shadowed = cell.shade();
 
-            let glyph = if see_entity && let Some(x) = cell.entity() {
+            let glyph = if let Some(x) = cell.entity() && x.visible {
                 let big = x.player && !x.sneaking;
                 let glyph = if x.player && x.sneaking { Glyph::wide('e') } else { x.glyph };
                 if x.hp == 0. { Glyph::wdfg('%', 0xff0000) }
