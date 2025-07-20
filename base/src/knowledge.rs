@@ -19,8 +19,6 @@ use crate::shadowcast::Vision;
 const MAX_ENTITY_MEMORY: usize = 64;
 const MAX_TILE_MEMORY: usize = 4096;
 
-pub const PLAYER_EVENT_MEMORY: i32 = 4;
-
 fn trophic_level(x: &Entity) -> i32 {
     if x.player { 3 } else if !x.predator { 1 } else { 2 }
 }
@@ -232,6 +230,32 @@ impl CellKnowledge {
     }
 }
 
+impl EntityKnowledge {
+    fn new(eid: EID) -> Self {
+        Self {
+            eid,
+            pos: Default::default(),
+            dir: Default::default(),
+            glyph: Default::default(),
+            sense: Sense::Sight,
+            name: Default::default(),
+            time: Default::default(),
+
+            // Stats:
+            hp: Default::default(),
+            pp: Default::default(),
+            delta: Default::default(),
+
+            // Flags:
+            asleep: false,
+            friend: false,
+            player: false,
+            visible: false,
+            sneaking: false,
+        }
+    }
+}
+
 impl PointKnowledge {
     fn empty(&self) -> bool {
         self.cell.is_none() && self.entity.is_none()
@@ -328,7 +352,7 @@ impl Knowledge {
             cell.items.clear();
             for &x in items { cell.items.push(x); }
 
-            // Only clear the cell's entity if we can see entities there.
+            // Clear the cell's entity and event if we have full vision there.
             if see_all_entities {
                 cell.last_see_entity_at = time;
             }
@@ -349,40 +373,20 @@ impl Knowledge {
                 if entry.entity == Some(x) { entry.entity = None; }
             }
         }).or_insert_with(|| {
-            self.entities.push_front(EntityKnowledge {
-                eid: other.eid,
-                pos: Default::default(),
-                dir: Default::default(),
-                glyph: Default::default(),
-                sense,
-                name: Default::default(),
-                time: Default::default(),
-
-                // Stats:
-                hp: Default::default(),
-                pp: Default::default(),
-                delta: Default::default(),
-
-                // Flags:
-                asleep: Default::default(),
-                friend: Default::default(),
-                player: Default::default(),
-                visible: Default::default(),
-                sneaking: Default::default(),
-            })
+            self.entities.push_front(EntityKnowledge::new(other.eid))
         });
 
         let entry = &mut self.entities[handle];
 
-        entry.time = time;
         entry.pos = other.pos;
         entry.dir = other.dir;
         entry.glyph = other.glyph;
         entry.sense = sense;
-
         entry.name = if other.player { "skishore" } else {
             if other.predator { "Rattata" } else { "Pidgey" }
         };
+        entry.time = time;
+
         entry.hp = other.cur_hp as f64 / max(other.max_hp, 1) as f64;
         entry.pp = 1. - clamp(other.move_timer as f64 / MOVE_TIMER as f64, 0., 1.);
         entry.delta = trophic_level(other) - trophic_level(me);
@@ -405,19 +409,33 @@ impl Knowledge {
 
     // Events helpers:
 
-    pub fn forget_events(&mut self, player: bool) {
-        if !player {
-            self.events.clear();
-            return;
-        }
-        self.events.retain_mut(|x| {
-            x.turns += 1;
-            x.turns < PLAYER_EVENT_MEMORY
-        });
+    pub fn forget_events_before(&mut self, time: Timestamp) {
+        self.events.retain(|x| x.time > time);
     }
 
-    pub fn observe_event(&mut self, _: &Entity, event: &Event) {
+    pub fn observe_event(&mut self, me: &Entity, event: &Event) {
+        if me.player { return; }
+
         self.events.push(event.clone());
+
+        let entity = (|| {
+            let EventData::Move(x) = &event.data else { return None };
+            if x.from == event.point { return None; }
+
+            let entry = self.point_map.get_mut(&x.from)?;
+            let handle = std::mem::replace(&mut entry.entity, None)?;
+            self.entities.move_to_front(handle);
+
+            let entity = &mut self.entities[handle];
+            entity.pos = event.point;
+            entity.dir = x.from - event.point;
+            entity.sense = event.sense;
+            entity.time = event.time;
+
+            Some(handle)
+        })();
+
+        if let Some(x) = self.point_map.get_mut(&event.point) { x.entity = entity; }
     }
 
     // Private helpers:
