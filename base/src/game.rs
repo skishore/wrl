@@ -884,6 +884,7 @@ fn update_state(state: &mut State) {
         let player = entity.player;
         if player && needs_input(state) { break; }
 
+        let time = state.board.time;
         state.board.update_known(eid, &mut state.env);
 
         update = true;
@@ -895,7 +896,7 @@ fn update_state(state: &mut State) {
 
         state.board.time = state.board.time.bump();
 
-        entity.known.forget_events(player);
+        entity.known.forget_events_before(time);
 
         let trail = &mut entity.trail;
         if trail.len() == trail.capacity() { trail.pop_back(); }

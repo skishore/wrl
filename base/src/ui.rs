@@ -10,7 +10,7 @@ use crate::effect::{Frame, self};
 use crate::entity::{EID, Entity};
 use crate::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_, WORLD_SIZE};
 use crate::game::{Board, Input, Tile, show_item};
-use crate::knowledge::{EntityKnowledge, Knowledge, Sense};
+use crate::knowledge::{EntityKnowledge, Knowledge};
 use crate::pathing::Status;
 use crate::shadowcast::{Vision, VisionArgs};
 
@@ -688,8 +688,8 @@ impl UI {
             } else {
                 tile.glyph
             };
-            let mut color = glyph.fg();
 
+            let mut color = glyph.fg();
             if !cell.visible() {
                 color = Color::white().fade(UI_REMEMBERED);
             } else if shadowed {
@@ -713,12 +713,7 @@ impl UI {
             }
         }
 
-        // Render ephemeral state: sounds we've heard and moves we've glimpsed.
-        for entity in &known.entities {
-            if entity.sense != Sense::Sound { continue; }
-            let Point(x, y) = entity.pos - offset;
-            slice.set(Point(2 * x, y), Glyph::wide('?'));
-        }
+        // Render moves that we've seen or heard.
         if player {
             for (&k, v) in &self.moves {
                 let Point(x, y) = k - offset;
