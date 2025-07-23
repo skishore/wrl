@@ -6,11 +6,13 @@ use rand::Rng;
 use rand_distr::{Distribution, Normal};
 use rand_distr::num_traits::Pow;
 
-use crate::base::{LOS, Point, Slice, RNG, dirs, sample, weighted};
-use crate::entity::Entity;
+use crate::base::{HashMap, HashSet, LOS, Point, Slice, RNG};
+use crate::base::{dirs, sample, weighted};
+use crate::entity::{Entity, EID};
 use crate::game::{MOVE_NOISE_RADIUS, Item, move_ready};
 use crate::game::{Action, EatAction, MoveAction};
 use crate::knowledge::{CellKnowledge, Knowledge, Scent, Timedelta, Timestamp};
+use crate::knowledge::{AttackEvent, Event, EventData, MoveEvent};
 use crate::pathing::{AStar, BFS, DijkstraLength, DijkstraMap, Neighborhood, Status};
 use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
 
@@ -167,6 +169,72 @@ impl CachedPath {
 
 //////////////////////////////////////////////////////////////////////////////
 
+// Threat state
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum ThreatStatus { Active, Potential, Resolved }
+
+#[derive(Debug)]
+struct ThreatEvent {
+    pos: Point,
+    status: ThreatStatus,
+}
+
+struct ThreatEntity {
+    pos: Point,
+    status: ThreatStatus,
+    times_it_attacked: i32,
+    times_we_escaped: i32,
+    win_probability: f64,
+}
+
+#[derive(Default)]
+struct ThreatState {
+    moved_from: HashSet<Point>,
+    //entities: HashMap<EID, ThreatEntity>,
+    events: Vec<ThreatEvent>,
+    //threats: Vec<Threat>,
+}
+
+impl ThreatState {
+    fn debug(&self, slice: &mut Slice) {
+        slice.write_str("  Threats:").newline();
+        for event in &self.events {
+            slice.write_str(&format!("    {:?}", event)).newline();
+        }
+    }
+
+    fn update(&mut self, entity: &Entity) {
+        for event in &entity.known.events {
+            match &event.data {
+                EventData::Attack(x) => self.handle_attack(entity, event, x),
+                EventData::Move(x) => self.handle_move(entity, event, x),
+            }
+        }
+
+        self.events.retain(
+            |x| x.status != ThreatStatus::Resolved && !self.moved_from.contains(&x.pos));
+        self.moved_from.clear();
+    }
+
+    fn handle_attack(&mut self, entity: &Entity, event: &Event, data: &AttackEvent) {
+        let active = data.attacked == Some(entity.eid) || !entity.predator;
+        let status = if active { ThreatStatus::Active } else { ThreatStatus::Potential };
+        self.events.push(ThreatEvent { pos: event.point, status });
+    }
+
+    fn handle_move(&mut self, entity: &Entity, event: &Event, data: &MoveEvent) {
+        let (source, target) = (data.from, event.point);
+        self.moved_from.insert(source);
+        if entity.known.get(target).visible() { return; }
+
+        let status = ThreatStatus::Potential;
+        self.events.push(ThreatEvent { pos: target, status });
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 // Shared state
 
 struct SharedAIState {
@@ -176,6 +244,7 @@ struct SharedAIState {
     till_rested: i32,
     turn_time: Timestamp,
     prev_time: Timestamp,
+    threats: ThreatState,
 }
 
 impl SharedAIState {
@@ -188,6 +257,7 @@ impl SharedAIState {
             till_thirst: rng.gen_range(0..MAX_THIRST),
             prev_time: Timestamp::default(),
             turn_time: Timestamp::default(),
+            threats: ThreatState::default(),
         }
     }
 
@@ -197,6 +267,8 @@ impl SharedAIState {
         slice.write_str(&format!("    till_hunger: {}", self.till_hunger)).newline();
         slice.write_str(&format!("    till_thirst: {}", self.till_thirst)).newline();
         slice.write_str(&format!("    till_rested: {}", self.till_rested)).newline();
+        slice.newline();
+        self.threats.debug(slice);
     }
 
 
@@ -209,6 +281,7 @@ impl SharedAIState {
         }
         self.prev_time = self.turn_time;
         self.turn_time = entity.known.time;
+        self.threats.update(entity);
     }
 }
 
@@ -1168,7 +1241,7 @@ impl AIState {
             Box::new(TrackStrategy::default()),
             Box::new(ChaseStrategy::default()),
             Box::new(FlightStrategy::default()),
-            Box::new(RestStrategy::default()),
+            //Box::new(RestStrategy::default()),
             Box::new(BasicNeedsStrategy::new(BasicNeed::EatMeat)),
             Box::new(BasicNeedsStrategy::new(BasicNeed::EatPlants)),
             Box::new(BasicNeedsStrategy::new(BasicNeed::Drink)),

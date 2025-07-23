@@ -14,7 +14,7 @@ use crate::effect::{Effect, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
 use crate::knowledge::{Knowledge, Scent, Timedelta, Timestamp};
 use crate::knowledge::{AttackEvent, EventData, MoveEvent, Sense, Event};
-use crate::mapgen::mapgen_with_size as mapgen;
+use crate::mapgen::legacy_mapgen_with_size as mapgen;
 use crate::pathing::Status;
 use crate::shadowcast::{INITIAL_VISIBILITY, VISIBILITY_LOSSES, Vision, VisionArgs};
 use crate::ui::{UI, get_direction};
@@ -25,7 +25,7 @@ use crate::ui::{UI, get_direction};
 
 pub const MOVE_TIMER: i32 = 960;
 pub const TURN_TIMER: i32 = 120;
-pub const WORLD_SIZE: i32 = 100;
+pub const WORLD_SIZE: i32 = 30;
 
 pub const FOV_RADIUS_NPC: i32 = 12;
 pub const FOV_RADIUS_PC_: i32 = 21;
@@ -38,13 +38,13 @@ const SPEED_NPC: f64 = 1.;
 
 const LIGHT: Light = Light::Sun(Point(2, 0));
 const WEATHER: Weather = Weather::None;
-const NUM_PREDATORS: i32 = 5;
-const NUM_PREY: i32 = 15;
+const NUM_PREDATORS: i32 = 1;
+const NUM_PREY: i32 = 1;
 
 const UI_DAMAGE_FLASH: i32 = 6;
 const UI_DAMAGE_TICKS: i32 = 6;
 
-pub const ATTACK_NOISE_RADIUS: i32 = 8;
+pub const ATTACK_NOISE_RADIUS: i32 = FOV_RADIUS_NPC;
 pub const MOVE_NOISE_RADIUS: i32 = 4;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -420,17 +420,6 @@ impl Board {
         swap(known, &mut self.entities[eid].known);
     }
 
-    fn hear_entity(&mut self, eid: EID, oid: EID, env: &mut UpdateEnv) {
-        let known = &mut env.known;
-        swap(known, &mut self.entities[eid].known);
-
-        let me = &self.entities[eid];
-        let other = &self.entities[oid];
-        known.update_entity(me, other, Sense::Sound, self.time);
-
-        swap(known, &mut self.entities[eid].known);
-    }
-
     fn observe_event(&mut self, eid: EID, event: &Event, env: &mut UpdateEnv) {
         let known = &mut env.known;
         swap(known, &mut self.entities[eid].known);
@@ -702,7 +691,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 Status::Free => {
                     state.board.time = state.board.time.bump();
 
-                    let volume = if noisy { MOVE_NOISE_RADIUS } else { 1 };
+                    let volume = if noisy { MOVE_NOISE_RADIUS } else { MOVE_NOISE_RADIUS };
                     let noise = Noise { point: source, volume };
                     let saw_source = detect(&state.board, &noise, &mut state.env);
 
@@ -722,7 +711,6 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                         let seen = source_seen || target_seen;
                         event.sense = if seen { Sense::Sight } else { Sense::Sound };
                         state.board.observe_event(oid, &event, &mut state.env);
-                        state.board.hear_entity(oid, eid, &mut state.env);
                         if oid != state.player { continue; }
 
                         let color = if seen { color } else { Color::white() };
@@ -768,7 +756,6 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 });
                 event.sense = if seen { Sense::Sight } else { Sense::Sound };
                 state.board.observe_event(oid, &event, &mut state.env);
-                state.board.hear_entity(oid, eid, &mut state.env);
                 if oid != state.player { continue; }
 
                 let entities = &state.board.entities;
