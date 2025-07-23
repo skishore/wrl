@@ -125,7 +125,7 @@ pub enum Sense { Sight, Sound, Smell }
 pub struct AttackEvent { pub attacker: Option<EID>, pub attacked: Option<EID> }
 
 #[derive(Clone, Debug)]
-pub struct MoveEvent { pub from: Point }
+pub struct MoveEvent { pub eid: Option<EID>, pub from: Point }
 
 #[derive(Clone, Debug)]
 pub enum EventData {

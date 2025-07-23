@@ -6,11 +6,12 @@ use rand::Rng;
 use rand_distr::{Distribution, Normal};
 use rand_distr::num_traits::Pow;
 
-use crate::base::{LOS, Point, Slice, RNG, dirs, sample, weighted};
-use crate::entity::Entity;
+use crate::base::{HashMap, LOS, Point, Slice, RNG, dirs, sample, weighted};
+use crate::entity::{Entity, EID};
 use crate::game::{MOVE_NOISE_RADIUS, Item, move_ready};
 use crate::game::{Action, EatAction, MoveAction};
-use crate::knowledge::{CellKnowledge, Knowledge, Scent, Timedelta, Timestamp};
+use crate::knowledge::{CellKnowledge, Knowledge, EntityKnowledge, Timedelta, Timestamp};
+use crate::knowledge::{AttackEvent, Event, EventData, MoveEvent, Scent, Sense};
 use crate::pathing::{AStar, BFS, DijkstraLength, DijkstraMap, Neighborhood, Status};
 use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
 
@@ -167,6 +168,152 @@ impl CachedPath {
 
 //////////////////////////////////////////////////////////////////////////////
 
+// Threat state
+
+const THREAT_MAX_TIME: Timedelta = Timedelta::from_seconds(96.);
+const THREAT_TRACKING_LIMIT: Timedelta = Timedelta::from_seconds(24.);
+
+#[derive(Copy, Clone, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+enum ThreatStatus { Active, Potential, #[default] Resolved }
+
+#[derive(Clone, Default)]
+struct ThreatRecord {
+    pos: Point,
+    status: ThreatStatus,
+    times_it_attacked: i32,
+    times_we_escaped: i32,
+    time: Timestamp,
+}
+
+#[derive(Default)]
+struct ThreatState {
+    seen: HashMap<EID, ThreatRecord>,
+    heard: HashMap<EID, ThreatRecord>,
+    unknown: Vec<ThreatRecord>,
+}
+
+impl ThreatState {
+    fn debug(&self, slice: &mut Slice, time: Timestamp) {
+        let show = |s: &mut Slice, x: &ThreatRecord| {
+            s.write_str("    ThreatRecord:").newline();
+            s.write_str(&format!("      age: {:?}", time - x.time)).newline();
+            s.write_str(&format!("      pos: {:?}", x.pos)).newline();
+            s.write_str(&format!("      status: {:?}", x.status)).newline();
+            s.write_str(&format!("      attacked: {:?}", x.times_it_attacked)).newline();
+            s.write_str(&format!("      escaped: {:?}", x.times_we_escaped)).newline();
+        };
+        let sort: &dyn Fn(&HashMap<EID, ThreatRecord>) -> Vec<&ThreatRecord> =
+                &|map: &HashMap<EID, ThreatRecord>| -> Vec<&ThreatRecord> {
+            let mut result: Vec<_> = map.values().collect();
+            result.sort_by_key(|x| x.time);
+            result
+        };
+        slice.write_str("  Threats seen:").newline();
+        for x in sort(&self.seen) { show(slice, x); }
+        slice.newline();
+        slice.write_str("  Threats heard:").newline();
+        for x in sort(&self.heard) { show(slice, x); }
+        slice.newline();
+        slice.write_str("  Threats guessed:").newline();
+        for x in &self.unknown { show(slice, x); }
+    }
+
+    fn all(&mut self) -> Vec<&mut ThreatRecord> {
+        let mut result = vec![];
+        for x in self.seen.values_mut() { result.push(x); }
+        for x in self.heard.values_mut() { result.push(x); }
+        for x in &mut self.unknown { result.push(x); }
+
+        result.sort_unstable_by_key(|x| x.time);
+        result.reverse();
+        result
+    }
+
+    fn update(&mut self, me: &Entity) {
+        for event in &me.known.events {
+            match &event.data {
+                EventData::Attack(x) => self.handle_attack(me, event, x),
+                EventData::Move(x) => self.handle_move(me, event, x),
+            }
+        }
+        for entity in &me.known.entities {
+            if entity.friend || !entity.visible { continue; }
+            self.handle_sighting(me, entity);
+        }
+
+        let discard = |x: &ThreatRecord| {
+            x.status == ThreatStatus::Resolved ||
+            me.known.time - x.time > THREAT_MAX_TIME
+        };
+        self.seen.retain(|_, x| !discard(x));
+        self.heard.retain(|_, x| !discard(x));
+        self.unknown.retain(|x| !discard(x));
+    }
+
+    fn handle_attack(&mut self, me: &Entity, event: &Event, data: &AttackEvent) {
+        let active = data.attacked == Some(me.eid) || !me.predator;
+        let status = if active { ThreatStatus::Active } else { ThreatStatus::Potential };
+
+        let record = self.get(data.attacker, event.sense, event.time);
+        record.pos = event.point;
+        record.time = event.time;
+        record.status = std::cmp::min(record.status, status);
+        if data.attacked == Some(me.eid) { record.times_it_attacked += 1; }
+    }
+
+    fn handle_move(&mut self, me: &Entity, event: &Event, data: &MoveEvent) {
+        if me.known.get(event.point).visible() { return; }
+
+        let record = self.get(data.eid, event.sense, event.time);
+        record.pos = event.point;
+        record.time = event.time;
+        record.status = std::cmp::min(record.status, ThreatStatus::Potential);
+    }
+
+    fn handle_sighting(&mut self, _: &Entity, other: &EntityKnowledge) {
+        let active = other.delta > 0;
+        let status = if active { ThreatStatus::Active } else { ThreatStatus::Potential };
+
+        let record = self.get(Some(other.eid), Sense::Sight, other.time);
+        record.pos = other.pos;
+        record.time = other.time;
+        record.status = std::cmp::min(record.status, status);
+    }
+
+    fn get(&mut self, eid: Option<EID>, sense: Sense, time: Timestamp) -> &mut ThreatRecord {
+        let Some(eid) = eid else {
+            self.unknown.push(ThreatRecord::default());
+            return self.unknown.last_mut().unwrap();
+        };
+
+        let seen = match sense {
+            Sense::Sight => true,
+            Sense::Smell => false,
+            Sense::Sound => self.seen.get(&eid).map(
+                |x| time - x.time < THREAT_TRACKING_LIMIT).unwrap_or(false),
+        };
+
+        if !seen {
+            return self.heard.entry(eid).and_modify(|x| {
+                if (time - x.time) < THREAT_TRACKING_LIMIT { return; }
+                self.unknown.push(x.clone());
+                *x = ThreatRecord::default();
+            }).or_default()
+        }
+
+        let result = self.seen.entry(eid).or_default();
+        if let Some(x) = self.heard.get(&eid) && (time - x.time) < THREAT_TRACKING_LIMIT {
+            result.status = std::cmp::min(result.status, x.status);
+            result.times_it_attacked += x.times_it_attacked;
+            result.times_we_escaped += x.times_we_escaped;
+            self.heard.remove(&eid);
+        }
+        return result;
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 // Shared state
 
 struct SharedAIState {
@@ -176,6 +323,7 @@ struct SharedAIState {
     till_rested: i32,
     turn_time: Timestamp,
     prev_time: Timestamp,
+    threats: ThreatState,
 }
 
 impl SharedAIState {
@@ -188,15 +336,18 @@ impl SharedAIState {
             till_thirst: rng.random_range(0..MAX_THIRST),
             prev_time: Timestamp::default(),
             turn_time: Timestamp::default(),
+            threats: ThreatState::default(),
         }
     }
 
-    fn debug(&self, slice: &mut Slice) {
+    fn debug(&self, slice: &mut Slice, time: Timestamp) {
         slice.write_str("  SharedAIState:").newline();
         slice.write_str(&format!("    till_assess: {}", self.till_assess)).newline();
         slice.write_str(&format!("    till_hunger: {}", self.till_hunger)).newline();
         slice.write_str(&format!("    till_thirst: {}", self.till_thirst)).newline();
         slice.write_str(&format!("    till_rested: {}", self.till_rested)).newline();
+        slice.newline();
+        self.threats.debug(slice, time);
     }
 
 
@@ -209,6 +360,7 @@ impl SharedAIState {
         }
         self.prev_time = self.turn_time;
         self.turn_time = entity.known.time;
+        self.threats.update(entity);
     }
 }
 
@@ -217,7 +369,7 @@ impl SharedAIState {
 // Strategy-based planning
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-enum Priority { Survive, EatMeat, Hunt, SatisfyNeeds, Explore, Skip }
+enum Priority { Survive, EatMeat, Hunt, SpotThreats, SatisfyNeeds, Explore, Skip }
 
 struct Context<'a, 'b> {
     // Derived from the entity.
@@ -724,7 +876,7 @@ impl FlightStrategy {
         self.path.reset();
 
         if self.dirs.is_empty() {
-            let dirs: Vec<_> = self.threats.iter().map(|&x| x.pos - pos).collect();
+            let dirs: Vec<_> = self.threats.iter().map(|x| x.pos - pos).collect();
             self.dirs = assess_directions(&dirs, ASSESS_TURNS_FLIGHT, rng);
             self.dirs.reverse();
         }
@@ -872,6 +1024,49 @@ impl Strategy for FlightStrategy {
         self.path.reset();
         self.needs_path = false;
     }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+#[derive(Default)]
+struct LookForThreatsStrategy {
+    dirs: Vec<Point>,
+}
+
+impl Strategy for LookForThreatsStrategy {
+    fn get_path(&self) -> &[Point] { &[] }
+
+    fn debug(&self, slice: &mut Slice, _: Timestamp) {
+        slice.write_str("LookForThreats").newline();
+    }
+
+    fn bid(&mut self, ctx: &mut Context, _: bool) -> (Priority, i64) {
+        let threatened = ctx.shared.threats.all().into_iter().any(
+            |x| x.status != ThreatStatus::Resolved);
+        if !threatened { return (Priority::Skip, 0); }
+        (Priority::SpotThreats, 0)
+    }
+
+    fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
+        let (pos, rng) = (ctx.pos, &mut ctx.env.rng);
+
+        if self.dirs.is_empty() {
+            let threats = ctx.shared.threats.all();
+            let dirs: Vec<_> = threats.iter().map(|x| x.pos - pos).collect();
+            self.dirs = assess_directions(&dirs, ASSESS_TURNS_FLIGHT, rng);
+            self.dirs.reverse();
+        }
+
+        let dir = self.dirs.pop()?;
+        if self.dirs.is_empty() {
+            for threat in ctx.shared.threats.all() {
+                threat.status = ThreatStatus::Resolved;
+            }
+        }
+        Some(Action::Look(dir))
+    }
+
+    fn reject(&mut self) { self.dirs.clear(); }
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -1168,7 +1363,8 @@ impl AIState {
             Box::new(TrackStrategy::default()),
             Box::new(ChaseStrategy::default()),
             Box::new(FlightStrategy::default()),
-            Box::new(RestStrategy::default()),
+            Box::new(LookForThreatsStrategy::default()),
+            //Box::new(RestStrategy::default()),
             Box::new(BasicNeedsStrategy::new(BasicNeed::EatMeat)),
             Box::new(BasicNeedsStrategy::new(BasicNeed::EatPlants)),
             Box::new(BasicNeedsStrategy::new(BasicNeed::Drink)),
@@ -1190,7 +1386,7 @@ impl AIState {
             strategy.debug(slice, self.shared.turn_time);
             slice.newline();
         }
-        self.shared.debug(slice);
+        self.shared.debug(slice, self.shared.turn_time);
     }
 
     pub fn plan(&mut self, entity: &Entity, env: &mut AIEnv) -> Action {

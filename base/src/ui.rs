@@ -574,7 +574,7 @@ impl UI {
     }
 
     pub fn show_full_view(&mut self) {
-        let side = WORLD_SIZE;
+        let side = max(WORLD_SIZE, 100);
         self.layout = Layout::full(Point(side, side));
         self.full = true;
     }
@@ -1005,17 +1005,8 @@ impl UI {
             return;
         }
 
-        // TODO: There are a few bugs in this code:
-        //
-        //   - EntityKnowledge for the focused entity can get cleaned up while
-        //     the player is still focused on it.
-        //
-        //   - If the player hears the targeted entity move, but does not see
-        //     it, the knowledge update currently still update the entity's
-        //     position, giving the player knowledge of the tile under its
-        //     new location. Instead, noise knowledge updates for the player
-        //     shouldn't be tied to a specific entity. The player can guess.
-        //
+        // TODO: There's a bug in this code: EntityKnowledge for the focused
+        // entity can get cleaned up while the player is still focused on it.
         let (tile, view, header, seen) = match &self.target {
             Some(x) => {
                 let cell = known.get(x.target);
