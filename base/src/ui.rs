@@ -574,7 +574,7 @@ impl UI {
     }
 
     pub fn show_full_view(&mut self) {
-        let side = WORLD_SIZE;
+        let side = max(WORLD_SIZE, 100);
         self.layout = Layout::full(Point(side, side));
         self.full = true;
     }

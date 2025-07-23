@@ -14,7 +14,7 @@ use crate::knowledge::{Knowledge, Scent};
 //////////////////////////////////////////////////////////////////////////////
 
 const ATTACK_RANGE: i32 = 8;
-const MAX_HP: i32 = 3;
+const MAX_HP: i32 = 300;
 
 const SCENT_TRAIL_SIZE: usize = 64;
 const SCENT_SPREAD: f64 = 1.;
