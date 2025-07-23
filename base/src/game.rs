@@ -14,7 +14,7 @@ use crate::effect::{Effect, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
 use crate::knowledge::{Knowledge, Scent, Timedelta, Timestamp};
 use crate::knowledge::{AttackEvent, EventData, MoveEvent, Sense, Event};
-use crate::mapgen::mapgen_with_size as mapgen;
+use crate::mapgen::legacy_mapgen_with_size as mapgen;
 use crate::pathing::Status;
 use crate::shadowcast::{INITIAL_VISIBILITY, VISIBILITY_LOSSES, Vision, VisionArgs};
 use crate::ui::{UI, get_direction};
@@ -25,7 +25,7 @@ use crate::ui::{UI, get_direction};
 
 pub const MOVE_TIMER: i32 = 960;
 pub const TURN_TIMER: i32 = 120;
-pub const WORLD_SIZE: i32 = 100;
+pub const WORLD_SIZE: i32 = 30;
 
 pub const FOV_RADIUS_NPC: i32 = 12;
 pub const FOV_RADIUS_PC_: i32 = 21;
@@ -38,13 +38,13 @@ const SPEED_NPC: f64 = 1.;
 
 const LIGHT: Light = Light::Sun(Point(2, 0));
 const WEATHER: Weather = Weather::None;
-const NUM_PREDATORS: i32 = 5;
-const NUM_PREY: i32 = 15;
+const NUM_PREDATORS: i32 = 1;
+const NUM_PREY: i32 = 1;
 
 const UI_DAMAGE_FLASH: i32 = 6;
 const UI_DAMAGE_TICKS: i32 = 6;
 
-pub const ATTACK_NOISE_RADIUS: i32 = 8;
+pub const ATTACK_NOISE_RADIUS: i32 = FOV_RADIUS_NPC;
 pub const MOVE_NOISE_RADIUS: i32 = 4;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -420,17 +420,6 @@ impl Board {
         swap(known, &mut self.entities[eid].known);
     }
 
-    fn hear_entity(&mut self, eid: EID, oid: EID, env: &mut UpdateEnv) {
-        let known = &mut env.known;
-        swap(known, &mut self.entities[eid].known);
-
-        let me = &self.entities[eid];
-        let other = &self.entities[oid];
-        known.update_entity(me, other, Sense::Sound, self.time);
-
-        swap(known, &mut self.entities[eid].known);
-    }
-
     fn observe_event(&mut self, eid: EID, event: &Event, env: &mut UpdateEnv) {
         let known = &mut env.known;
         swap(known, &mut self.entities[eid].known);
@@ -714,7 +703,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
                     // Deliver a MoveEvent to each entity that saw the move.
                     let (sense, time) = (Sense::Sight, state.board.time);
-                    let data = EventData::Move(MoveEvent { from: source });
+                    let data = EventData::Move(MoveEvent { eid: Some(eid), from: source });
                     let mut event = Event { data, time, point: target, sense, turns: 0 };
                     for Sighting { eid: oid, source_seen, target_seen } in sightings {
                         if oid == eid { continue; }
@@ -722,7 +711,6 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                         let seen = source_seen || target_seen;
                         event.sense = if seen { Sense::Sight } else { Sense::Sound };
                         state.board.observe_event(oid, &event, &mut state.env);
-                        state.board.hear_entity(oid, eid, &mut state.env);
                         if oid != state.player { continue; }
 
                         let color = if seen { color } else { Color::white() };
@@ -761,14 +749,12 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             for Sighting { eid: oid, source_seen, target_seen } in sightings {
                 if oid == eid { continue; }
 
-                let seen = source_seen || target_seen;
                 event.data = EventData::Attack(AttackEvent {
-                    attacker: if source_seen { Some(eid) } else { None },
+                    attacker: Some(eid),
                     attacked: if target_seen { tid } else { None },
                 });
-                event.sense = if seen { Sense::Sight } else { Sense::Sound };
+                event.sense = if source_seen { Sense::Sight } else { Sense::Sound };
                 state.board.observe_event(oid, &event, &mut state.env);
-                state.board.hear_entity(oid, eid, &mut state.env);
                 if oid != state.player { continue; }
 
                 let entities = &state.board.entities;
@@ -783,7 +769,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 } else if let Some(b) = attacked {
                     format!("Something attacked {}!", b.desc())
                 } else {
-                    "You hear something fighting nearby!".into()
+                    "You hear fighting nearby!".into()
                 };
                 if let Some(x) = desc.get_mut(..1) { x.make_ascii_uppercase(); }
                 state.ui.log.log(desc);
