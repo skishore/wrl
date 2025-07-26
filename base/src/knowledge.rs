@@ -121,8 +121,8 @@ impl std::fmt::Debug for Timestamp {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Sense { Sight, Sound, Smell }
 
-#[derive(Clone, Debug)]
-pub struct AttackEvent { pub target: Point }
+#[derive(Clone, Debug, Default)]
+pub struct AttackEvent { pub attacker: Option<EID>, pub attacked: Option<EID> }
 
 #[derive(Clone, Debug)]
 pub struct MoveEvent { pub from: Point }
@@ -382,9 +382,7 @@ impl Knowledge {
         entry.dir = other.dir;
         entry.glyph = other.glyph;
         entry.sense = sense;
-        entry.name = if other.player { "skishore" } else {
-            if other.predator { "Rattata" } else { "Pidgey" }
-        };
+        entry.name = other.name();
         entry.time = time;
 
         entry.hp = other.cur_hp as f64 / max(other.max_hp, 1) as f64;
