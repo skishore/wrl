@@ -1,3 +1,4 @@
+use core::ops::{Deref, DerefMut};
 use std::fmt::Debug;
 use std::mem::{replace, swap};
 
@@ -12,7 +13,7 @@ use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs};
 use crate::effect::{Effect, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
 use crate::knowledge::{Knowledge, Scent, Timedelta, Timestamp};
-use crate::knowledge::{EventData, MoveEvent, Sense, Event};
+use crate::knowledge::{AttackEvent, EventData, MoveEvent, Sense, Event};
 use crate::mapgen::mapgen_with_size as mapgen;
 use crate::pathing::Status;
 use crate::shadowcast::{INITIAL_VISIBILITY, VISIBILITY_LOSSES, Vision, VisionArgs};
@@ -43,7 +44,8 @@ const NUM_PREY: i32 = 15;
 const UI_DAMAGE_FLASH: i32 = 6;
 const UI_DAMAGE_TICKS: i32 = 6;
 
-pub const NOISY_RADIUS: i32 = 4;
+pub const ATTACK_NOISE_RADIUS: i32 = 8;
+pub const MOVE_NOISE_RADIUS: i32 = 4;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Input { Escape, BackTab, Char(char) }
@@ -408,7 +410,7 @@ impl Board {
     // Knowledge
 
     fn update_known(&mut self, eid: EID, env: &mut UpdateEnv) {
-        let UpdateEnv { known, fov, rng } = env;
+        let UpdateEnv { known, fov, rng, .. } = env;
         swap(known, &mut self.entities[eid].known);
 
         let me = &self.entities[eid];
@@ -467,6 +469,56 @@ impl Board {
 }
 
 //////////////////////////////////////////////////////////////////////////////
+
+// Event delivery
+
+struct Noise {
+    point: Point,
+    volume: i32,
+}
+
+struct Sighting {
+    eid: EID,
+    source_seen: bool,
+    target_seen: bool,
+}
+
+type Senses = HashMap<EID, Sense>;
+
+fn detect(board: &Board, noise: &Noise, env: &mut UpdateEnv) -> Senses {
+    let Noise { point, volume } = *noise;
+    let mut result = Senses::default();
+
+    for (eid, entity) in &board.entities {
+        if entity.asleep && volume == 1 && point != entity.pos { continue; }
+
+        let seen = env.fov.can_see_entity_at(board, entity, point);
+        let heard = !seen && (point - entity.pos).len_nethack() <= volume;
+        if !seen && !heard { continue; }
+
+        let sense = if seen { Sense::Sight } else { Sense::Sound };
+        result.insert(eid, sense);
+    }
+    result
+}
+
+fn combine_views(board: &Board, saw_source: &Senses, saw_target: &Senses) -> Vec<Sighting> {
+    let mut result = vec![];
+    for (eid, _) in &board.entities {
+        let ss = saw_source.get(&eid).copied();
+        let st = saw_target.get(&eid).copied();
+        if ss.is_none() && st.is_none() { continue; }
+
+        let source_seen = ss == Some(Sense::Sight);
+        let target_seen = st == Some(Sense::Sight);
+        result.push(Sighting { eid, source_seen, target_seen });
+    }
+    result
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// Turn-taking
 
 pub fn move_ready(entity: &Entity) -> bool { entity.move_timer <= 0 }
 
@@ -558,12 +610,12 @@ fn plan(state: &mut State, eid: EID) -> Action {
     let player = eid == state.player;
     if player { return replace(&mut state.input, Action::WaitForInput); }
 
-    let State { ai, board, env, ui: UI { debug, .. }, .. } = state;
+    let State { ai, board, env, .. } = state;
     let vision = &mut env.fov.npc_vision;
     let entity = &mut board.entities[eid];
     swap(ai, &mut entity.ai);
 
-    let debug = if state.pov == Some(eid) { Some(debug) } else { None };
+    let debug = if state.pov == Some(eid) { Some(&mut env.ui.debug) } else { None };
     let mut env = AIEnv { debug, fov: vision, rng: &mut env.rng };
     let action = ai.plan(&entity, &mut env);
 
@@ -650,48 +702,27 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 Status::Free => {
                     state.board.time = state.board.time.bump();
 
-                    // Noise generation, for quick moves.
-                    let mut updated = vec![];
-                    let max = if noisy { NOISY_RADIUS } else { 1 };
-                    for (oid, other) in &state.board.entities {
-                        if oid == eid { continue; }
-                        if other.asleep && !noisy { continue; }
-                        let sr = (other.pos - source).len_nethack() <= max;
-                        let tr = (other.pos - target).len_nethack() <= max;
-                        if sr || tr { updated.push(oid); }
-                    }
+                    let volume = if noisy { MOVE_NOISE_RADIUS } else { 1 };
+                    let noise = Noise { point: source, volume };
+                    let saw_source = detect(&state.board, &noise, &mut state.env);
+
                     state.board.move_entity(eid, target);
-                    for oid in updated {
-                        if oid == state.player { continue; }
-                        state.board.hear_entity(oid, eid, &mut state.env);
-                    }
 
-                    // Compute the list of entities that see or hear the move.
-                    let board = &state.board;
-                    let mut updated = vec![];
-                    for (oid, other) in &board.entities {
-                        if oid == eid { continue; }
-                        if other.asleep && !noisy { continue; }
+                    let noise = Noise { point: target, volume };
+                    let saw_target = detect(&state.board, &noise, &mut state.env);
+                    let sightings = combine_views(&state.board, &saw_source, &saw_target);
 
-                        let fov = &mut state.env.fov;
-                        let source_seen = fov.can_see_entity_at(board, other, source);
-                        let target_seen = fov.can_see_entity_at(board, other, target);
-                        let seen = source_seen || target_seen;
-
-                        let source_heard = (other.pos - source).len_nethack() <= max;
-                        let target_heard = (other.pos - target).len_nethack() <= max;
-                        let heard = source_heard || target_heard;
-
-                        if seen || heard { updated.push((oid, seen, target_seen)); }
-                    }
-
-                    // Deliver the MoveEvent to each entity in the list.
+                    // Deliver a MoveEvent to each entity that saw the move.
                     let (sense, time) = (Sense::Sight, state.board.time);
                     let data = EventData::Move(MoveEvent { from: source });
                     let mut event = Event { data, time, point: target, sense, turns: 0 };
-                    for (oid, seen, target_seen) in updated {
+                    for Sighting { eid: oid, source_seen, target_seen } in sightings {
+                        if oid == eid { continue; }
+
+                        let seen = source_seen || target_seen;
                         event.sense = if seen { Sense::Sight } else { Sense::Sound };
                         state.board.observe_event(oid, &event, &mut state.env);
+                        state.board.hear_entity(oid, eid, &mut state.env);
                         if oid != state.player { continue; }
 
                         let color = if seen { color } else { Color::white() };
@@ -711,24 +742,87 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
             state.board.time = state.board.time.bump();
 
-            let oid = state.board.get_cell(target).eid;
+            let noise = Noise { point: source, volume: ATTACK_NOISE_RADIUS };
+            let saw_source = detect(&state.board, &noise, &mut state.env);
+
+            let tid = state.board.get_cell(target).eid;
             let entity = &mut state.board.entities[eid];
             face_direction(entity, target - source);
 
+            let noise = Noise { point: target, volume: ATTACK_NOISE_RADIUS };
+            let saw_target = detect(&state.board, &noise, &mut state.env);
+            let sightings = combine_views(&state.board, &saw_source, &saw_target);
+
+            // Deliver the AttackEvent to each entity in the list.
+            let (sense, time) = (Sense::Sight, state.board.time);
+            let data = EventData::Attack(AttackEvent::default());
+            let mut event = Event { data, time, point: source, sense, turns: 0 };
+            let mut player_saw_target = false;
+            for Sighting { eid: oid, source_seen, target_seen } in sightings {
+                if oid == eid { continue; }
+
+                let seen = source_seen || target_seen;
+                event.data = EventData::Attack(AttackEvent {
+                    attacker: if source_seen { Some(eid) } else { None },
+                    attacked: if target_seen { tid } else { None },
+                });
+                event.sense = if seen { Sense::Sight } else { Sense::Sound };
+                state.board.observe_event(oid, &event, &mut state.env);
+                state.board.hear_entity(oid, eid, &mut state.env);
+                if oid != state.player { continue; }
+
+                let entities = &state.board.entities;
+                let attacker = if source_seen { Some(&entities[eid]) } else { None };
+                let attacked = if target_seen { tid.map(|x| &entities[x]) } else { None };
+                player_saw_target = attacked.is_some();
+
+                let mut desc = if let Some(a) = attacker && let Some(b) = attacked {
+                    format!("{} attacked {} with Headbutt!", a.desc(), b.desc())
+                } else if let Some(a) = attacker {
+                    format!("{} used Headbutt!", a.desc())
+                } else if let Some(b) = attacked {
+                    format!("Something attacked {}!", b.desc())
+                } else {
+                    "You hear something fighting nearby!".into()
+                };
+                if let Some(x) = desc.get_mut(..1) { x.make_ascii_uppercase(); }
+                state.ui.log.log(desc);
+            }
+
             let cb = move |board: &mut Board, env: &mut UpdateEnv| {
-                let Some(oid) = oid else { return; };
+                let Some(tid) = tid else { return; };
+
                 let cb = move |board: &mut Board, env: &mut UpdateEnv| {
-                    let Some(other) = board.entities.get_mut(oid) else { return; };
+                    let Some(target) = board.entities.get_mut(tid) else { return; };
 
                     let damage = 1;
-                    if other.cur_hp > damage {
-                        other.cur_hp -= damage;
-                        board.hear_entity(oid, eid, env);
-                    } else {
-                        let pos = other.pos;
-                        board.remove_entity(oid);
-                        board.add_item(pos, Item::Corpse);
-                        board.remove_known_entity(eid, oid);
+                    if target.cur_hp > damage {
+                        target.cur_hp -= damage;
+                        return;
+                    }
+
+                    let pos = target.pos;
+                    let desc = target.desc();
+
+                    board.remove_entity(tid);
+                    board.add_item(pos, Item::Corpse);
+
+                    let noise = Noise { point: pos, volume: ATTACK_NOISE_RADIUS };
+                    let seen = detect(board, &noise, env);
+                    let seen: Vec<_> = board.entities.iter().filter_map(|(oid, _)| {
+                        if *seen.get(&oid)? == Sense::Sight { Some(oid) } else { None }
+                    }).collect();
+
+                    for oid in seen {
+                        board.remove_known_entity(oid, tid);
+                        if !board.entities[oid].player { continue; }
+
+                        if !player_saw_target {
+                            env.ui.log.log(format!("Something attacked {}!", desc));
+                        }
+                        let mut desc = format!("{} fainted!", desc);
+                        if let Some(x) = desc.get_mut(..1) { x.make_ascii_uppercase(); }
+                        env.ui.log.log_append(desc);
                     }
                 };
                 board.add_effect(apply_damage(board, target, Box::new(cb)), env);
@@ -818,7 +912,7 @@ fn process_input(state: &mut State, input: Input) {
     }
 
     let player = &state.board.entities[state.player];
-    if state.ui.process_input(player, input) { return; }
+    if state.env.ui.process_input(player, input) { return; }
 
     let Input::Char(ch) = input else { return; };
 
@@ -846,12 +940,12 @@ fn update_pov_entities(state: &mut State) {
         state.board.update_known(x, &mut state.env);
     }
     let player = &state.board.entities[state.player];
-    state.ui.update_focus(player);
+    state.env.ui.update_focus(player);
 }
 
 fn update_state(state: &mut State) {
     let pos = state.get_player().pos;
-    state.ui.update(pos, &mut state.env.rng);
+    state.env.ui.update(pos, &mut state.env.rng);
 
     // If an Effect is active, run it, skipping frames the POV entity can't see.
     let pov = state.get_pov_entity().eid;
@@ -875,7 +969,7 @@ fn update_state(state: &mut State) {
         update = true;
     }
     let player = &state.board.entities[state.player];
-    if state.ui.update_target(player) { return; }
+    if state.env.ui.update_target(player) { return; }
 
     while game_loop_active(state) {
         let Some(eid) = advance_turn(&mut state.board) else { break };
@@ -923,6 +1017,7 @@ pub struct UpdateEnv {
     known: Box<Knowledge>,
     fov: FOV,
     rng: RNG,
+    ui: UI,
 }
 
 pub struct State {
@@ -933,12 +1028,24 @@ pub struct State {
     env: UpdateEnv,
     pov: Option<EID>,
     ai: Box<AIState>,
-    ui: UI,
 }
 
 impl Default for State {
     fn default() -> Self {
         Self::new(/*seed=*/None, /*full=*/false)
+    }
+}
+
+impl Deref for State {
+    type Target = UpdateEnv;
+    fn deref(&self) -> &Self::Target {
+        &self.env
+    }
+}
+
+impl DerefMut for State {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.env
     }
 }
 
@@ -950,6 +1057,7 @@ impl State {
         let mut env = UpdateEnv {
             known: Default::default(),
             fov: Default::default(),
+            ui: Default::default(),
             rng,
         };
         let mut pos = Point(size.0 / 2, size.1 / 2);
@@ -1003,7 +1111,7 @@ impl State {
         let ai = Box::new(AIState::new(/*predator=*/false, &mut env.rng));
         let pov = None;
 
-        let mut ui = UI::default();
+        let ui = &mut env.ui;
         match WEATHER {
             Weather::Rain(angle, count) => ui.start_rain(angle, count),
             Weather::None => (),
@@ -1011,7 +1119,7 @@ impl State {
         ui.log.log("Welcome to WildsRL! Use vikeys (h/j/k/l/y/u/b/n) to move.");
         if full { ui.show_full_view(); }
 
-        Self { board, input, inputs, player, env, pov, ai, ui }
+        Self { board, input, inputs, player, env, pov, ai }
     }
 
     fn get_pov_entity(&self) -> &Entity {
