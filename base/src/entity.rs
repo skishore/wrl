@@ -84,6 +84,15 @@ impl Entity {
         }
     }
 
+    pub fn desc(&self) -> String {
+        if self.player { "you".into() } else { format!("the wild {}", self.name()) }
+    }
+
+    pub fn name(&self) -> &'static str {
+        if self.player { return "skishore"; }
+        if self.predator { "Rattata" } else { "Pidgey" }
+    }
+
     pub fn get_scent_at(&self, p: Point) -> f64 {
         let mut total = 0.;
         for age in 0..self.trail.capacity() {
