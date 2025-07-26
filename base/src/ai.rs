@@ -237,7 +237,7 @@ struct Context<'a, 'b> {
 
 trait Strategy {
     fn get_path(&self) -> &[Point];
-    fn debug(&self, slice: &mut Slice);
+    fn debug(&self, slice: &mut Slice, time: Timestamp);
     fn bid(&mut self, ctx: &mut Context, last: bool) -> (Priority, i64);
     fn accept(&mut self, ctx: &mut Context) -> Option<Action>;
     fn reject(&mut self);
@@ -334,7 +334,7 @@ impl BasicNeedsStrategy {
 impl Strategy for BasicNeedsStrategy {
     fn get_path(&self) -> &[Point] { &self.path.steps }
 
-    fn debug(&self, slice: &mut Slice) {
+    fn debug(&self, slice: &mut Slice, _: Timestamp) {
         slice.write_str(&format!("BasicNeed: {:?}", self.need)).newline();
     }
 
@@ -400,7 +400,7 @@ struct RestStrategy { path: CachedPath }
 impl Strategy for RestStrategy {
     fn get_path(&self) -> &[Point] { &self.path.steps }
 
-    fn debug(&self, slice: &mut Slice) {
+    fn debug(&self, slice: &mut Slice, _: Timestamp) {
         slice.write_str("Rest").newline();
     }
 
@@ -454,7 +454,7 @@ struct AssessStrategy { dirs: Vec<Point> }
 impl Strategy for AssessStrategy {
     fn get_path(&self) -> &[Point] { &[] }
 
-    fn debug(&self, slice: &mut Slice) {
+    fn debug(&self, slice: &mut Slice, _: Timestamp) {
         slice.write_str("Assess").newline();
     }
 
@@ -493,7 +493,7 @@ struct ExploreStrategy { path: CachedPath }
 impl Strategy for ExploreStrategy {
     fn get_path(&self) -> &[Point] { &self.path.steps }
 
-    fn debug(&self, slice: &mut Slice) {
+    fn debug(&self, slice: &mut Slice, _: Timestamp) {
         slice.write_str("Explore").newline();
     }
 
@@ -548,7 +548,6 @@ impl Strategy for ExploreStrategy {
 //////////////////////////////////////////////////////////////////////////////
 
 struct TrackTarget {
-    age: Timedelta,
     fresh: bool,
     scent: Scent,
 }
@@ -562,10 +561,10 @@ struct TrackStrategy {
 impl Strategy for TrackStrategy {
     fn get_path(&self) -> &[Point] { &self.path.steps }
 
-    fn debug(&self, slice: &mut Slice) {
+    fn debug(&self, slice: &mut Slice, time: Timestamp) {
         slice.write_str("Track").newline();
         if let Some(x) = &self.target {
-            slice.write_str(&format!("    age: {:?}", x.age)).newline();
+            slice.write_str(&format!("    age: {:?}", time - x.scent.time)).newline();
             slice.write_str(&format!("    pos: {:?}", x.scent.pos)).newline();
             slice.write_str(&format!("    fresh: {}", x.fresh)).newline();
         }
@@ -579,10 +578,7 @@ impl Strategy for TrackStrategy {
 
         if !self.path.check(ctx) { self.path.reset(); }
 
-        if let Some(x) = &mut self.target {
-            x.age = ctx.known.time - x.scent.time;
-            x.fresh = false;
-        }
+        if let Some(x) = &mut self.target { x.fresh = false; }
 
         for &scent in &ctx.known.scents {
             let (fresh, newer) = match &self.target {
@@ -592,17 +588,17 @@ impl Strategy for TrackStrategy {
             if !newer { continue; }
 
             if fresh { self.path.reset(); }
-
-            let age = ctx.known.time - scent.time;
-            self.target = Some(TrackTarget { age, fresh, scent });
+            self.target = Some(TrackTarget { fresh, scent });
         }
-
-        let old = matches!(&self.target, Some(x) if x.age > MAX_TRACKING_TIME);
-        if old { self.target = None; }
 
         let Some(x) = &self.target else { return (Priority::Skip, 0) };
 
-        (Priority::Hunt, (x.age + SCENT_AGE_PENALTY).raw())
+        let age = ctx.known.time - x.scent.time;
+        if age > MAX_TRACKING_TIME { self.target = None; }
+
+        let Some(_) = &self.target else { return (Priority::Skip, 0) };
+
+        (Priority::Hunt, (age + SCENT_AGE_PENALTY).raw())
     }
 
     fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
@@ -613,8 +609,8 @@ impl Strategy for TrackStrategy {
         let turns = if !move_ready(ctx.entity) { SLOWED_TURNS } else { WANDER_TURNS };
         if let Some(x) = self.path.follow(ctx, turns) { return Some(x); }
 
-        let (age, pos) = (x.age, x.scent.pos);
-        search_around(ctx, &mut self.path, age, Point(0, 0), pos, turns)
+        let age = ctx.known.time - x.scent.time;
+        search_around(ctx, &mut self.path, age, Point(0, 0), x.scent.pos, turns)
     }
 
     fn reject(&mut self) { self.path.reset(); }
@@ -624,9 +620,9 @@ impl Strategy for TrackStrategy {
 
 #[derive(Debug)]
 struct ChaseTarget {
-    age: Timedelta,
     bias: Point,
     last: Point,
+    time: Timestamp,
     steps: i32,
 }
 
@@ -639,10 +635,10 @@ struct ChaseStrategy {
 impl Strategy for ChaseStrategy {
     fn get_path(&self) -> &[Point] { &self.path.steps }
 
-    fn debug(&self, slice: &mut Slice) {
+    fn debug(&self, slice: &mut Slice, time: Timestamp) {
         slice.write_str("Chase").newline();
         if let Some(x) = &self.target {
-            slice.write_str(&format!("    age: {:?}", x.age)).newline();
+            slice.write_str(&format!("    age: {:?}", time - x.time)).newline();
             slice.write_str(&format!("    bias: {:?}", x.bias)).newline();
             slice.write_str(&format!("    last: {:?}", x.last)).newline();
             slice.write_str(&format!("    steps: {}", x.steps)).newline();
@@ -658,28 +654,29 @@ impl Strategy for ChaseStrategy {
         if predator && turns_left >= cutoff { return (Priority::Skip, 0); }
 
         let Context { known, pos, .. } = *ctx;
-        let time = known.time;
         let mut targets: Vec<_> = known.entities.iter().filter(
-            |x| x.delta < 0 && (time - x.time) < MAX_SEARCH_TIME).collect();
+            |x| x.delta < 0 && (known.time - x.time) < MAX_SEARCH_TIME).collect();
         if targets.is_empty() { return (Priority::Skip, 0); }
 
         let target = *targets.select_nth_unstable_by_key(
-                0, |x| (time - x.time, (x.pos - pos).len_l2_squared())).1;
+            0, |x| (known.time - x.time, (x.pos - pos).len_l2_squared())).1;
         let reset = target.time > ctx.shared.prev_time;
         if reset || !self.path.check(ctx) { self.path.reset(); }
 
-        let (age, last) = (time - target.time, target.pos);
+        let age = known.time - target.time;
+        let (last, time) = (target.pos, target.time);
         let (bias, steps) = if !reset && let Some(x) = prev {
             (x.bias, x.steps + 1)
         } else {
             (target.pos - pos, 0)
         };
-        self.target = Some(ChaseTarget { age, bias, last, steps });
+        self.target = Some(ChaseTarget { bias, last, time, steps });
         (Priority::Hunt, age.raw())
     }
 
     fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
-        let ChaseTarget { age, bias, last, steps } = *self.target.as_ref()?;
+        let ChaseTarget { bias, last, time, steps } = *self.target.as_ref()?;
+        let age = ctx.known.time - time;
         let visible = age == Timedelta::default();
         if visible { return Some(attack_target(ctx, last)); }
 
@@ -772,7 +769,7 @@ impl Default for FlightStrategy {
 impl Strategy for FlightStrategy {
     fn get_path(&self) -> &[Point] { &self.path.steps }
 
-    fn debug(&self, slice: &mut Slice) {
+    fn debug(&self, slice: &mut Slice, _: Timestamp) {
         slice.write_str("Flight").newline();
         slice.write_str(&format!("    stage: {:?}", self.stage)).newline();
         slice.write_str(&format!("    needs_path: {}", self.needs_path)).newline();
@@ -1190,7 +1187,7 @@ impl AIState {
     pub fn debug(&self, slice: &mut Slice) {
         for (i, strategy) in self.strategies.iter().enumerate() {
             slice.write_str(if i as i32 == self.last { "> " } else { "  " });
-            strategy.debug(slice);
+            strategy.debug(slice, self.shared.turn_time);
             slice.newline();
         }
         self.shared.debug(slice);
