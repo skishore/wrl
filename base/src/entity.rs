@@ -111,16 +111,19 @@ impl Entity {
 // EID
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-#[repr(transparent)]
 pub struct EID(NonZeroU64);
 static_assert_size!(Option<EID>, 8);
 
-fn to_key(eid: EID) -> DefaultKey {
-    KeyData::from_ffi(eid.0.get()).into()
+impl From<DefaultKey> for EID {
+    fn from(k: DefaultKey) -> Self {
+        Self(NonZeroU64::new(k.data().as_ffi()).unwrap())
+    }
 }
 
-fn to_eid(key: DefaultKey) -> EID {
-    EID(NonZeroU64::new(key.data().as_ffi()).unwrap())
+impl EID {
+    fn key(&self) -> DefaultKey {
+        KeyData::from_ffi(self.0.get()).into()
+    }
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -134,18 +137,18 @@ pub struct EntityMap(BaseMap);
 
 impl EntityMap {
     pub fn add(&mut self, args: &EntityArgs, rng: &mut RNG) -> EID {
-        to_eid(self.0.insert_with_key(|x| Entity::new(to_eid(x), args, rng)))
+        self.0.insert_with_key(|x| Entity::new(x.into(), args, rng)).into()
     }
 
     pub fn clear(&mut self) { self.0.clear(); }
 
-    pub fn get(&self, eid: EID) -> Option<&Entity> { self.0.get(to_key(eid)) }
+    pub fn get(&self, eid: EID) -> Option<&Entity> { self.0.get(eid.key()) }
 
-    pub fn get_mut(&mut self, eid: EID) -> Option<&mut Entity> { self.0.get_mut(to_key(eid)) }
+    pub fn get_mut(&mut self, eid: EID) -> Option<&mut Entity> { self.0.get_mut(eid.key()) }
 
-    pub fn has(&self, eid: EID) -> bool { self.0.contains_key(to_key(eid)) }
+    pub fn has(&self, eid: EID) -> bool { self.0.contains_key(eid.key()) }
 
-    pub fn remove(&mut self, eid: EID) -> Option<Entity> { self.0.remove(to_key(eid)) }
+    pub fn remove(&mut self, eid: EID) -> Option<Entity> { self.0.remove(eid.key()) }
 
     pub fn iter(&self) -> Iter<'_> { Iter(self.0.iter()) }
 
@@ -193,13 +196,13 @@ impl<'a> FusedIterator for IterMut<'a> {}
 impl<'a> Iterator for Iter<'a> {
     type Item = (EID, &'a Entity);
     fn next(&mut self) -> Option<Self::Item> {
-        self.0.next().map(|(k, v)| (to_eid(k), v))
+        self.0.next().map(|(k, v)| (k.into(), v))
     }
 }
 
 impl<'a> Iterator for IterMut<'a> {
     type Item = (EID, &'a mut Entity);
     fn next(&mut self) -> Option<Self::Item> {
-        self.0.next().map(|(k, v)| (to_eid(k), v))
+        self.0.next().map(|(k, v)| (k.into(), v))
     }
 }
