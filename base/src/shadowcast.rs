@@ -122,6 +122,7 @@ pub struct VisionArgs<F: Fn(Point) -> i32> {
 
 pub struct Vision {
     radius: i32,
+    r2_limit: i64,
     initial_visibility: i32,
     offset: Point,
     points_seen: Vec<Point>,
@@ -140,8 +141,10 @@ impl Vision {
     pub fn new_with_visibility(radius: i32, initial_visibility: i32) -> Self {
         let side = 2 * radius + 1;
         let size = Point(side, side);
+        let r = radius as i64;
         Self {
             radius,
+            r2_limit: r * r + r,
             initial_visibility,
             offset: Point::default(),
             points_seen: vec![],
@@ -196,11 +199,10 @@ impl Vision {
             &mut self, args: &VisionArgs<F>, target: Point) -> bool {
         if args.pos == target { return true; }
 
-        let radius = self.radius;
-        let r2 = radius * radius + radius;
-        let Point(x, y) = target - args.pos;
-        if x * x + y * y > r2 { return false; }
+        let delta = target - args.pos;
+        if delta.len_l2_squared() > self.r2_limit { return false; }
 
+        let Point(x, y) = delta;
         let limit = std::cmp::max(x.abs(), y.abs());
 
         self.clear(args.pos);
@@ -283,7 +285,7 @@ impl Vision {
             &mut self, pos: Point, limit: i32, opacity_lookup: F) {
         let radius = self.radius;
         let center = Point(radius, radius);
-        let r2 = radius * radius + radius;
+        let r2_limit = self.r2_limit;
 
         let push = |next: &mut SlopeRanges, s: SlopeRange| {
             if let Some(x) = next.items.last_mut() &&
@@ -305,16 +307,16 @@ impl Vision {
                 let limit = div_ceil(2 * max.num * depth - max.den, 2 * max.den);
 
                 for width in start..=limit {
-                    let (x, y) = (depth, width);
-                    let nearby = x * x + y * y <= r2;
-                    let point = *transform * Point(x, y);
+                    let source = Point(depth, width);
+                    let nearby = source.len_l2_squared() <= r2_limit;
+                    let point = *transform * source;
 
                     let next_visibility = (|| {
                         if !nearby { return -1; }
                         let opacity = opacity_lookup(point + pos);
                         if opacity == 0 { return visibility; }
                         if opacity >= visibility { return 0; }
-                        let r = 1.0 + (0.5 * y.abs() as f64) / (x as f64);
+                        let r = 1.0 + (0.5 * source.1.abs() as f64) / (source.0 as f64);
                         std::cmp::max(visibility - (r * opacity as f64) as i32, 0)
                     })();
 
