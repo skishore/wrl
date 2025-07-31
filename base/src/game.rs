@@ -331,8 +331,8 @@ impl Board {
 
     pub fn get_status(&self, p: Point) -> Status {
         let Cell { eid, tile, .. } = self.get_cell(p);
-        if eid.is_some() { return Status::Occupied; }
-        if tile.blocks_movement() { Status::Blocked } else { Status::Free }
+        if tile.blocks_movement() { return Status::Blocked; }
+        if eid.is_some() { Status::Occupied } else { Status::Free }
     }
 
     pub fn get_tile(&self, p: Point) -> &'static Tile { self.get_cell(p).tile }
