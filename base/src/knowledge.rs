@@ -242,7 +242,7 @@ impl Knowledge {
     // Reads
 
     pub fn default(&self) -> PointLookup<'_> {
-        PointLookup { root: self, tile: None }
+        PointLookup { root: self, spot: None }
     }
 
     pub fn entity(&self, eid: EID) -> Option<&EntityKnowledge> {
@@ -250,7 +250,7 @@ impl Knowledge {
     }
 
     pub fn get(&self, p: Point) -> PointLookup<'_> {
-        PointLookup { root: self, tile: self.point_map.get(&p) }
+        PointLookup { root: self, spot: self.point_map.get(&p) }
     }
 
     // Writes
@@ -477,7 +477,7 @@ impl Knowledge {
 
 pub struct PointLookup<'a> {
     root: &'a Knowledge,
-    tile: Option<&'a PointKnowledge>,
+    spot: Option<&'a PointKnowledge>,
 }
 
 impl<'a> PointLookup<'a> {
@@ -508,18 +508,19 @@ impl<'a> PointLookup<'a> {
     // Derived fields
 
     pub fn cell(&self) -> Option<&CellKnowledge> {
-        Some(&self.root.cells[self.tile?.cell?])
+        Some(&self.root.cells[self.spot?.cell?])
     }
 
     pub fn entity(&self) -> Option<&'a EntityKnowledge> {
-        Some(&self.root.entities[self.tile?.entity?])
+        Some(&self.root.entities[self.spot?.entity?])
     }
 
     pub fn status(&self) -> Status {
-        let Some(x) = self.tile else { return Status::Unknown };
-        if x.entity.is_some() { return Status::Occupied; }
-        let Some(x) = self.cell() else { return Status::Unknown };
-        if x.tile.blocks_movement() { Status::Blocked } else { Status::Free }
+        let Some(spot) = self.spot else { return Status::Unknown };
+        let Some(cell) = spot.cell else { return Status::Unknown };
+        let tile = self.root.cells[cell].tile;
+        if tile.blocks_movement() { return Status::Blocked; }
+        if spot.entity.is_some() { Status::Occupied } else { Status::Free }
     }
 
     // Predicates
