@@ -923,22 +923,55 @@ impl Strategy for FlightStrategy {
 
     fn debug(&self, slice: &mut Slice, _: Timestamp) {
         slice.write_str("Flight").newline();
+        if self.stage == FlightStage::Done { return; }
+
         slice.write_str(&format!("    stage: {:?}", self.stage)).newline();
         slice.write_str(&format!("    needs_path: {}", self.needs_path)).newline();
         slice.write_str(&format!("    since_path: {}", self.since_path)).newline();
         slice.write_str(&format!("    since_seen: {}", self.since_seen)).newline();
         slice.write_str(&format!("    turn_limit: {}", self.turn_limit)).newline();
+
+        slice.write_str("    threats:").newline();
+        for x in &self.threats {
+            slice.write_str(&format!("      {:?}", x.pos)).newline();
+        }
     }
 
     fn bid(&mut self, ctx: &mut Context, _: bool) -> (Priority, i64) {
         let Context { entity, known, pos, .. } = *ctx;
         let time = known.time;
+
+        let threat_state_threats = ctx.shared.threats.all();
+
         let reset = known.entities.iter().any(
-            |x| x.delta > 0 && x.time > ctx.shared.prev_time);
+            |x| x.delta > 0 && x.time > ctx.shared.prev_time) ||
+        threat_state_threats.iter().any(
+            |x| x.status == ThreatStatus::Active && x.time > ctx.shared.prev_time);
+
         let mut threats: Vec<_> = known.entities.iter().filter_map(|x| {
             if !(x.delta > 0 && (time - x.time) < MAX_FLIGHT_TIME) { return None; }
             Some(Threat { asleep: x.asleep, pos: x.pos })
         }).collect();
+
+        for t in &threat_state_threats {
+            if t.status != ThreatStatus::Active { continue; }
+            threats.push(Threat { asleep: false, pos: t.pos });
+        }
+        if !threats.is_empty() {
+            for t in &threat_state_threats {
+                if t.status == ThreatStatus::Active { continue; }
+                if t.status == ThreatStatus::Resolved { continue; }
+                threats.push(Threat { asleep: false, pos: t.pos });
+            }
+        }
+        let mut seen = crate::base::HashSet::default();
+        let mut deduped_threats = vec![];
+        for t in threats {
+            if !seen.insert(t.pos) { continue; }
+            deduped_threats.push(t);
+        }
+        let mut threats = deduped_threats;
+
         threats.sort_unstable_by_key(|x| (x.pos.0, x.pos.1));
 
         if self.done() && !reset { return (Priority::Skip, 0); }
