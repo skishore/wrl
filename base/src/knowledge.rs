@@ -182,8 +182,8 @@ pub struct EntityKnowledge {
     pub asleep: bool,
     pub friend: bool,
     pub player: bool,
-    pub visible: bool,
     pub sneaking: bool,
+    pub visible: bool,
 }
 #[cfg(target_pointer_width = "64")]
 static_assert_size!(EntityKnowledge, 88);
@@ -250,8 +250,8 @@ impl EntityKnowledge {
             asleep: false,
             friend: false,
             player: false,
-            visible: false,
             sneaking: false,
+            visible: false,
         }
     }
 }
@@ -286,7 +286,7 @@ impl Knowledge {
 
         // Clear and recompute scents. Only prey gives off a scent.
         self.scents.clear();
-        self.update_scents(me, board, rng);
+        self.populate_scents(me, board, rng);
 
         // Clear visibility flags. Visible cells come first in the list so we
         // can stop when we see the first one that's not visible.
@@ -327,7 +327,7 @@ impl Knowledge {
                 let other = board.get_entity(eid?)?;
                 let big = other.player && !other.sneaking;
                 if !big && !see_all_entities { return None; }
-                Some(self.update_entity(me, other, Sense::Sight, time))
+                Some(self.see_entity(me, other))
             })();
 
             // Update this point's cell, or create a new one.
@@ -362,40 +362,6 @@ impl Knowledge {
         }
 
         self.forget(me.player);
-    }
-
-    pub fn update_entity(&mut self, me: &Entity, other: &Entity,
-                         sense: Sense, time: Timestamp) -> EntityHandle {
-        let handle = *self.entity_map.entry(other.eid).and_modify(|&mut x| {
-            self.entities.move_to_front(x);
-            let pos = self.entities[x].pos;
-            if pos != other.pos && let Some(entry) = self.point_map.get_mut(&pos) {
-                if entry.entity == Some(x) { entry.entity = None; }
-            }
-        }).or_insert_with(|| {
-            self.entities.push_front(EntityKnowledge::new(other.eid))
-        });
-
-        let entry = &mut self.entities[handle];
-
-        entry.pos = other.pos;
-        entry.dir = other.dir;
-        entry.glyph = other.glyph;
-        entry.sense = sense;
-        entry.name = other.name();
-        entry.time = time;
-
-        entry.hp = other.cur_hp as f64 / max(other.max_hp, 1) as f64;
-        entry.pp = 1. - clamp(other.move_timer as f64 / MOVE_TIMER as f64, 0., 1.);
-        entry.delta = trophic_level(other) - trophic_level(me);
-
-        entry.asleep = other.asleep;
-        entry.friend = me.eid == other.eid;
-        entry.player = other.player;
-        entry.visible = sense == Sense::Sight;
-        entry.sneaking = other.sneaking;
-
-        handle
     }
 
     pub fn remove_entity(&mut self, oid: EID) {
@@ -468,7 +434,7 @@ impl Knowledge {
         if x.empty() { self.point_map.remove(&point); }
     }
 
-    fn update_scents(&mut self, me: &Entity, board: &Board, rng: &mut RNG) {
+    fn populate_scents(&mut self, me: &Entity, board: &Board, rng: &mut RNG) {
         if me.asleep { return; }
 
         let level = trophic_level(me);
@@ -484,6 +450,39 @@ impl Knowledge {
                 break;
             }
         }
+    }
+
+    fn see_entity(&mut self, me: &Entity, other: &Entity) -> EntityHandle {
+        let handle = *self.entity_map.entry(other.eid).and_modify(|&mut x| {
+            self.entities.move_to_front(x);
+            let pos = self.entities[x].pos;
+            if pos != other.pos && let Some(entry) = self.point_map.get_mut(&pos) {
+                if entry.entity == Some(x) { entry.entity = None; }
+            }
+        }).or_insert_with(|| {
+            self.entities.push_front(EntityKnowledge::new(other.eid))
+        });
+
+        let entry = &mut self.entities[handle];
+
+        entry.pos = other.pos;
+        entry.dir = other.dir;
+        entry.glyph = other.glyph;
+        entry.sense = Sense::Sight;
+        entry.name = other.name();
+        entry.time = self.time;
+
+        entry.hp = other.cur_hp as f64 / max(other.max_hp, 1) as f64;
+        entry.pp = 1. - clamp(other.move_timer as f64 / MOVE_TIMER as f64, 0., 1.);
+        entry.delta = trophic_level(other) - trophic_level(me);
+
+        entry.asleep = other.asleep;
+        entry.friend = me.eid == other.eid;
+        entry.player = other.player;
+        entry.sneaking = other.sneaking;
+        entry.visible = true;
+
+        handle
     }
 }
 
