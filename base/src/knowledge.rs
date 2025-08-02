@@ -1,11 +1,12 @@
 use std::cmp::max;
+use std::num::NonZeroU32;
 
 use rand::Rng;
 
 use thin_vec::{ThinVec, thin_vec};
 
 use crate::static_assert_size;
-use crate::base::{Glyph, HashMap, Point, RNG, clamp};
+use crate::base::{Glyph, HashMap, HashSet, Point, RNG, clamp};
 use crate::entity::{EID, Entity};
 use crate::game::{MOVE_TIMER, Board, Item, Light, Tile};
 use crate::list::{Handle, List};
@@ -17,7 +18,10 @@ use crate::shadowcast::Vision;
 // Constants
 
 const MAX_ENTITY_MEMORY: usize = 64;
+const MAX_SOURCE_MEMORY: usize = 64;
 const MAX_TILE_MEMORY: usize = 4096;
+
+const SOURCE_TRACKING_LIMIT: Timedelta = Timedelta::from_seconds(24.);
 
 fn trophic_level(x: &Entity) -> i32 {
     if x.player { 3 } else if !x.predator { 1 } else { 2 }
@@ -118,28 +122,36 @@ impl std::fmt::Debug for Timestamp {
 
 // Events
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct UID(NonZeroU32);
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Sense { Sight, Sound, Smell }
 
-#[derive(Clone, Debug, Default)]
-pub struct AttackEvent { pub attacker: Option<EID>, pub attacked: Option<EID> }
+#[derive(Clone, Debug)]
+pub struct AttackEvent { pub target: Option<EID> }
 
 #[derive(Clone, Debug)]
-pub struct MoveEvent { pub eid: Option<EID>, pub from: Point }
+pub struct MoveEvent { pub from: Point }
+
+#[derive(Clone, Debug, Default)]
+pub struct SpotEvent {}
 
 #[derive(Clone, Debug)]
 pub enum EventData {
     Attack(AttackEvent),
     Move(MoveEvent),
+    Spot(SpotEvent),
 }
 
 #[derive(Clone, Debug)]
 pub struct Event {
+    pub eid: Option<EID>,
+    pub uid: Option<UID>,
     pub data: EventData,
     pub time: Timestamp,
     pub point: Point,
     pub sense: Sense,
-    pub turns: i32,
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -148,6 +160,7 @@ pub struct Event {
 
 type CellHandle = Handle<CellKnowledge>;
 type EntityHandle = Handle<EntityKnowledge>;
+type SourceHandle = Handle<SourceKnowledge>;
 
 pub struct CellKnowledge {
     pub last_see_entity_at: Timestamp,
@@ -188,7 +201,17 @@ pub struct EntityKnowledge {
 #[cfg(target_pointer_width = "64")]
 static_assert_size!(EntityKnowledge, 88);
 
-#[derive(Default)]
+pub struct SourceKnowledge {
+    eid: Option<EID>,
+    pub uid: UID,
+    pub pos: Point,
+    pub sense: Sense,
+    pub time: Timestamp,
+}
+#[cfg(target_pointer_width = "64")]
+static_assert_size!(SourceKnowledge, 32);
+
+#[derive(Default, Eq, PartialEq)]
 pub struct PointKnowledge {
     cell: Option<CellHandle>,
     entity: Option<EntityHandle>,
@@ -206,8 +229,10 @@ pub struct Scent {
 pub struct Knowledge {
     point_map: HashMap<Point, PointKnowledge>,
     entity_map: HashMap<EID, EntityHandle>,
+    source_map: HashMap<EID, SourceHandle>,
     pub cells: List<CellKnowledge>,
     pub entities: List<EntityKnowledge>,
+    pub sources: List<SourceKnowledge>,
     pub events: Vec<Event>,
     pub scents: Vec<Scent>,
     pub time: Timestamp,
@@ -256,9 +281,28 @@ impl EntityKnowledge {
     }
 }
 
+impl SourceKnowledge {
+    fn new(uid: UID) -> Self {
+        let (pos, time) = (Default::default(), Default::default());
+        Self { eid: None, uid, pos, sense: Sense::Sight, time }
+    }
+
+    fn from(uid: UID, event: &Event) -> Self {
+        let mut result = Self::new(uid);
+        result.update(event);
+        result
+    }
+
+    fn update(&mut self, event: &Event) {
+        self.pos = event.point;
+        self.sense = event.sense;
+        self.time = event.time;
+    }
+}
+
 impl PointKnowledge {
     fn empty(&self) -> bool {
-        self.cell.is_none() && self.entity.is_none()
+        *self == PointKnowledge::default()
     }
 }
 
@@ -364,11 +408,10 @@ impl Knowledge {
         self.forget(me.player);
     }
 
-    pub fn remove_entity(&mut self, oid: EID) {
-        let Some(x) = self.entity_map.remove(&oid) else { return };
-        let EntityKnowledge { pos, .. } = self.entities.remove(x);
-        let Some(y) = self.point_map.get_mut(&pos) else { return };
-        if y.entity == Some(x) { y.entity = None; }
+    pub fn remove_entity(&mut self, eid: EID) {
+        let Some(x) = self.entity_map.remove(&eid) else { return };
+        let pos = self.entities.remove(x).pos;
+        Self::move_from(&mut self.point_map, pos, x);
     }
 
     // Events helpers:
@@ -380,26 +423,79 @@ impl Knowledge {
     pub fn observe_event(&mut self, me: &Entity, event: &Event) {
         if me.player { return; }
 
-        self.events.push(event.clone());
+        let mut clone = event.clone();
+        clone.eid = None;
+        clone.uid = None;
 
-        let entity = (|| {
-            let EventData::Move(x) = &event.data else { return None };
-            if x.from == event.point { return None; }
+        let Some(eid) = event.eid else {
+            let uid = Self::get_next_uid(&self.sources);
+            self.sources.push_front(SourceKnowledge::from(uid, event));
+            clone.uid = Some(uid);
+            self.events.push(clone);
+            return;
+        };
 
-            let entry = self.point_map.get_mut(&x.from)?;
-            let handle = std::mem::replace(&mut entry.entity, None)?;
+        let seen = match event.sense {
+            Sense::Sight => true,
+            Sense::Smell => false,
+            Sense::Sound => match self.entity_map.get(&eid) {
+                Some(&x) => event.time - self.entities[x].time < SOURCE_TRACKING_LIMIT,
+                None => false,
+            },
+        };
+
+        if seen && let Some(&handle) = self.entity_map.get(&eid) {
             self.entities.move_to_front(handle);
 
             let entity = &mut self.entities[handle];
+
+            let (source, target) = (entity.pos, event.point);
+            if source != target {
+                Self::move_from(&mut self.point_map, source, handle);
+            }
+            if let Some(x) = self.point_map.get_mut(&target) {
+                x.entity = Some(handle);
+            }
+
             entity.pos = event.point;
-            entity.dir = x.from - event.point;
             entity.sense = event.sense;
             entity.time = event.time;
 
-            Some(handle)
-        })();
+            if let Some(x) = self.source_map.remove(&eid) {
+                let source = &mut self.sources[x];
+                if event.time - source.time >= SOURCE_TRACKING_LIMIT {
+                    source.eid = None;
+                } else {
+                    clone.uid = Some(source.uid);
+                    self.sources.remove(x);
+                }
+            }
 
-        if let Some(x) = self.point_map.get_mut(&event.point) { x.entity = entity; }
+            clone.eid = Some(eid);
+            self.events.push(clone);
+            return;
+        }
+
+        let create = |sources: &mut List<SourceKnowledge>| {
+            let uid = Self::get_next_uid(sources);
+            sources.push_front(SourceKnowledge::new(uid))
+        };
+        let handle = *self.source_map.entry(eid).and_modify(|x| {
+            let source = &mut self.sources[*x];
+            if event.time - source.time >= SOURCE_TRACKING_LIMIT {
+                source.eid = None;
+                *x = create(&mut self.sources);
+            } else {
+                self.sources.move_to_front(*x);
+            }
+        }).or_insert_with(|| create(&mut self.sources));
+
+        let entry = &mut self.sources[handle];
+        entry.eid = Some(eid);
+        entry.update(event);
+
+        clone.uid = Some(entry.uid);
+        self.events.push(clone);
     }
 
     // Private helpers:
@@ -424,6 +520,11 @@ impl Knowledge {
 
             // We clean up entities up to the first visible one.
             self.remove_entity(entity.eid);
+        }
+
+        while self.source_map.len() > MAX_SOURCE_MEMORY {
+            let Some(source) = self.sources.pop_back() else { break };
+            if let Some(eid) = source.eid { self.source_map.remove(&eid); }
         }
     }
 
@@ -455,10 +556,8 @@ impl Knowledge {
     fn see_entity(&mut self, me: &Entity, other: &Entity) -> EntityHandle {
         let handle = *self.entity_map.entry(other.eid).and_modify(|&mut x| {
             self.entities.move_to_front(x);
-            let pos = self.entities[x].pos;
-            if pos != other.pos && let Some(entry) = self.point_map.get_mut(&pos) {
-                if entry.entity == Some(x) { entry.entity = None; }
-            }
+            let (source, target) = (self.entities[x].pos, other.pos);
+            if source != target { Self::move_from(&mut self.point_map, source, x); }
         }).or_insert_with(|| {
             self.entities.push_front(EntityKnowledge::new(other.eid))
         });
@@ -483,6 +582,21 @@ impl Knowledge {
         entry.visible = true;
 
         handle
+    }
+
+    // These methods would take &mut self, but hit lifetime issues:
+
+    fn get_next_uid(sources: &List<SourceKnowledge>) -> UID {
+        let used: HashSet<_> = sources.iter().map(|x| x.uid).collect();
+        let mut result = UID(1.try_into().unwrap());
+        while used.contains(&result) { result.0 = result.0.checked_add(1).unwrap() }
+        result
+    }
+
+    fn move_from(m: &mut HashMap<Point, PointKnowledge>, p: Point, h: EntityHandle) {
+        let Some(x) = m.get_mut(&p) else { return };
+        if x.entity == Some(h) { x.entity = None; }
+        if x.empty() { m.remove(&p); }
     }
 }
 

@@ -409,15 +409,9 @@ impl Board {
 
     // Knowledge
 
-    fn update_known(&mut self, eid: EID, env: &mut UpdateEnv) {
-        let UpdateEnv { known, fov, rng, .. } = env;
-        swap(known, &mut self.entities[eid].known);
-
-        let me = &self.entities[eid];
-        let vision = fov.compute(&self, me);
-        known.update(me, &self, vision, rng);
-
-        swap(known, &mut self.entities[eid].known);
+    fn create_event(&self, eid: EID, data: EventData, point: Point) -> Event {
+        let (eid, uid) = (Some(eid), None);
+        Event { eid, uid, data, time: self.time, point, sense: Sense::Sight }
     }
 
     fn observe_event(&mut self, eid: EID, event: &Event, env: &mut UpdateEnv) {
@@ -429,6 +423,17 @@ impl Board {
 
     fn remove_known_entity(&mut self, eid: EID, oid: EID) {
         self.entities[eid].known.remove_entity(oid);
+    }
+
+    fn update_known(&mut self, eid: EID, env: &mut UpdateEnv) {
+        let UpdateEnv { known, fov, rng, .. } = env;
+        swap(known, &mut self.entities[eid].known);
+
+        let me = &self.entities[eid];
+        let vision = fov.compute(&self, me);
+        known.update(me, &self, vision, rng);
+
+        swap(known, &mut self.entities[eid].known);
     }
 
     // Environmental effects
@@ -702,9 +707,8 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                     let sightings = combine_views(&state.board, &saw_source, &saw_target);
 
                     // Deliver a MoveEvent to each entity that saw the move.
-                    let (sense, time) = (Sense::Sight, state.board.time);
-                    let data = EventData::Move(MoveEvent { eid: Some(eid), from: source });
-                    let mut event = Event { data, time, point: target, sense, turns: 0 };
+                    let data = EventData::Move(MoveEvent { from: source });
+                    let mut event = state.board.create_event(eid, data, target);
                     for Sighting { eid: oid, source_seen, target_seen } in sightings {
                         if oid == eid { continue; }
 
@@ -742,17 +746,14 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let sightings = combine_views(&state.board, &saw_source, &saw_target);
 
             // Deliver the AttackEvent to each entity in the list.
-            let (sense, time) = (Sense::Sight, state.board.time);
-            let data = EventData::Attack(AttackEvent::default());
-            let mut event = Event { data, time, point: source, sense, turns: 0 };
+            let data = EventData::Attack(AttackEvent { target: None });
+            let mut event = state.board.create_event(eid, data, source);
             let mut player_saw_target = false;
             for Sighting { eid: oid, source_seen, target_seen } in sightings {
                 if oid == eid { continue; }
 
-                event.data = EventData::Attack(AttackEvent {
-                    attacker: Some(eid),
-                    attacked: if target_seen { tid } else { None },
-                });
+                let target = if target_seen { tid } else { None };
+                event.data = EventData::Attack(AttackEvent { target });
                 event.sense = if source_seen { Sense::Sight } else { Sense::Sound };
                 state.board.observe_event(oid, &event, &mut state.env);
                 if oid != state.player { continue; }

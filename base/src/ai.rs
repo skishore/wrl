@@ -234,6 +234,7 @@ impl ThreatState {
             match &event.data {
                 EventData::Attack(x) => self.handle_attack(me, event, x),
                 EventData::Move(x) => self.handle_move(me, event, x),
+                EventData::Spot(_) => {},
             }
         }
         for entity in &me.known.entities {
@@ -251,20 +252,21 @@ impl ThreatState {
     }
 
     fn handle_attack(&mut self, me: &Entity, event: &Event, data: &AttackEvent) {
-        let active = data.attacked == Some(me.eid) || !me.predator;
+        let hit = data.target == Some(me.eid);
+        let active = hit || !me.predator;
         let status = if active { ThreatStatus::Active } else { ThreatStatus::Potential };
 
-        let record = self.get(data.attacker, event.sense, event.time);
+        let record = self.get(event.eid, event.sense, event.time);
         record.pos = event.point;
         record.time = event.time;
         record.status = std::cmp::min(record.status, status);
-        if data.attacked == Some(me.eid) { record.times_it_attacked += 1; }
+        if hit { record.times_it_attacked += 1; }
     }
 
-    fn handle_move(&mut self, me: &Entity, event: &Event, data: &MoveEvent) {
+    fn handle_move(&mut self, me: &Entity, event: &Event, _: &MoveEvent) {
         if me.known.get(event.point).visible() { return; }
 
-        let record = self.get(data.eid, event.sense, event.time);
+        let record = self.get(event.eid, event.sense, event.time);
         record.pos = event.point;
         record.time = event.time;
         record.status = std::cmp::min(record.status, ThreatStatus::Potential);
