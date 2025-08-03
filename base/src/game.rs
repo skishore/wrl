@@ -1139,6 +1139,24 @@ mod tests {
 
     const BASE_SEED: u64 = 17;
     const NUM_SEEDS: u64 = 8;
+    const NUM_STEPS: u64 = 4096;
+
+    #[test]
+    fn test_state_update() {
+        let mut states = vec![];
+        for i in 0..NUM_SEEDS {
+            states.push(State::new(Some(BASE_SEED + i), /*full=*/false));
+        }
+
+        for index in 0..(NUM_SEEDS * NUM_STEPS) {
+            let i = index as usize % states.len();
+            let state = &mut states[i];
+
+            state.inputs.push(Input::Char('.'));
+            state.update();
+            while state.board.get_frame().is_some() { state.update(); }
+        }
+    }
 
     #[bench]
     fn bench_state_update(b: &mut test::Bencher) {
