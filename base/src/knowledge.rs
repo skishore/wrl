@@ -398,6 +398,8 @@ impl Knowledge {
         }
 
         self.forget(me.player);
+
+        debug_assert!(self.check_invariants());
     }
 
     pub fn remove_entity(&mut self, eid: EID) {
@@ -407,12 +409,16 @@ impl Knowledge {
         if *x == Default::default() { self.eid_index.remove(&eid); }
         let pos = self.entities.remove(h).pos;
         Self::move_from(&mut self.pos_index, pos, h);
+
+        debug_assert!(self.check_invariants());
     }
 
     // Events helpers:
 
     pub fn forget_events_before(&mut self, time: Timestamp) {
         self.events.retain(|x| x.time > time);
+
+        debug_assert!(self.check_invariants());
     }
 
     pub fn observe_event(&mut self, me: &Entity, event: &Event) {
@@ -485,6 +491,8 @@ impl Knowledge {
 
         clone.uid = Some(source.uid);
         self.events.push(clone);
+
+        debug_assert!(self.check_invariants());
     }
 
     // Private helpers:
@@ -615,6 +623,48 @@ impl Knowledge {
 
         x.entity = None;
         if *x == Default::default() { m.remove(&p); }
+    }
+
+    // Debug helpers:
+
+    pub fn debug_noise_sources(&self) -> Vec<Point> {
+        self.sources.iter().map(|x| x.pos).collect()
+    }
+
+    fn check_invariants(&self) -> bool {
+        let check_sorted = |xs: Vec<Timestamp>| {
+            let mut last = Timestamp::default();
+            xs.into_iter().rev().for_each(|x| { assert!(x >= last); last = x; });
+        };
+
+        // Check that all lists are sorted in time order:
+        check_sorted(self.cells.iter().map(|x| x.last_seen).collect());
+        check_sorted(self.entities.iter().map(|x| x.time).collect());
+        check_sorted(self.sources.iter().map(|x| x.time).collect());
+        check_sorted(self.events.iter().rev().map(|x| x.time).collect());
+
+        // Check that every cell and entity is indexed:
+        for x in &self.cells {
+            let entry = self.pos_index.get(&x.point);
+            assert!(entry.and_then(|x| x.cell).is_some());
+        }
+        for x in &self.entities {
+            let entry = self.eid_index.get(&x.eid);
+            assert!(entry.and_then(|x| x.entity).is_some());
+        }
+
+        // Check that the indices are consistent and minimal:
+        for (&pos, entry) in &self.pos_index {
+            assert!(entry.cell.is_some() || entry.entity.is_some());
+            if let Some(x) = entry.cell { assert!(self.cells[x].point == pos); }
+            if let Some(x) = entry.entity { assert!(self.entities[x].pos == pos); }
+        }
+        for (&eid, entry) in &self.eid_index {
+            assert!(entry.entity.is_some() || entry.source.is_some());
+            if let Some(x) = entry.entity { assert!(self.entities[x].eid == eid); }
+            if let Some(x) = entry.source { assert!(self.sources[x].eid == Some(eid)); }
+        }
+        true
     }
 }
 

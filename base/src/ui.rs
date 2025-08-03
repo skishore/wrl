@@ -853,6 +853,11 @@ impl UI {
         for (_, other) in &board.entities {
             slice.set(slice_point(other.pos), other.glyph);
         }
+        for pos in entity.known.debug_noise_sources() {
+            let glyph = Glyph::wdfg('?', Color::black()).with_bg(0xffff00);
+            let Point(x, y) = pos - offset;
+            slice.set(Point(2 * x, y), glyph);
+        }
         for other in &entity.known.entities {
             let color = if other.visible { 0x00ff00 } else {
                 let entity_at_pos = entity.known.get(other.pos).entity();
