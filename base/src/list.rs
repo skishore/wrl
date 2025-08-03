@@ -36,6 +36,7 @@ struct Node<T> {
 pub struct List<T> {
     heads: [Link; 2],
     nodes: Vec<Node<T>>,
+    length: usize,
 }
 
 // Iterators
@@ -174,7 +175,7 @@ impl<T> Default for List<T> {
     fn default() -> Self {
         let used = Link { prev: Index(0), next: Index(0) };
         let free = Link { prev: Index(1), next: Index(1) };
-        Self { heads: [used, free], nodes: vec![] }
+        Self { heads: [used, free], nodes: vec![], length: 0 }
     }
 }
 
@@ -208,10 +209,22 @@ impl<T> List<T> {
         Some(&self[unsafe { Handle::unchecked(self.heads[0].prev) }])
     }
 
+    pub fn back_handle(&self) -> Option<Handle<T>> {
+        if self.is_empty() { return None; }
+        Some(unsafe { Handle::unchecked(self.heads[0].prev) })
+    }
+
     pub fn front(&self) -> Option<&T> {
         if self.is_empty() { return None; }
         Some(&self[unsafe { Handle::unchecked(self.heads[0].next) }])
     }
+
+    pub fn front_handle(&self) -> Option<Handle<T>> {
+        if self.is_empty() { return None; }
+        Some(unsafe { Handle::unchecked(self.heads[0].next) })
+    }
+
+    pub fn len(&self) -> usize { self.length }
 
     pub fn is_empty(&self) -> bool { self.heads[0].next == Index(0) }
 
@@ -262,6 +275,7 @@ impl<T> List<T> {
 
         self.link_mut(prev).next = Index(0);
         self.heads[0].prev = prev;
+        self.length -= 1;
         Some(self.push_front_free(tail))
     }
 
@@ -272,6 +286,7 @@ impl<T> List<T> {
 
         self.link_mut(next).prev = Index(0);
         self.heads[0].next = next;
+        self.length -= 1;
         Some(self.push_front_free(head))
     }
 
@@ -284,6 +299,7 @@ impl<T> List<T> {
 
         self.link_mut(prev).next = tail.index();
         self.heads[0].prev = tail.index();
+        self.length += 1;
         tail
     }
 
@@ -296,6 +312,7 @@ impl<T> List<T> {
 
         self.link_mut(next).prev = head.index();
         self.heads[0].next = head.index();
+        self.length += 1;
         head
     }
 
@@ -306,6 +323,7 @@ impl<T> List<T> {
         let Link { prev, next } = node.link;
         self.link_mut(prev).next = next;
         self.link_mut(next).prev = prev;
+        self.length -= 1;
         self.push_front_free(h)
     }
 
@@ -365,6 +383,17 @@ impl<T> List<T> {
 
     #[cfg(test)]
     fn check_invariants(&self) -> bool {
+        if self.is_empty() {
+            assert!(self.len() == 0);
+        } else {
+            assert!(self.len() > 0);
+            let (b, bh) = (self.back().unwrap(), self.back_handle().unwrap());
+            let (f, fh) = (self.front().unwrap(), self.front_handle().unwrap());
+            assert!(b as *const T == &self[bh] as *const T);
+            assert!(f as *const T == &self[fh] as *const T);
+        }
+
+        let mut used = 0;
         let mut total = 0;
         for (i, _) in self.heads.iter().enumerate() {
             let mut source = Index(i as u32);
@@ -375,9 +404,11 @@ impl<T> List<T> {
                 assert!(self.link(next).prev == source);
                 if next == target { break; }
                 source = next;
+                if i == 0 { used += 1; }
                 total += 1;
             }
         }
+        assert!(used == self.len());
         assert!(total == self.nodes.len());
         true
     }
@@ -422,7 +453,7 @@ mod tests {
     }
 
     #[test]
-    fn test_drop() {
+    fn test_remove() {
         let mut list: List<Box<_>> = List::default();
         let _ = list.push_back(0.into());
         let _ = list.push_back(1.into());
