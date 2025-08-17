@@ -10,8 +10,9 @@ use crate::base::{HashMap, LOS, Point, Slice, RNG, dirs, sample, weighted};
 use crate::entity::{Entity, EID};
 use crate::game::{MOVE_NOISE_RADIUS, Item, move_ready};
 use crate::game::{Action, EatAction, MoveAction};
-use crate::knowledge::{CellKnowledge, Knowledge, EntityKnowledge, Timedelta, Timestamp};
-use crate::knowledge::{AttackEvent, Event, EventData, MoveEvent, Scent, Sense};
+use crate::knowledge::{CellKnowledge, Knowledge, EntityKnowledge};
+use crate::knowledge::{Event, EventData, Scent, Timedelta, Timestamp, UID};
+use crate::list::{Handle, List};
 use crate::pathing::{AStar, BFS, DijkstraLength, DijkstraMap, Neighborhood, Status};
 use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
 
@@ -170,147 +171,128 @@ impl CachedPath {
 
 // Threat state
 
-const THREAT_MAX_TIME: Timedelta = Timedelta::from_seconds(96.);
-const THREAT_TRACKING_LIMIT: Timedelta = Timedelta::from_seconds(24.);
+const THREAT_SCAN_LIMIT: Timedelta = Timedelta::from_seconds(8.);
+
+type ThreatHandle = Handle<ThreatRecord>;
+
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+enum TID { EID(EID), UID(UID) }
 
 #[derive(Copy, Clone, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
-enum ThreatStatus { Active, Potential, #[default] Resolved }
+enum ThreatStatus { Hostile, Neutral, Scanned, #[default] Unknown }
 
 #[derive(Clone, Default)]
 struct ThreatRecord {
     pos: Point,
-    status: ThreatStatus,
-    times_it_attacked: i32,
-    times_we_escaped: i32,
     time: Timestamp,
+    status: ThreatStatus,
+    attacks: i32,
+    escapes: i32,
 }
 
 #[derive(Default)]
 struct ThreatState {
-    seen: HashMap<EID, ThreatRecord>,
-    heard: HashMap<EID, ThreatRecord>,
-    unknown: Vec<ThreatRecord>,
+    threats: List<ThreatRecord>,
+    threat_lookup: HashMap<TID, ThreatHandle>,
+}
+
+impl ThreatRecord {
+    fn debug(&self, slice: &mut Slice, time: Timestamp) {
+        slice.write_str("    ThreatRecord:").newline();
+        slice.write_str(&format!("      age: {:?}", time - self.time)).newline();
+        slice.write_str(&format!("      pos: {:?}", self.pos)).newline();
+        slice.write_str(&format!("      status: {:?}", self.status)).newline();
+        slice.write_str(&format!("      attacks: {:?}", self.attacks)).newline();
+        slice.write_str(&format!("      escapes: {:?}", self.escapes)).newline();
+    }
+
+    fn merge_from(&mut self, other: &ThreatRecord) {
+        self.status = min(self.status, other.status);
+        self.attacks += other.attacks;
+        self.escapes += other.escapes;
+    }
+
+    fn update_for_event(&mut self, me: &Entity, event: &Event) {
+        self.pos = event.point;
+        self.time = event.time;
+
+        match &event.data {
+            EventData::Attack(x) => if x.target == Some(me.eid) {
+                self.status = min(self.status, ThreatStatus::Hostile);
+                self.attacks += 1;
+            },
+            EventData::Move(_) => {},
+            EventData::Spot(_) => {},
+        }
+    }
+
+    fn update_for_sighting(&mut self, other: &EntityKnowledge) {
+        self.pos = other.pos;
+        self.time = other.time;
+
+        let hostile = other.delta > 0;
+        let status = if hostile { ThreatStatus::Hostile } else { ThreatStatus::Neutral };
+        self.status = min(self.status, status);
+    }
 }
 
 impl ThreatState {
     fn debug(&self, slice: &mut Slice, time: Timestamp) {
-        let show = |s: &mut Slice, x: &ThreatRecord| {
-            s.write_str("    ThreatRecord:").newline();
-            s.write_str(&format!("      age: {:?}", time - x.time)).newline();
-            s.write_str(&format!("      pos: {:?}", x.pos)).newline();
-            s.write_str(&format!("      status: {:?}", x.status)).newline();
-            s.write_str(&format!("      attacked: {:?}", x.times_it_attacked)).newline();
-            s.write_str(&format!("      escaped: {:?}", x.times_we_escaped)).newline();
-        };
-        let sort: &dyn Fn(&HashMap<EID, ThreatRecord>) -> Vec<&ThreatRecord> =
-                &|map: &HashMap<EID, ThreatRecord>| -> Vec<&ThreatRecord> {
-            let mut result: Vec<_> = map.values().collect();
-            result.sort_by_key(|x| x.time);
-            result
-        };
-        slice.write_str("  Threats seen:").newline();
-        for x in sort(&self.seen) { show(slice, x); }
-        slice.newline();
-        slice.write_str("  Threats heard:").newline();
-        for x in sort(&self.heard) { show(slice, x); }
-        slice.newline();
-        slice.write_str("  Threats guessed:").newline();
-        for x in &self.unknown { show(slice, x); }
-    }
-
-    fn all(&mut self) -> Vec<&mut ThreatRecord> {
-        let mut result = vec![];
-        for x in self.seen.values_mut() { result.push(x); }
-        for x in self.heard.values_mut() { result.push(x); }
-        for x in &mut self.unknown { result.push(x); }
-
-        result.sort_unstable_by_key(|x| x.time);
-        result.reverse();
-        result
+        slice.write_str("  ThreatState:").newline();
+        for x in &self.threats { x.debug(slice, time) }
     }
 
     fn update(&mut self, me: &Entity) {
         for event in &me.known.events {
-            match &event.data {
-                EventData::Attack(x) => self.handle_attack(me, event, x),
-                EventData::Move(x) => self.handle_move(me, event, x),
-                EventData::Spot(_) => {},
-            }
+            let Some(threat) = self.get_by_event(me, event) else { continue };
+            threat.update_for_event(me, event);
         }
-        for entity in &me.known.entities {
-            if entity.friend || !entity.visible { continue; }
-            self.handle_sighting(me, entity);
+        for other in &me.known.entities {
+            if !other.visible { break; }
+            let Some(threat) = self.get_by_entity(me, other.eid) else { continue };
+            threat.update_for_sighting(other);
         }
 
-        let discard = |x: &ThreatRecord| {
-            x.status == ThreatStatus::Resolved ||
-            me.known.time - x.time > THREAT_MAX_TIME
-        };
-        self.seen.retain(|_, x| !discard(x));
-        self.heard.retain(|_, x| !discard(x));
-        self.unknown.retain(|x| !discard(x));
+        self.threat_lookup.retain(|&k, &mut v| {
+            if let TID::EID(_) = k { return true; }
+
+            let threat = &self.threats[v];
+            let known = threat.status < ThreatStatus::Scanned;
+            let limit = if known { MAX_FLIGHT_TIME } else { THREAT_SCAN_LIMIT };
+            if (me.known.time - threat.time) <= limit { return true; }
+
+            self.threats.remove(v);
+            false
+        });
     }
 
-    fn handle_attack(&mut self, me: &Entity, event: &Event, data: &AttackEvent) {
-        let hit = data.target == Some(me.eid);
-        let active = hit || !me.predator;
-        let status = if active { ThreatStatus::Active } else { ThreatStatus::Potential };
-
-        let record = self.get(event.eid, event.sense, event.time);
-        record.pos = event.point;
-        record.time = event.time;
-        record.status = std::cmp::min(record.status, status);
-        if hit { record.times_it_attacked += 1; }
+    fn get_by_entity(&mut self, me: &Entity, eid: EID) -> Option<&mut ThreatRecord> {
+        let handle = self.get_by_tid(me, TID::EID(eid))?;
+        Some(&mut self.threats[handle])
     }
 
-    fn handle_move(&mut self, me: &Entity, event: &Event, _: &MoveEvent) {
-        if me.known.get(event.point).visible() { return; }
+    fn get_by_event(&mut self, me: &Entity, event: &Event) -> Option<&mut ThreatRecord> {
+        let tid = event.eid.map(|x| TID::EID(x)).or(event.uid.map(|x| TID::UID(x)))?;
+        let handle = self.get_by_tid(me, tid)?;
 
-        let record = self.get(event.eid, event.sense, event.time);
-        record.pos = event.point;
-        record.time = event.time;
-        record.status = std::cmp::min(record.status, ThreatStatus::Potential);
-    }
-
-    fn handle_sighting(&mut self, _: &Entity, other: &EntityKnowledge) {
-        let active = other.delta > 0;
-        let status = if active { ThreatStatus::Active } else { ThreatStatus::Potential };
-
-        let record = self.get(Some(other.eid), Sense::Sight, other.time);
-        record.pos = other.pos;
-        record.time = other.time;
-        record.status = std::cmp::min(record.status, status);
-    }
-
-    fn get(&mut self, eid: Option<EID>, sense: Sense, time: Timestamp) -> &mut ThreatRecord {
-        let Some(eid) = eid else {
-            self.unknown.push(ThreatRecord::default());
-            return self.unknown.last_mut().unwrap();
-        };
-
-        let seen = match sense {
-            Sense::Sight => true,
-            Sense::Smell => false,
-            Sense::Sound => self.seen.get(&eid).map(
-                |x| time - x.time < THREAT_TRACKING_LIMIT).unwrap_or(false),
-        };
-
-        if !seen {
-            return self.heard.entry(eid).and_modify(|x| {
-                if (time - x.time) < THREAT_TRACKING_LIMIT { return; }
-                self.unknown.push(x.clone());
-                *x = ThreatRecord::default();
-            }).or_default()
+        if event.eid.is_some() && let Some(x) = event.uid &&
+           let Some(x) = self.threat_lookup.remove(&TID::UID(x)) {
+            let existing = self.threats.remove(x);
+            self.threats[handle].merge_from(&existing);
         }
 
-        let result = self.seen.entry(eid).or_default();
-        if let Some(x) = self.heard.get(&eid) && (time - x.time) < THREAT_TRACKING_LIMIT {
-            result.status = std::cmp::min(result.status, x.status);
-            result.times_it_attacked += x.times_it_attacked;
-            result.times_we_escaped += x.times_we_escaped;
-            self.heard.remove(&eid);
+        Some(&mut self.threats[handle])
+    }
+
+    fn get_by_tid(&mut self, me: &Entity, tid: TID) -> Option<ThreatHandle> {
+        if let TID::EID(x) = tid && let Some(x) = me.known.entity(x) && x.friend {
+            return None;
         }
-        return result;
+        Some(*self.threat_lookup.entry(tid).and_modify(|&mut x| {
+            self.threats.move_to_front(x);
+        }).or_insert_with(|| {
+            self.threats.push_front(ThreatRecord::default())
+        }))
     }
 }
 
@@ -943,26 +925,26 @@ impl Strategy for FlightStrategy {
         let Context { entity, known, pos, .. } = *ctx;
         let time = known.time;
 
-        let threat_state_threats = ctx.shared.threats.all();
+        let threat_state_threats = &ctx.shared.threats.threats;
 
         let reset = known.entities.iter().any(
             |x| x.delta > 0 && x.time > ctx.shared.prev_time) ||
         threat_state_threats.iter().any(
-            |x| x.status == ThreatStatus::Active && x.time > ctx.shared.prev_time);
+            |x| x.status == ThreatStatus::Hostile && x.time > ctx.shared.prev_time);
 
         let mut threats: Vec<_> = known.entities.iter().filter_map(|x| {
             if !(x.delta > 0 && (time - x.time) < MAX_FLIGHT_TIME) { return None; }
             Some(Threat { asleep: x.asleep, pos: x.pos })
         }).collect();
 
-        for t in &threat_state_threats {
-            if t.status != ThreatStatus::Active { continue; }
+        for t in threat_state_threats {
+            if t.status != ThreatStatus::Hostile { continue; }
             threats.push(Threat { asleep: false, pos: t.pos });
         }
         if !threats.is_empty() {
-            for t in &threat_state_threats {
-                if t.status == ThreatStatus::Active { continue; }
-                if t.status == ThreatStatus::Resolved { continue; }
+            for t in threat_state_threats {
+                if t.status == ThreatStatus::Hostile { continue; }
+                if t.status == ThreatStatus::Neutral { continue; }
                 threats.push(Threat { asleep: false, pos: t.pos });
             }
         }
@@ -990,7 +972,9 @@ impl Strategy for FlightStrategy {
 
         let path_stale = self.since_path >= FLIGHT_PATH_TURNS;
         let compute_path = self.needs_path && (self.stage > stage || path_stale);
-        if compute_path || !self.path.check(ctx) {
+        if compute_path || !self.path.check(ctx) ||
+           self.stage == FlightStage::Hide && self.path.steps.iter().any(
+                |&x| !is_hiding_place(ctx.entity, x, &threats)) {
             self.path.reset();
             self.needs_path = false;
         }
@@ -1076,8 +1060,8 @@ impl Strategy for LookForThreatsStrategy {
     }
 
     fn bid(&mut self, ctx: &mut Context, _: bool) -> (Priority, i64) {
-        let threatened = ctx.shared.threats.all().into_iter().any(
-            |x| x.status != ThreatStatus::Resolved);
+        let threatened = ctx.shared.threats.threats.iter().any(
+            |x| x.status == ThreatStatus::Unknown);
         if !threatened { return (Priority::Skip, 0); }
         (Priority::SpotThreats, 0)
     }
@@ -1086,16 +1070,17 @@ impl Strategy for LookForThreatsStrategy {
         let (pos, rng) = (ctx.pos, &mut ctx.env.rng);
 
         if self.dirs.is_empty() {
-            let threats = ctx.shared.threats.all();
-            let dirs: Vec<_> = threats.iter().map(|x| x.pos - pos).collect();
+            let dirs: Vec<_> = ctx.shared.threats.threats.iter().filter_map(
+                |x| if x.status == ThreatStatus::Unknown {
+                    Some(x.pos - pos) } else { None }).collect();
             self.dirs = assess_directions(&dirs, ASSESS_TURNS_FLIGHT, rng);
             self.dirs.reverse();
         }
 
         let dir = self.dirs.pop()?;
         if self.dirs.is_empty() {
-            for threat in ctx.shared.threats.all() {
-                threat.status = ThreatStatus::Resolved;
+            for threat in &mut ctx.shared.threats.threats {
+                threat.status = min(threat.status, ThreatStatus::Scanned);
             }
         }
         Some(Action::Look(dir))
