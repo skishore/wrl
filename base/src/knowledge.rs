@@ -518,8 +518,12 @@ impl Knowledge {
             self.remove_entity(entity.eid);
         }
 
-        // We clean up all sources.
+        // We clean up all sources, both by count and age.
         while self.sources.len() > MAX_SOURCE_MEMORY {
+            self.forget_last_source();
+        }
+        while let Some(x) = self.sources.back() &&
+              self.time - x.time >= SOURCE_TRACKING_LIMIT {
             self.forget_last_source();
         }
     }
