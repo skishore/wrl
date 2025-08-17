@@ -171,8 +171,6 @@ impl CachedPath {
 
 // Threat state
 
-const THREAT_SCAN_LIMIT: Timedelta = Timedelta::from_seconds(8.);
-
 type ThreatHandle = Handle<ThreatRecord>;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
@@ -193,7 +191,7 @@ struct ThreatRecord {
 #[derive(Default)]
 struct ThreatState {
     threats: List<ThreatRecord>,
-    threat_lookup: HashMap<TID, ThreatHandle>,
+    threat_index: HashMap<TID, ThreatHandle>,
 }
 
 impl ThreatRecord {
@@ -221,6 +219,7 @@ impl ThreatRecord {
                 self.status = min(self.status, ThreatStatus::Hostile);
                 self.attacks += 1;
             },
+            EventData::Forget(_) => {},
             EventData::Move(_) => {},
             EventData::Spot(_) => {},
         }
@@ -252,18 +251,7 @@ impl ThreatState {
             let Some(threat) = self.get_by_entity(me, other.eid) else { continue };
             threat.update_for_sighting(other);
         }
-
-        self.threat_lookup.retain(|&k, &mut v| {
-            if let TID::EID(_) = k { return true; }
-
-            let threat = &self.threats[v];
-            let known = threat.status < ThreatStatus::Scanned;
-            let limit = if known { MAX_FLIGHT_TIME } else { THREAT_SCAN_LIMIT };
-            if (me.known.time - threat.time) <= limit { return true; }
-
-            self.threats.remove(v);
-            false
-        });
+        debug_assert!(self.check_invariants());
     }
 
     fn get_by_entity(&mut self, me: &Entity, eid: EID) -> Option<&mut ThreatRecord> {
@@ -273,10 +261,16 @@ impl ThreatState {
 
     fn get_by_event(&mut self, me: &Entity, event: &Event) -> Option<&mut ThreatRecord> {
         let tid = event.eid.map(|x| TID::EID(x)).or(event.uid.map(|x| TID::UID(x)))?;
+
+        if let EventData::Forget(_) = &event.data {
+            if let Some(x) = self.threat_index.remove(&tid) { self.threats.remove(x); }
+            return None;
+        }
+
         let handle = self.get_by_tid(me, tid)?;
 
         if event.eid.is_some() && let Some(x) = event.uid &&
-           let Some(x) = self.threat_lookup.remove(&TID::UID(x)) {
+           let Some(x) = self.threat_index.remove(&TID::UID(x)) {
             let existing = self.threats.remove(x);
             self.threats[handle].merge_from(&existing);
         }
@@ -288,11 +282,29 @@ impl ThreatState {
         if let TID::EID(x) = tid && let Some(x) = me.known.entity(x) && x.friend {
             return None;
         }
-        Some(*self.threat_lookup.entry(tid).and_modify(|&mut x| {
+        Some(*self.threat_index.entry(tid).and_modify(|&mut x| {
             self.threats.move_to_front(x);
         }).or_insert_with(|| {
             self.threats.push_front(ThreatRecord::default())
         }))
+    }
+
+    fn check_invariants(&self) -> bool {
+        // Check that threats are sorted by time.
+        let check_sorted = |xs: Vec<Timestamp>| {
+            let mut last = Timestamp::default();
+            xs.into_iter().rev().for_each(|x| { assert!(x >= last); last = x; });
+        };
+        check_sorted(self.threats.iter().map(|x| x.time).collect());
+
+        // Check that every threat is indexed in the index.
+        assert!(self.threats.len() == self.threat_index.len());
+        let mut handles = HashMap::default();
+        for (&tid, &handle) in self.threat_index.iter() {
+            assert!(handles.insert(handle, tid).is_none());
+            let _ = &self.threats[handle];
+        }
+        true
     }
 }
 

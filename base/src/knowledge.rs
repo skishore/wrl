@@ -131,6 +131,9 @@ pub enum Sense { Sight, Sound, Smell }
 #[derive(Clone, Debug)]
 pub struct AttackEvent { pub target: Option<EID> }
 
+#[derive(Clone, Debug, Default)]
+pub struct ForgetEvent {}
+
 #[derive(Clone, Debug)]
 pub struct MoveEvent { pub from: Point }
 
@@ -140,6 +143,7 @@ pub struct SpotEvent {}
 #[derive(Clone, Debug)]
 pub enum EventData {
     Attack(AttackEvent),
+    Forget(ForgetEvent),
     Move(MoveEvent),
     Spot(SpotEvent),
 }
@@ -402,24 +406,20 @@ impl Knowledge {
         debug_assert!(self.check_invariants());
     }
 
-    pub fn remove_entity(&mut self, eid: EID) {
+    pub fn remove_entity(&mut self, eid: EID, time: Timestamp) {
         let Some(x) = self.eid_index.get_mut(&eid) else { return };
         let Some(h) = x.entity.take() else { return };
 
         if *x == Default::default() { self.eid_index.remove(&eid); }
-        let pos = self.entities.remove(h).pos;
+        let EntityKnowledge { eid, pos, .. } = self.entities.remove(h);
         Self::move_from(&mut self.pos_index, pos, h);
+
+        self.forget_event(Some(eid), None, pos, time);
 
         debug_assert!(self.check_invariants());
     }
 
     // Events helpers:
-
-    pub fn forget_events_before(&mut self, time: Timestamp) {
-        self.events.retain(|x| x.time > time);
-
-        debug_assert!(self.check_invariants());
-    }
 
     pub fn observe_event(&mut self, me: &Entity, event: &Event) {
         if me.player { return; }
@@ -515,7 +515,7 @@ impl Knowledge {
         while self.entities.len() > MAX_ENTITY_MEMORY {
             let entity = self.entities.back().unwrap();
             if entity.visible { break; }
-            self.remove_entity(entity.eid);
+            self.remove_entity(entity.eid, self.time);
         }
 
         // We clean up all sources, both by count and age.
@@ -526,6 +526,13 @@ impl Knowledge {
               self.time - x.time >= SOURCE_TRACKING_LIMIT {
             self.forget_last_source();
         }
+    }
+
+    fn forget_event(&mut self, eid: Option<EID>, uid: Option<UID>,
+                    point: Point, time: Timestamp) {
+        let data = EventData::Forget(ForgetEvent::default());
+        let event = Event { eid, uid, data, time, point, sense: Sense::Sight };
+        self.events.push(event);
     }
 
     fn forget_last_cell(&mut self) {
@@ -540,12 +547,9 @@ impl Knowledge {
         let Some(h) = self.sources.back_handle() else { return };
         let Some(x) = self.sources.pop_back() else { return };
 
-        let Some(e) = x.eid else { return };
-        let Some(y) = self.eid_index.get_mut(&e) else { return };
-        if y.source != Some(h) { return };
+        if let Some(e) = x.eid { self.move_source(e, h); }
 
-        y.source = None;
-        if *y == Default::default() { self.eid_index.remove(&e); }
+        self.forget_event(None, Some(x.uid), x.pos, self.time);
     }
 
     fn populate_scents(&mut self, me: &Entity, board: &Board, rng: &mut RNG) {
@@ -627,6 +631,14 @@ impl Knowledge {
 
         x.entity = None;
         if *x == Default::default() { m.remove(&p); }
+    }
+
+    fn move_source(&mut self, e: EID, h: SourceHandle) {
+        let Some(x) = self.eid_index.get_mut(&e) else { return };
+        if x.source != Some(h) { return };
+
+        x.source = None;
+        if *x == Default::default() { self.eid_index.remove(&e); }
     }
 
     // Debug helpers:
