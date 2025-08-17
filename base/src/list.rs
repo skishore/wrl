@@ -74,6 +74,10 @@ impl<T> PartialEq for Handle<T> {
     fn eq(&self, other: &Self) -> bool { self.0 == other.0 }
 }
 
+impl<T> std::hash::Hash for Handle<T> {
+    fn hash<H: std::hash::Hasher>(&self, h: &mut H) { self.0.hash(h) }
+}
+
 impl<T> std::ops::Index<Handle<T>> for List<T> {
     type Output = T;
     fn index(&self, h: Handle<T>) -> &Self::Output {

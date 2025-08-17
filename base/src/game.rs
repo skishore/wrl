@@ -422,7 +422,7 @@ impl Board {
     }
 
     fn remove_known_entity(&mut self, eid: EID, oid: EID) {
-        self.entities[eid].known.remove_entity(oid);
+        self.entities[eid].known.remove_entity(oid, self.time);
     }
 
     fn update_known(&mut self, eid: EID, env: &mut UpdateEnv) {
@@ -614,6 +614,9 @@ fn plan(state: &mut State, eid: EID) -> Action {
     let action = ai.plan(&entity, &mut env);
 
     swap(ai, &mut entity.ai);
+
+    entity.known.events.clear();
+
     action
 }
 
@@ -965,7 +968,6 @@ fn update_state(state: &mut State) {
         let player = entity.player;
         if player && needs_input(state) { break; }
 
-        let time = state.board.time;
         state.board.update_known(eid, &mut state.env);
 
         update = true;
@@ -976,8 +978,6 @@ fn update_state(state: &mut State) {
         let Some(entity) = state.board.entities.get_mut(eid) else { continue };
 
         state.board.time = state.board.time.bump();
-
-        entity.known.forget_events_before(time);
 
         let trail = &mut entity.trail;
         if trail.len() == trail.capacity() { trail.pop_back(); }
