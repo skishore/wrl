@@ -54,7 +54,6 @@ const MAX_SEARCH_TIME: Timedelta = Timedelta::from_seconds(48.);
 const MAX_TRACKING_TIME: Timedelta = Timedelta::from_seconds(64.);
 const SCENT_AGE_PENALTY: Timedelta = Timedelta::from_seconds(1.);
 
-const SLOWED_TURNS: f64 = 2.;
 const WANDER_TURNS: f64 = 2.;
 
 //////////////////////////////////////////////////////////////////////////////
@@ -754,7 +753,7 @@ impl Strategy for TrackStrategy {
 
         if x.fresh { return Some(Action::SniffAround); }
 
-        let turns = if !move_ready(ctx.entity) { SLOWED_TURNS } else { WANDER_TURNS };
+        let turns = WANDER_TURNS;
         if let Some(x) = self.path.follow(ctx, turns) { return Some(x); }
 
         let age = ctx.known.time - x.scent.time;
@@ -828,10 +827,7 @@ impl Strategy for ChaseStrategy {
         let visible = age == Timedelta::default();
         if visible { return Some(attack_target(ctx, last)); }
 
-        let turns = {
-            if !move_ready(ctx.entity) { SLOWED_TURNS }
-            else if age >= MIN_SEARCH_TIME { WANDER_TURNS } else { 1. }
-        };
+        let turns = if age >= MIN_SEARCH_TIME { WANDER_TURNS } else { 1. };
         if let Some(x) = self.path.follow(ctx, turns) { return Some(x); }
 
         let search_nearby = steps > bias.len_l1();
@@ -1015,7 +1011,6 @@ impl Strategy for FlightStrategy {
 
         let all_asleep = self.threats.iter().all(|x| x.asleep);
         let pick_turns = |stage: FlightStage| {
-            if !move_ready(ctx.entity) { return SLOWED_TURNS }
             let sneak = all_asleep || stage == FlightStage::Hide;
             if sneak { WANDER_TURNS } else { 1. }
         };
