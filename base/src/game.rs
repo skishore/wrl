@@ -44,6 +44,8 @@ const NUM_PREY: i32 = 1;
 const UI_DAMAGE_FLASH: i32 = 6;
 const UI_DAMAGE_TICKS: i32 = 6;
 
+const SLOWED_TURNS: f64 = 2.;
+
 pub const ATTACK_NOISE_RADIUS: i32 = FOV_RADIUS_NPC;
 pub const MOVE_NOISE_RADIUS: i32 = 4;
 
@@ -675,6 +677,8 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
         }
         Action::Move(MoveAction { look, step, turns }) => {
             face_direction(entity, look);
+            let slowed = turns < SLOWED_TURNS && !move_ready(entity);
+            let turns = if slowed { SLOWED_TURNS } else { turns };
             if step == dirs::NONE { return ActionResult::success_turns(turns); }
             if step.len_l1() > 1 { return ActionResult::failure(); }
 
