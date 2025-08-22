@@ -664,7 +664,7 @@ impl Strategy for ExploreStrategy {
         let score = |p: Point, distance: i32| -> f64 {
             if distance == 0 { return 0.; }
 
-            let age = known.get(p).time_since_seen().to_seconds();
+            let age = known.get(p).time_since_seen().seconds();
             let age_scale = 1. / (1 << 24) as f64;
 
             let delta = p - pos;
@@ -745,7 +745,7 @@ impl Strategy for TrackStrategy {
 
         let Some(_) = &self.target else { return (Priority::Skip, 0) };
 
-        (Priority::Hunt, (age + SCENT_AGE_PENALTY).raw())
+        (Priority::Hunt, (age + SCENT_AGE_PENALTY).nsec())
     }
 
     fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
@@ -818,7 +818,7 @@ impl Strategy for ChaseStrategy {
             (target.pos - pos, 0)
         };
         self.target = Some(ChaseTarget { bias, last, time, steps });
-        (Priority::Hunt, age.raw())
+        (Priority::Hunt, age.nsec())
     }
 
     fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
