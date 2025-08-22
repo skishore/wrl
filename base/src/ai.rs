@@ -46,7 +46,7 @@ const MAX_HUNGER_CARNIVORE: i32 = 2048;
 const FLIGHT_PATH_TURNS: i32 = 8;
 const MIN_FLIGHT_TURNS: i32 = 16;
 const MAX_FLIGHT_TURNS: i32 = 64;
-const MAX_FLIGHT_TIME: Timedelta = Timedelta::from_seconds(96.);
+const ACTIVE_THREAT_TIME: Timedelta = Timedelta::from_seconds(96.);
 
 const MIN_SEARCH_TIME: Timedelta = Timedelta::from_seconds(24.);
 const MAX_SEARCH_TIME: Timedelta = Timedelta::from_seconds(48.);
@@ -65,9 +65,10 @@ fn safe_inv_l2(point: Point) -> f64 {
     (point.len_l2_squared() as f64).sqrt().recip()
 }
 
-fn is_hiding_place(entity: &Entity, point: Point, threats: &[Threat]) -> bool {
-    if threats.iter().any(|&x| (x.pos - point).len_l1() <= 1) { return false; }
-    let cell = entity.known.get(point);
+fn is_hiding_place(ctx: &Context, point: Point) -> bool {
+    if ctx.shared.threats.hostile.iter().any(
+        |x| (x.pos - point).len_l1() <= 1) { return false; }
+    let cell = ctx.known.get(point);
     cell.shade() || matches!(cell.tile(), Some(x) if x.limits_vision())
 }
 
@@ -116,12 +117,11 @@ impl CachedPath {
         self.steps.iter().skip(self.skipped).all(|&x| valid(x))
     }
 
-    fn sneak(&mut self, ctx: &Context, target: Point,
-             turns: f64, threats: &[Threat]) -> Option<Action> {
-        let Context { entity, known, pos, .. } = *ctx;
+    fn sneak(&mut self, ctx: &Context, target: Point, turns: f64) -> Option<Action> {
+        let Context { known, pos, .. } = *ctx;
 
         let check = |p: Point| {
-            if !is_hiding_place(entity, p, threats) { return Status::Blocked; }
+            if !is_hiding_place(ctx, p) { return Status::Blocked; }
             known.get(p).status()
         };
         let path = AStar(pos, target, ASTAR_LIMIT_WANDER, check)?;
@@ -183,14 +183,21 @@ struct ThreatRecord {
     pos: Point,
     time: Timestamp,
     status: ThreatStatus,
-    attacks: i32,
-    escapes: i32,
+
+    // Flags:
+    asleep: bool,
+    escaped: bool,
 }
 
 #[derive(Default)]
 struct ThreatState {
     threats: List<ThreatRecord>,
     threat_index: HashMap<TID, ThreatHandle>,
+
+    // Summaries used for fight-or-flight decisions.
+    hostile: Vec<ThreatRecord>,
+    unknown: Vec<ThreatRecord>,
+    reset: bool,
 }
 
 impl ThreatRecord {
@@ -199,24 +206,25 @@ impl ThreatRecord {
         slice.write_str(&format!("      age: {:?}", time - self.time)).newline();
         slice.write_str(&format!("      pos: {:?}", self.pos)).newline();
         slice.write_str(&format!("      status: {:?}", self.status)).newline();
-        slice.write_str(&format!("      attacks: {:?}", self.attacks)).newline();
-        slice.write_str(&format!("      escapes: {:?}", self.escapes)).newline();
+        slice.write_str(&format!("      asleep: {}", self.asleep)).newline();
+        slice.write_str(&format!("      escaped: {}", self.escaped)).newline();
     }
 
     fn merge_from(&mut self, other: &ThreatRecord) {
+        // No need to update any fields that we unconditionally update in
+        // update_for_event, since we merge right before processing an event.
         self.status = min(self.status, other.status);
-        self.attacks += other.attacks;
-        self.escapes += other.escapes;
+        self.escaped = self.escaped && other.escaped;
     }
 
     fn update_for_event(&mut self, me: &Entity, event: &Event) {
         self.pos = event.point;
         self.time = event.time;
+        self.asleep = false;
 
         match &event.data {
             EventData::Attack(x) => if x.target == Some(me.eid) {
                 self.status = min(self.status, ThreatStatus::Hostile);
-                self.attacks += 1;
             },
             EventData::Forget(_) => {},
             EventData::Move(_) => {},
@@ -227,6 +235,7 @@ impl ThreatRecord {
     fn update_for_sighting(&mut self, other: &EntityKnowledge) {
         self.pos = other.pos;
         self.time = other.time;
+        self.asleep = other.asleep;
 
         let hostile = other.delta > 0;
         let status = if hostile { ThreatStatus::Hostile } else { ThreatStatus::Neutral };
@@ -240,7 +249,7 @@ impl ThreatState {
         for x in &self.threats { x.debug(slice, time) }
     }
 
-    fn update(&mut self, me: &Entity) {
+    fn update(&mut self, me: &Entity, prev_time: Timestamp) {
         for event in &me.known.events {
             let Some(threat) = self.get_by_event(me, event) else { continue };
             threat.update_for_event(me, event);
@@ -250,6 +259,22 @@ impl ThreatState {
             let Some(threat) = self.get_by_entity(me, other.eid) else { continue };
             threat.update_for_sighting(other);
         }
+
+        self.hostile.clear();
+        self.unknown.clear();
+        self.reset = false;
+
+        for x in &self.threats {
+            if me.known.time - x.time > ACTIVE_THREAT_TIME { break; }
+            if x.status == ThreatStatus::Hostile { self.hostile.push(x.clone()); }
+            if x.status == ThreatStatus::Unknown { self.unknown.push(x.clone()); }
+        }
+        if !self.hostile.is_empty() {
+            self.hostile.extend_from_slice(&self.unknown);
+            self.hostile.sort_by_key(|x| me.known.time - x.time);
+        }
+        if let Some(x) = self.hostile.first() { self.reset = x.time > prev_time; }
+
         debug_assert!(self.check_invariants());
     }
 
@@ -355,7 +380,7 @@ impl SharedAIState {
         }
         self.prev_time = self.turn_time;
         self.turn_time = entity.known.time;
-        self.threats.update(entity);
+        self.threats.update(entity, self.prev_time);
     }
 }
 
@@ -566,9 +591,8 @@ impl Strategy for RestStrategy {
         let turns = WANDER_TURNS;
         if let Some(x) = self.path.follow(ctx, turns) { return Some(x); }
 
-        let Context { entity, known, pos, .. } = *ctx;
-        let valid = |p: Point| is_hiding_place(entity, p, &[]);
-        if valid(pos) {
+        let Context { known, pos, .. } = *ctx;
+        if is_hiding_place(ctx, pos) {
             ctx.shared.till_rested += 1;
             return Some(Action::Rest);
         }
@@ -576,7 +600,7 @@ impl Strategy for RestStrategy {
         ensure_neighborhood(ctx);
 
         for &(point, _) in &ctx.neighborhood.visited {
-            if !valid(point) { continue; }
+            if !is_hiding_place(ctx, point) { continue; }
             if known.get(point).status() != Status::Free { continue; }
 
             // Compute at most one path to a point in the neighborhood.
@@ -840,12 +864,6 @@ impl Strategy for ChaseStrategy {
 
 //////////////////////////////////////////////////////////////////////////////
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct Threat {
-    asleep: bool,
-    pos: Point,
-}
-
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum FlightStage { Flee, Hide, Done }
 
@@ -857,7 +875,6 @@ struct FlightStrategy {
     since_path: i32,
     since_seen: i32,
     turn_limit: i32,
-    threats: Vec<Threat>,
 }
 
 impl FlightStrategy {
@@ -867,8 +884,10 @@ impl FlightStrategy {
         let (pos, rng) = (ctx.pos, &mut ctx.env.rng);
         self.path.reset();
 
+        let threats = &ctx.shared.threats.hostile;
+
         if self.dirs.is_empty() {
-            let dirs: Vec<_> = self.threats.iter().map(|x| x.pos - pos).collect();
+            let dirs: Vec<_> = threats.iter().map(|x| x.pos - pos).collect();
             self.dirs = assess_directions(&dirs, ASSESS_TURNS_FLIGHT, rng);
             self.dirs.reverse();
         }
@@ -876,9 +895,9 @@ impl FlightStrategy {
         // Look in the next guess at a threat direction, unless there's a
         // visible threat, in which case we'll watch the closest one.
         let mut dir = self.dirs.pop()?;
-        let mut visible_threats: Vec<_> = self.threats.iter().filter_map(|x| {
-            let entity = ctx.known.get(x.pos).entity()?;
-            if entity.delta > 0 && entity.visible { Some(x.pos) } else { None }
+        let mut visible_threats: Vec<_> = threats.iter().filter_map(|x| {
+            let visible = x.time == ctx.shared.turn_time;
+            if visible { Some(x.pos) } else { None }
         }).collect();
         if !visible_threats.is_empty() {
             let threat = *visible_threats.select_nth_unstable_by_key(
@@ -905,7 +924,6 @@ impl Default for FlightStrategy {
             since_path: 0,
             since_seen: 0,
             turn_limit: MIN_FLIGHT_TURNS,
-            threats: vec![],
         }
     }
 }
@@ -922,58 +940,17 @@ impl Strategy for FlightStrategy {
         slice.write_str(&format!("    since_path: {}", self.since_path)).newline();
         slice.write_str(&format!("    since_seen: {}", self.since_seen)).newline();
         slice.write_str(&format!("    turn_limit: {}", self.turn_limit)).newline();
-
-        slice.write_str("    threats:").newline();
-        for x in &self.threats {
-            slice.write_str(&format!("      {:?}", x.pos)).newline();
-        }
     }
 
     fn bid(&mut self, ctx: &mut Context, _: bool) -> (Priority, i64) {
-        let Context { entity, known, pos, .. } = *ctx;
-        let time = known.time;
-
-        let threat_state_threats = &ctx.shared.threats.threats;
-
-        let reset = known.entities.iter().any(
-            |x| x.delta > 0 && x.time > ctx.shared.prev_time) ||
-        threat_state_threats.iter().any(
-            |x| x.status == ThreatStatus::Hostile && x.time > ctx.shared.prev_time);
-
-        let mut threats: Vec<_> = known.entities.iter().filter_map(|x| {
-            if !(x.delta > 0 && (time - x.time) < MAX_FLIGHT_TIME) { return None; }
-            Some(Threat { asleep: x.asleep, pos: x.pos })
-        }).collect();
-
-        for t in threat_state_threats {
-            if t.status != ThreatStatus::Hostile { continue; }
-            threats.push(Threat { asleep: false, pos: t.pos });
-        }
-        if !threats.is_empty() {
-            for t in threat_state_threats {
-                if t.status == ThreatStatus::Hostile { continue; }
-                if t.status == ThreatStatus::Neutral { continue; }
-                threats.push(Threat { asleep: false, pos: t.pos });
-            }
-        }
-        let mut seen = crate::base::HashSet::default();
-        let mut deduped_threats = vec![];
-        for t in threats {
-            if !seen.insert(t.pos) { continue; }
-            deduped_threats.push(t);
-        }
-        let mut threats = deduped_threats;
-
-        threats.sort_unstable_by_key(|x| (x.pos.0, x.pos.1));
-
+        let reset = ctx.shared.threats.reset;
         if self.done() && !reset { return (Priority::Skip, 0); }
 
         let looking = !self.dirs.is_empty();
-        let changed = !threats.is_empty() && threats != self.threats;
-        let hiding = is_hiding_place(entity, pos, &threats);
+        let hiding = is_hiding_place(ctx, ctx.pos);
         let stage = if hiding { FlightStage::Hide } else { FlightStage::Flee };
 
-        if reset || changed {
+        if reset {
             self.dirs.clear();
             self.needs_path = true;
         }
@@ -981,8 +958,8 @@ impl Strategy for FlightStrategy {
         let path_stale = self.since_path >= FLIGHT_PATH_TURNS;
         let compute_path = self.needs_path && (self.stage > stage || path_stale);
         if compute_path || !self.path.check(ctx) ||
-           self.stage == FlightStage::Hide && self.path.steps.iter().any(
-                |&x| !is_hiding_place(ctx.entity, x, &threats)) {
+           (self.stage == FlightStage::Hide && self.path.steps.iter().any(
+                |&x| !is_hiding_place(ctx, x))) {
             self.path.reset();
             self.needs_path = false;
         }
@@ -994,8 +971,6 @@ impl Strategy for FlightStrategy {
         } else {
             self.turn_limit
         };
-        if changed { self.threats = threats; }
-
         (Priority::Survive, 0)
     }
 
@@ -1009,7 +984,7 @@ impl Strategy for FlightStrategy {
             return self.look(ctx);
         }
 
-        let all_asleep = self.threats.iter().all(|x| x.asleep);
+        let all_asleep = ctx.shared.threats.hostile.iter().all(|x| x.asleep);
         let pick_turns = |stage: FlightStage| {
             let sneak = all_asleep || stage == FlightStage::Hide;
             if sneak { WANDER_TURNS } else { 1. }
@@ -1021,23 +996,21 @@ impl Strategy for FlightStrategy {
             return Some(x);
         }
 
-        let Context { entity, pos, .. } = *ctx;
+        if !all_asleep && is_hiding_place(ctx, ctx.pos) {
+            ensure_sneakable(ctx);
 
-        if !all_asleep && is_hiding_place(entity, pos, &self.threats) {
-            ensure_sneakable(ctx, &self.threats);
-
-            if let Some(target) = flight_cell(ctx, &self.threats, true) {
+            if let Some(target) = flight_cell(ctx, true) {
                 self.stage = FlightStage::Hide;
-                if target == pos { return self.look(ctx); }
-                return self.path.sneak(ctx, target, WANDER_TURNS, &self.threats);
+                if target == ctx.pos { return self.look(ctx); }
+                return self.path.sneak(ctx, target, WANDER_TURNS);
             }
         }
 
         ensure_neighborhood(ctx);
 
-        if let Some(target) = flight_cell(ctx, &self.threats, false) {
+        if let Some(target) = flight_cell(ctx, false) {
             self.stage = FlightStage::Flee;
-            if target == pos { return self.look(ctx); }
+            if target == ctx.pos { return self.look(ctx); }
             return self.path.start(ctx, target, pick_turns(self.stage));
         }
 
@@ -1067,9 +1040,8 @@ impl Strategy for LookForThreatsStrategy {
     }
 
     fn bid(&mut self, ctx: &mut Context, _: bool) -> (Priority, i64) {
-        let threatened = ctx.shared.threats.threats.iter().any(
-            |x| x.status == ThreatStatus::Unknown);
-        if !threatened { return (Priority::Skip, 0); }
+        let threats = &ctx.shared.threats.unknown;
+        if threats.is_empty() { return (Priority::Skip, 0); }
         (Priority::SpotThreats, 0)
     }
 
@@ -1077,9 +1049,8 @@ impl Strategy for LookForThreatsStrategy {
         let (pos, rng) = (ctx.pos, &mut ctx.env.rng);
 
         if self.dirs.is_empty() {
-            let dirs: Vec<_> = ctx.shared.threats.threats.iter().filter_map(
-                |x| if x.status == ThreatStatus::Unknown {
-                    Some(x.pos - pos) } else { None }).collect();
+            let dirs: Vec<_> = ctx.shared.threats.unknown.iter().map(
+                |x| x.pos - pos).collect();
             self.dirs = assess_directions(&dirs, ASSESS_TURNS_FLIGHT, rng);
             self.dirs.reverse();
         }
@@ -1208,11 +1179,12 @@ fn search_around(ctx: &mut Context, path: &mut CachedPath, age: Timedelta,
 
 // Helpers for FlightStrategy
 
-fn flight_cell(ctx: &mut Context, threats: &[Threat], hiding: bool) -> Option<Point> {
-    let Context { entity, known, pos, .. } = *ctx;
+fn flight_cell(ctx: &mut Context, hiding: bool) -> Option<Point> {
+    let Context { known, pos, .. } = *ctx;
 
+    let threats = &ctx.shared.threats.hostile;
     let threat_inv_l2s: Vec<_> = threats.iter().map(
-        |&x| (x.pos, safe_inv_l2(pos - x.pos))).collect();
+        |x| (x.pos, safe_inv_l2(pos - x.pos))).collect();
     let scale = 1. / DijkstraLength(Point(1, 0)) as f64;
 
     let score = |p: Point, source_distance: i32| -> f64 {
@@ -1229,7 +1201,7 @@ fn flight_cell(ctx: &mut Context, threats: &[Threat], hiding: bool) -> Option<Po
             (1..los.len() - 1).any(|i| known.get(los[i]).blocked())
         };
         let frontier = dirs::ALL.iter().any(|&x| known.get(p + x).unknown());
-        let hidden = !hiding && is_hiding_place(entity, p, &threats);
+        let hidden = !hiding && is_hiding_place(ctx, p);
 
         let delta = p - pos;
         let inv_delta_l2 = safe_inv_l2(delta);
@@ -1267,9 +1239,9 @@ fn assess_directions(dirs: &[Point], turns: i32, rng: &mut RNG) -> Vec<Point> {
 
     for i in 0..ASSESS_STEPS {
         let dir = dirs[i as usize % dirs.len()];
-        let distance = dir.len_l2();
-        let scale = 100. / if distance > 0. { dir.len_l2() } else { 1. };
+        if dir == Point::default() { continue; }
 
+        let scale = 100. / dir.len_l2();
         let steps = rng.random_range(0..turns) + 1;
         let angle = Normal::new(0., ASSESS_ANGLE).unwrap().sample(rng);
         let (sin, cos) = (angle.sin(), angle.cos());
@@ -1299,13 +1271,13 @@ fn ensure_neighborhood(ctx: &mut Context) {
     ctx.neighborhood = DijkstraMap(ctx.pos, check, SEARCH_CELLS, SEARCH_LIMIT);
 }
 
-fn ensure_sneakable(ctx: &mut Context, threats: &[Threat]) {
+fn ensure_sneakable(ctx: &mut Context) {
     if !ctx.sneakable.visited.is_empty() { return; }
 
-    let Context { entity, known, .. } = *ctx;
+    let known = ctx.known;
 
     let check = |p: Point| {
-        if !is_hiding_place(entity, p, threats) { return Status::Blocked; }
+        if !is_hiding_place(ctx, p) { return Status::Blocked; }
         known.get(p).status()
     };
     ctx.sneakable = DijkstraMap(ctx.pos, check, HIDING_CELLS, HIDING_LIMIT);
