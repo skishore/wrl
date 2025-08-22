@@ -35,21 +35,22 @@ fn trophic_level(x: &Entity) -> i32 {
 pub struct Timedelta(i64);
 
 impl Timedelta {
-    const LATCH: i64 = 1 << 20;
-    const SCALE: i64 = 1000;
+    const MSEC_PER_SEC: i64 = 1_000;
+    const NSEC_PER_SEC: i64 = 1_000_000_000;
+    const NSEC_PER_MSEC: i64 = 1_000_000;
 
-    pub fn raw(self) -> i64 {
-        self.0
-    }
+    pub const fn nsec(&self) -> i64 { self.0 }
 
-    pub const fn to_seconds(self) -> f64 {
-        let factor = (Self::LATCH * Self::SCALE) as f64;
-        (1. / factor) * self.0 as f64
+    pub const fn from_nsec(nsec: i64) -> Self { Self(nsec) }
+
+    pub const fn seconds(&self) -> f64 {
+        let factor = Self::NSEC_PER_SEC as f64;
+        (1. / factor) * self.nsec() as f64
     }
 
     pub const fn from_seconds(seconds: f64) -> Self {
-        let factor = (Self::LATCH * Self::SCALE) as f64;
-        Self((factor * seconds) as i64)
+        let factor = Self::NSEC_PER_SEC as f64;
+        Self::from_nsec((factor * seconds) as i64)
     }
 }
 
@@ -69,11 +70,11 @@ impl std::ops::Sub for Timedelta {
 
 impl std::fmt::Debug for Timedelta {
     fn fmt(&self, fmt: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-        let latch = Timedelta::LATCH;
-        let scale = Timedelta::SCALE;
-        let (left, tick) = (self.0 / latch, self.0 % latch);
-        let (left, msec) = (left / scale, left % scale);
-        write!(fmt, "{}.{:0>3}s (+{})", left, msec, tick)
+        let nu = Timedelta::NSEC_PER_MSEC;
+        let mu = Timedelta::MSEC_PER_SEC;
+        let (left, nsec) = (self.nsec() / nu, self.nsec() % nu);
+        let (left, msec) = (left / mu, left % mu);
+        write!(fmt, "{}.{:0>3}s (+{})", left, msec, nsec)
     }
 }
 
@@ -85,14 +86,14 @@ impl std::fmt::Debug for Timedelta {
 pub struct Timestamp(u64);
 
 impl Timestamp {
-    pub fn bump(self) -> Self {
-        self.latch(Timedelta::default())
-    }
+    pub fn nsec(&self) -> u64 { self.0 }
 
-    pub fn latch(self, other: Timedelta) -> Self {
+    pub fn bump(&self) -> Self { self.latch(Timedelta::default()) }
+
+    pub fn latch(&self, other: Timedelta) -> Self {
         let other = std::cmp::max(other, Timedelta(1));
         let value = self.0 + (other.0 as u64);
-        let latch = value & !(Timedelta::LATCH as u64 - 1);
+        let latch = value - (value % Timedelta::NSEC_PER_MSEC as u64);
         Self(if latch > self.0 { latch } else { value })
     }
 }
@@ -106,15 +107,15 @@ impl std::ops::Sub for Timestamp {
 
 impl std::fmt::Debug for Timestamp {
     fn fmt(&self, fmt: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-        let latch = Timedelta::LATCH as u64;
-        let scale = Timedelta::SCALE as u64;
-        let (left, tick) = (self.0 / latch, self.0 % latch);
-        let (left, msec) = (left / scale, left % scale);
+        let nu = Timedelta::NSEC_PER_MSEC as u64;
+        let mu = Timedelta::MSEC_PER_SEC as u64;
+        let (left, nsec) = (self.nsec() / nu, self.nsec() % nu);
+        let (left, msec) = (left / mu, left % mu);
         let (left, sec) = (left / 60, left % 60);
         let (left, min) = (left / 60, left % 60);
         let (left, hrs) = (left / 24, left % 24);
         write!(fmt, "{}d {:0>2}:{:0>2}:{:0>2}.{:0>3} (+{})",
-               left, hrs, min, sec, msec, tick)
+               left, hrs, min, sec, msec, nsec)
     }
 }
 

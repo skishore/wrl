@@ -539,7 +539,7 @@ fn advance_turn(board: &mut Board) -> Option<EID> {
 
     let (eid, time) = best?;
     let time = std::cmp::max(time, Timedelta::default());
-    let charge = time.to_seconds() * TURN_TIMER as f64;
+    let charge = time.seconds() * TURN_TIMER as f64;
 
     for (_, entity) in &mut board.entities {
         let delta = (charge * entity.speed).round() as i32;
