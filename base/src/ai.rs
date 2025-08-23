@@ -11,7 +11,7 @@ use crate::entity::{Entity, EID};
 use crate::game::{MOVE_NOISE_RADIUS, Item, move_ready};
 use crate::game::{Action, EatAction, MoveAction};
 use crate::knowledge::{CellKnowledge, Knowledge, EntityKnowledge};
-use crate::knowledge::{Event, EventData, Scent, Timedelta, Timestamp, UID};
+use crate::knowledge::{Event, EventData, Scent, Sense, Timedelta, Timestamp, UID};
 use crate::list::{Handle, List};
 use crate::pathing::{AStar, BFS, DijkstraLength, DijkstraMap, Neighborhood, Status};
 use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
@@ -170,18 +170,19 @@ impl CachedPath {
 
 // Threat state
 
-type ThreatHandle = Handle<ThreatRecord>;
+type ThreatHandle = Handle<Threat>;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
 enum TID { EID(EID), UID(UID) }
 
-#[derive(Copy, Clone, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
-enum ThreatStatus { Hostile, Neutral, Scanned, #[default] Unknown }
+#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum ThreatStatus { Hostile, Neutral, Scanned, Unknown }
 
-#[derive(Clone, Default)]
-struct ThreatRecord {
+#[derive(Clone)]
+struct Threat {
     pos: Point,
     time: Timestamp,
+    sense: Sense,
     status: ThreatStatus,
 
     // Flags:
@@ -191,28 +192,43 @@ struct ThreatRecord {
 
 #[derive(Default)]
 struct ThreatState {
-    threats: List<ThreatRecord>,
+    threats: List<Threat>,
     threat_index: HashMap<TID, ThreatHandle>,
 
     // Summaries used for fight-or-flight decisions.
-    hostile: Vec<ThreatRecord>,
-    unknown: Vec<ThreatRecord>,
+    hostile: Vec<Threat>,
+    unknown: Vec<Threat>,
     reset: bool,
 }
 
-impl ThreatRecord {
+impl Default for Threat {
+    fn default() -> Self {
+        Self {
+            pos: Default::default(),
+            time: Default::default(),
+            sense: Sense::Sight,
+            status: ThreatStatus::Unknown,
+            asleep: false,
+            escaped: false,
+        }
+    }
+}
+
+impl Threat {
     fn debug(&self, slice: &mut Slice, time: Timestamp) {
-        slice.write_str("    ThreatRecord:").newline();
+        slice.write_str("    Threat:").newline();
         slice.write_str(&format!("      age: {:?}", time - self.time)).newline();
         slice.write_str(&format!("      pos: {:?}", self.pos)).newline();
+        slice.write_str(&format!("      sense: {:?}", self.sense)).newline();
         slice.write_str(&format!("      status: {:?}", self.status)).newline();
         slice.write_str(&format!("      asleep: {}", self.asleep)).newline();
         slice.write_str(&format!("      escaped: {}", self.escaped)).newline();
     }
 
-    fn merge_from(&mut self, other: &ThreatRecord) {
+    fn merge_from(&mut self, other: &Threat) {
         // No need to update any fields that we unconditionally update in
         // update_for_event, since we merge right before processing an event.
+        self.sense = other.sense;
         self.status = min(self.status, other.status);
         self.escaped = self.escaped && other.escaped;
     }
@@ -220,6 +236,7 @@ impl ThreatRecord {
     fn update_for_event(&mut self, me: &Entity, event: &Event) {
         self.pos = event.point;
         self.time = event.time;
+        self.sense = event.sense;
         self.asleep = false;
 
         match &event.data {
@@ -235,6 +252,7 @@ impl ThreatRecord {
     fn update_for_sighting(&mut self, other: &EntityKnowledge) {
         self.pos = other.pos;
         self.time = other.time;
+        self.sense = other.sense;
         self.asleep = other.asleep;
 
         let hostile = other.delta > 0;
@@ -278,12 +296,12 @@ impl ThreatState {
         debug_assert!(self.check_invariants());
     }
 
-    fn get_by_entity(&mut self, me: &Entity, eid: EID) -> Option<&mut ThreatRecord> {
+    fn get_by_entity(&mut self, me: &Entity, eid: EID) -> Option<&mut Threat> {
         let handle = self.get_by_tid(me, TID::EID(eid))?;
         Some(&mut self.threats[handle])
     }
 
-    fn get_by_event(&mut self, me: &Entity, event: &Event) -> Option<&mut ThreatRecord> {
+    fn get_by_event(&mut self, me: &Entity, event: &Event) -> Option<&mut Threat> {
         let tid = event.eid.map(|x| TID::EID(x)).or(event.uid.map(|x| TID::UID(x)))?;
 
         if let EventData::Forget(_) = &event.data {
@@ -309,7 +327,7 @@ impl ThreatState {
         Some(*self.threat_index.entry(tid).and_modify(|&mut x| {
             self.threats.move_to_front(x);
         }).or_insert_with(|| {
-            self.threats.push_front(ThreatRecord::default())
+            self.threats.push_front(Threat::default())
         }))
     }
 
