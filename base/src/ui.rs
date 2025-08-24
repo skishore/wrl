@@ -671,7 +671,7 @@ impl UI {
 
         let render_source = |source: Option<&SourceKnowledge>| -> Glyph {
             let Some(x) = source else { return unseen };
-            Glyph::wdfg('?', Color::white().fade(0.25 + 0.75 * x.freshness(known.time)))
+            Glyph::wdfg('?', Color::white().fade(0.25 + 0.5 * x.freshness()))
         };
 
         let render_tile = |point: Point| -> Glyph {

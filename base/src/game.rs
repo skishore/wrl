@@ -982,6 +982,8 @@ fn update_state(state: &mut State) {
 
         state.board.time = state.board.time.bump();
 
+        if player { entity.known.forget_old_sources(); }
+
         let trail = &mut entity.trail;
         if trail.len() == trail.capacity() { trail.pop_back(); }
         trail.push_front(Scent { pos: entity.pos, time: state.board.time });
