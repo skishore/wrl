@@ -21,7 +21,8 @@ const MAX_ENTITY_MEMORY: usize = 64;
 const MAX_SOURCE_MEMORY: usize = 64;
 const MAX_TILE_MEMORY: usize = 4096;
 
-const SOURCE_TRACKING_LIMIT: Timedelta = Timedelta::from_seconds(24.);
+const SOURCE_TRACKING_LIMIT: Timedelta = Timedelta::from_seconds(16.);
+const SOURCE_RETENTION_TIME: Timedelta = Timedelta::from_seconds(96.);
 
 fn trophic_level(x: &Entity) -> i32 {
     if x.player { 3 } else if !x.predator { 1 } else { 2 }
@@ -549,7 +550,7 @@ impl Knowledge {
             self.forget_last_source();
         }
         while let Some(x) = self.sources.back() &&
-              self.time - x.time >= SOURCE_TRACKING_LIMIT {
+              self.time - x.time >= SOURCE_RETENTION_TIME {
             self.forget_last_source();
         }
     }
@@ -601,16 +602,15 @@ impl Knowledge {
         let cached = self.eid_index.entry(other.eid).or_default();
 
         // Seeing this entity may let us identify an unknown event source.
-        if let Some(x) = cached.source.take() {
-            let SourceKnowledge { uid, pos, time: last, .. } = self.sources.remove(x);
+        if let Some(x) = cached.source.take() &&
+           time - self.sources[x].time < SOURCE_TRACKING_LIMIT {
+            let SourceKnowledge { uid, pos, .. } = self.sources.remove(x);
             Self::move_source(&mut self.pos_index, x, Some(pos), None);
 
-            if time - last < SOURCE_TRACKING_LIMIT {
-                let (eid, uid) = (Some(other.eid), Some(uid));
-                let data = EventData::Spot(SpotEvent::default());
-                let event = Event { eid, uid, data, time, point: other.pos, sense };
-                self.events.push(event);
-            }
+            let (eid, uid) = (Some(other.eid), Some(uid));
+            let data = EventData::Spot(SpotEvent::default());
+            let event = Event { eid, uid, data, time, point: other.pos, sense };
+            self.events.push(event);
         }
 
         // Create a new EntityKnowledge instance or mark an old one as fresh.
