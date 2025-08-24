@@ -176,6 +176,8 @@ type CellHandle = Handle<CellKnowledge>;
 type EntityHandle = Handle<EntityKnowledge>;
 type SourceHandle = Handle<SourceKnowledge>;
 
+type PointIndex  = HashMap<Point, PointState>;
+
 // Detailed knowledge about a map cell. Only updated when we see it.
 pub struct CellKnowledge {
     pub last_see_entity_at: Timestamp,
@@ -219,7 +221,7 @@ static_assert_size!(EntityKnowledge, 88);
 
 // Minimal knowledge about an entity that we're tracking by scent or sound.
 // Used to tag events with a UID such that same UID => same event source.
-struct SourceKnowledge {
+pub struct SourceKnowledge {
     uid: UID,
     pos: Point,
     eid: Option<EID>,
@@ -238,6 +240,7 @@ struct EIDState {
 struct PointState {
     cell: Option<CellHandle>,
     entity: Option<EntityHandle>,
+    source: Option<SourceHandle>,
 }
 
 #[derive(Default)]
@@ -301,6 +304,12 @@ impl SourceKnowledge {
     fn new(uid: UID, event: &Event) -> Self {
         Self { uid, pos: event.point, eid: None, time: event.time }
     }
+
+    pub fn freshness(&self, time: Timestamp) -> f64 {
+        let limit = SOURCE_TRACKING_LIMIT;
+        let age = std::cmp::min(time - self.time, limit);
+        1. - age.nsec() as f64 / limit.nsec() as f64
+    }
 }
 
 impl Knowledge {
@@ -321,8 +330,10 @@ impl Knowledge {
     // Writes
 
     pub fn update(&mut self, me: &Entity, board: &Board, vision: &Vision, rng: &mut RNG) {
+        assert!(board.time >= self.time);
         self.time = board.time;
-        let (pos, time) = (me.pos, self.time);
+
+        let (pos, time) = (me.pos, board.time);
         let dark = matches!(board.get_light(), Light::None);
 
         // Clear and recompute scents. Only prey gives off a scent.
@@ -399,6 +410,7 @@ impl Knowledge {
             }
             if see_all_entities || entity.is_some() {
                 entry.entity = entity;
+                entry.source = None;
             }
         }
 
@@ -408,14 +420,18 @@ impl Knowledge {
     }
 
     pub fn remove_entity(&mut self, eid: EID, time: Timestamp) {
+        assert!(time >= self.time);
+        self.time = time;
+
         let Some(x) = self.eid_index.get_mut(&eid) else { return };
         let Some(h) = x.entity.take() else { return };
 
         if *x == Default::default() { self.eid_index.remove(&eid); }
-        let EntityKnowledge { eid, pos, .. } = self.entities.remove(h);
-        Self::move_from(&mut self.pos_index, pos, h);
 
-        self.forget_event(Some(eid), None, pos, time);
+        let EntityKnowledge { eid, pos, .. } = self.entities.remove(h);
+        Self::move_entity(&mut self.pos_index, h, Some(pos), None);
+
+        self.forget_event(Some(eid), None, pos);
 
         debug_assert!(self.check_invariants());
     }
@@ -423,7 +439,8 @@ impl Knowledge {
     // Events helpers:
 
     pub fn observe_event(&mut self, me: &Entity, event: &Event) {
-        if me.player { return; }
+        assert!(event.time >= self.time);
+        self.time = event.time;
 
         let mut clone = event.clone();
         clone.eid = None;
@@ -431,7 +448,8 @@ impl Knowledge {
 
         let Some(eid) = event.eid else {
             let uid = Self::get_next_uid(&mut self.last_uid);
-            self.sources.push_front(SourceKnowledge::new(uid, event));
+            let handle = self.sources.push_front(SourceKnowledge::new(uid, event));
+            Self::move_source(&mut self.pos_index, handle, None, Some(event.point));
             clone.uid = Some(uid);
             self.events.push(clone);
             return;
@@ -455,14 +473,14 @@ impl Knowledge {
             Sense::Smell => false,
             Sense::Sound => event.time - x.time < SOURCE_TRACKING_LIMIT,
         };
-        if let Some(h) = entry.entity && link_to_entity(&self.entities[h]) {
+        if !me.player && let Some(h) = entry.entity && link_to_entity(&self.entities[h]) {
             let entity = &mut self.entities[h];
-            let (source, target) = (entity.pos, event.point);
-            if source != target {
-                Self::move_from(&mut self.pos_index, source, h);
-            }
-            if let Some(x) = self.pos_index.get_mut(&target) {
-                x.entity = Some(h);
+            let (s, t) = (entity.pos, event.point);
+            Self::move_entity(&mut self.pos_index, h, Some(s), Some(t));
+
+            if let Some(x) = entry.source.take() {
+                let SourceKnowledge { pos, .. } = self.sources.remove(x);
+                Self::move_source(&mut self.pos_index, x, Some(pos), None);
             }
 
             entity.pos = event.point;
@@ -471,14 +489,13 @@ impl Knowledge {
 
             self.entities.move_to_front(h);
 
-            if let Some(x) = entry.source.take() { self.sources.remove(x); }
-
             clone.eid = Some(eid);
             self.events.push(clone);
             return;
         }
 
-        let handle = entry.source.unwrap_or_else(|| {
+        let existing = entry.source;
+        let handle = existing.unwrap_or_else(|| {
             let uid = Self::get_next_uid(&mut self.last_uid);
             self.sources.push_front(SourceKnowledge::new(uid, &event))
         });
@@ -486,6 +503,9 @@ impl Knowledge {
         if entry.source.is_none() { entry.source = Some(handle); }
 
         let source = &mut self.sources[handle];
+        let (s, t) = (existing.map(|_| source.pos), event.point);
+        Self::move_source(&mut self.pos_index, handle, s, Some(t));
+
         source.eid = Some(eid);
         source.pos = event.point;
         source.time = event.time;
@@ -503,6 +523,11 @@ impl Knowledge {
             while let Some(x) = self.cells.back() && !x.visible {
                 self.forget_last_cell();
             }
+            while let Some(x) = self.sources.back() &&
+                  self.time - x.time >= SOURCE_TRACKING_LIMIT {
+                self.forget_last_source();
+            }
+            self.events.clear();
             return;
         }
 
@@ -529,10 +554,9 @@ impl Knowledge {
         }
     }
 
-    fn forget_event(&mut self, eid: Option<EID>, uid: Option<UID>,
-                    point: Point, time: Timestamp) {
+    fn forget_event(&mut self, eid: Option<EID>, uid: Option<UID>, point: Point) {
         let data = EventData::Forget(ForgetEvent::default());
-        let event = Event { eid, uid, data, time, point, sense: Sense::Sight };
+        let event = Event { eid, uid, data, time: self.time, point, sense: Sense::Sight };
         self.events.push(event);
     }
 
@@ -548,9 +572,10 @@ impl Knowledge {
         let Some(h) = self.sources.back_handle() else { return };
         let Some(x) = self.sources.pop_back() else { return };
 
-        if let Some(e) = x.eid { self.move_source(e, h); }
+        if let Some(e) = x.eid { self.unlink_source(e, h); }
+        Self::move_source(&mut self.pos_index, h, Some(x.pos), None);
 
-        self.forget_event(None, Some(x.uid), x.pos, self.time);
+        self.forget_event(None, Some(x.uid), x.pos);
     }
 
     fn populate_scents(&mut self, me: &Entity, board: &Board, rng: &mut RNG) {
@@ -577,7 +602,9 @@ impl Knowledge {
 
         // Seeing this entity may let us identify an unknown event source.
         if let Some(x) = cached.source.take() {
-            let SourceKnowledge { uid, time: last, .. } = self.sources.remove(x);
+            let SourceKnowledge { uid, pos, time: last, .. } = self.sources.remove(x);
+            Self::move_source(&mut self.pos_index, x, Some(pos), None);
+
             if time - last < SOURCE_TRACKING_LIMIT {
                 let (eid, uid) = (Some(other.eid), Some(uid));
                 let data = EventData::Spot(SpotEvent::default());
@@ -592,7 +619,7 @@ impl Knowledge {
         if cached.entity.is_some() {
             self.entities.move_to_front(handle);
             let (s, t) = (self.entities[handle].pos, other.pos);
-            if s != t { Self::move_from(&mut self.pos_index, s, handle); }
+            if s != t { Self::move_entity(&mut self.pos_index, handle, Some(s), None); }
         } else {
             cached.entity = Some(handle);
         };
@@ -626,15 +653,37 @@ impl Knowledge {
         UID((*last_uid).try_into().unwrap())
     }
 
-    fn move_from(m: &mut HashMap<Point, PointState>, p: Point, h: EntityHandle) {
-        let Some(x) = m.get_mut(&p) else { return };
-        if x.entity != Some(h) { return };
+    fn move_entity(m: &mut PointIndex, h: EntityHandle, from: Option<Point>, to: Option<Point>) {
+        if from == to { return; }
 
-        x.entity = None;
-        if *x == Default::default() { m.remove(&p); }
+        if let Some(p) = from && let Some(x) = m.get_mut(&p) && x.entity == Some(h) {
+            x.entity = None;
+            if *x == Default::default() { m.remove(&p); }
+        }
+
+        if let Some(p) = to {
+            let entry = m.entry(p).or_default();
+            entry.entity = Some(h);
+            entry.source = None;
+        }
     }
 
-    fn move_source(&mut self, e: EID, h: SourceHandle) {
+    fn move_source(m: &mut PointIndex, h: SourceHandle, from: Option<Point>, to: Option<Point>) {
+        if from == to { return; }
+
+        if let Some(p) = from && let Some(x) = m.get_mut(&p) && x.source == Some(h) {
+            x.source = None;
+            if *x == Default::default() { m.remove(&p); }
+        }
+
+        if let Some(p) = to {
+            let entry = m.entry(p).or_default();
+            entry.source = Some(h);
+            entry.entity = None;
+        }
+    }
+
+    fn unlink_source(&mut self, e: EID, h: SourceHandle) {
         let Some(x) = self.eid_index.get_mut(&e) else { return };
         if x.source != Some(h) { return };
 
@@ -672,9 +721,10 @@ impl Knowledge {
 
         // Check that the indices are consistent and minimal:
         for (&pos, entry) in &self.pos_index {
-            assert!(entry.cell.is_some() || entry.entity.is_some());
+            assert!(entry.cell.is_some() || entry.entity.is_some() || entry.source.is_some());
             if let Some(x) = entry.cell { assert!(self.cells[x].point == pos); }
             if let Some(x) = entry.entity { assert!(self.entities[x].pos == pos); }
+            if let Some(x) = entry.source { assert!(self.sources[x].pos == pos); }
         }
         for (&eid, entry) in &self.eid_index {
             assert!(entry.entity.is_some() || entry.source.is_some());
@@ -727,6 +777,10 @@ impl<'a> PointLookup<'a> {
 
     pub fn entity(&self) -> Option<&'a EntityKnowledge> {
         Some(&self.root.entities[self.spot?.entity?])
+    }
+
+    pub fn source(&self) -> Option<&'a SourceKnowledge> {
+        Some(&self.root.sources[self.spot?.source?])
     }
 
     pub fn status(&self) -> Status {

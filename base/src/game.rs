@@ -725,8 +725,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                         if oid != state.player { continue; }
 
                         let color = if seen { color } else { Color::white() };
-                        state.ui.animate_move(color, 0, source);
-                        if !target_seen { state.ui.animate_move(color, 1, target); }
+                        state.ui.animate_move(color, source);
                     }
                     ActionResult::success_turns(turns)
                 }

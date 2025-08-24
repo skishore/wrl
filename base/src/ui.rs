@@ -10,7 +10,7 @@ use crate::effect::{Frame, self};
 use crate::entity::{EID, Entity};
 use crate::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_, WORLD_SIZE};
 use crate::game::{Board, Input, Tile, show_item};
-use crate::knowledge::{EntityKnowledge, Knowledge};
+use crate::knowledge::{EntityKnowledge, Knowledge, SourceKnowledge};
 use crate::pathing::Status;
 use crate::shadowcast::{Vision, VisionArgs};
 
@@ -563,9 +563,8 @@ impl UI {
 
     // Update entry points
 
-    pub fn animate_move(&mut self, color: Color, delay: i32, point: Point) {
-        let frame = -delay * UI_MOVE_FRAMES / 2;
-        let manim = MoveAnimation { color, frame, limit: UI_MOVE_FRAMES };
+    pub fn animate_move(&mut self, color: Color, point: Point) {
+        let manim = MoveAnimation { color, frame: 0, limit: UI_MOVE_FRAMES };
         self.moves.insert(point, manim);
     }
 
@@ -670,14 +669,24 @@ impl UI {
         let (known, player) = (&*entity.known, entity.player);
         let unseen = Glyph::wide(' ');
 
-        let lookup = |point: Point| -> Glyph {
+        let render_source = |source: Option<&SourceKnowledge>| -> Glyph {
+            let Some(x) = source else { return unseen };
+            Glyph::wdfg('?', Color::white().fade(0.25 + 0.75 * x.freshness(known.time)))
+        };
+
+        let render_tile = |point: Point| -> Glyph {
             let cell = known.get(point);
-            let Some(tile) = cell.tile() else { return unseen; };
+            let (source, tile) = (cell.source(), cell.tile());
+            let Some(tile) = tile else { return render_source(source) };
+
+            let entity = cell.entity();
+            let entity = if let Some(x) = entity && x.visible { entity } else { None };
+            if entity.is_none() && source.is_some() { return render_source(source) };
 
             let obscured = tile.limits_vision();
             let shadowed = cell.shade();
 
-            let glyph = if let Some(x) = cell.entity() && x.visible {
+            let glyph = if let Some(x) = entity {
                 let big = x.player && !x.sneaking;
                 let glyph = if x.player && x.sneaking { Glyph::wide('e') } else { x.glyph };
                 if x.hp == 0. { Glyph::wdfg('%', 0xff0000) }
@@ -703,7 +712,7 @@ impl UI {
         let size = self.get_map_size();
         for y in 0..size.1 {
             for x in 0..size.0 {
-                let mut glyph = lookup(Point(x, y) + offset);
+                let mut glyph = render_tile(Point(x, y) + offset);
                 if self.full {
                     let scent = entity.get_scent_at(Point(x, y) + offset);
                     let color = Color::from(0xff8080).fade(scent);
@@ -1010,8 +1019,6 @@ impl UI {
             return;
         }
 
-        // TODO: There's a bug in this code: EntityKnowledge for the focused
-        // entity can get cleaned up while the player is still focused on it.
         let (tile, view, header, seen) = match &self.target {
             Some(x) => {
                 let cell = known.get(x.target);
