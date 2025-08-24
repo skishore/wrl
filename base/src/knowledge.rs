@@ -21,6 +21,7 @@ const MAX_ENTITY_MEMORY: usize = 64;
 const MAX_SOURCE_MEMORY: usize = 64;
 const MAX_TILE_MEMORY: usize = 4096;
 
+const SOURCE_TURN_LIMIT: i32 = 2;
 const SOURCE_TRACKING_LIMIT: Timedelta = Timedelta::from_seconds(16.);
 const SOURCE_RETENTION_TIME: Timedelta = Timedelta::from_seconds(96.);
 
@@ -227,9 +228,10 @@ pub struct SourceKnowledge {
     pos: Point,
     eid: Option<EID>,
     time: Timestamp,
+    turns: i32,
 }
 #[cfg(target_pointer_width = "64")]
-static_assert_size!(SourceKnowledge, 32);
+static_assert_size!(SourceKnowledge, 40);
 
 #[derive(Default, Eq, PartialEq)]
 struct EIDState {
@@ -303,13 +305,12 @@ impl EntityKnowledge {
 
 impl SourceKnowledge {
     fn new(uid: UID, event: &Event) -> Self {
-        Self { uid, pos: event.point, eid: None, time: event.time }
+        Self { uid, pos: event.point, eid: None, time: event.time, turns: 0 }
     }
 
-    pub fn freshness(&self, time: Timestamp) -> f64 {
-        let limit = SOURCE_TRACKING_LIMIT;
-        let age = std::cmp::min(time - self.time, limit);
-        1. - age.nsec() as f64 / limit.nsec() as f64
+    pub fn freshness(&self) -> f64 {
+        let limit = std::cmp::max(SOURCE_TURN_LIMIT - 1, 1);
+        1. - std::cmp::min(self.turns, limit) as f64 / limit as f64
     }
 }
 
@@ -439,6 +440,13 @@ impl Knowledge {
 
     // Events helpers:
 
+    pub fn forget_old_sources(&mut self) {
+        for x in &mut self.sources { x.turns += 1; }
+        while let Some(x) = self.sources.back() && x.turns >= SOURCE_TURN_LIMIT {
+            self.forget_last_source();
+        }
+    }
+
     pub fn observe_event(&mut self, me: &Entity, event: &Event) {
         assert!(event.time >= self.time);
         self.time = event.time;
@@ -510,6 +518,7 @@ impl Knowledge {
         source.eid = Some(eid);
         source.pos = event.point;
         source.time = event.time;
+        source.turns = 0;
 
         clone.uid = Some(source.uid);
         self.events.push(clone);
@@ -523,10 +532,6 @@ impl Knowledge {
         if player {
             while let Some(x) = self.cells.back() && !x.visible {
                 self.forget_last_cell();
-            }
-            while let Some(x) = self.sources.back() &&
-                  self.time - x.time >= SOURCE_TRACKING_LIMIT {
-                self.forget_last_source();
             }
             self.events.clear();
             return;
