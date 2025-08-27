@@ -25,7 +25,7 @@ use crate::ui::{UI, get_direction};
 
 pub const MOVE_TIMER: i32 = 960;
 pub const TURN_TIMER: i32 = 120;
-pub const WORLD_SIZE: i32 = 30;
+pub const WORLD_SIZE: i32 = 50;
 
 pub const FOV_RADIUS_NPC: i32 = 12;
 pub const FOV_RADIUS_PC_: i32 = 21;
@@ -39,7 +39,7 @@ const SPEED_NPC: f64 = 1.;
 const LIGHT: Light = Light::Sun(Point(2, 0));
 const WEATHER: Weather = Weather::None;
 const NUM_PREDATORS: i32 = 1;
-const NUM_PREY: i32 = 1;
+const NUM_PREY: i32 = 3;
 
 const UI_DAMAGE_FLASH: i32 = 6;
 const UI_DAMAGE_TICKS: i32 = 6;

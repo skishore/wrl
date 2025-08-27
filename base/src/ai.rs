@@ -176,7 +176,7 @@ type ThreatHandle = Handle<Threat>;
 enum TID { EID(EID), UID(UID) }
 
 #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-enum ThreatStatus { Hostile, Neutral, Scanned, Unknown }
+enum ThreatStatus { Hostile, Friendly, Neutral, Scanned, Unknown }
 
 #[derive(Clone)]
 struct Threat {
@@ -187,7 +187,6 @@ struct Threat {
 
     // Flags:
     asleep: bool,
-    escaped: bool,
 }
 
 #[derive(Default)]
@@ -195,10 +194,17 @@ struct ThreatState {
     threats: List<Threat>,
     threat_index: HashMap<TID, ThreatHandle>,
 
-    // Summaries used for fight-or-flight decisions.
+    // Summaries used for flight pathing.
     hostile: Vec<Threat>,
     unknown: Vec<Threat>,
+    active: bool,
     reset: bool,
+
+    // Fight-or-flight.
+    fight: bool,
+    our_strength: f64,
+    their_strength: f64,
+    win_probability: f64,
 }
 
 impl Default for Threat {
@@ -209,7 +215,6 @@ impl Default for Threat {
             sense: Sense::Sight,
             status: ThreatStatus::Unknown,
             asleep: false,
-            escaped: false,
         }
     }
 }
@@ -222,7 +227,6 @@ impl Threat {
         slice.write_str(&format!("      sense: {:?}", self.sense)).newline();
         slice.write_str(&format!("      status: {:?}", self.status)).newline();
         slice.write_str(&format!("      asleep: {}", self.asleep)).newline();
-        slice.write_str(&format!("      escaped: {}", self.escaped)).newline();
     }
 
     fn merge_from(&mut self, other: &Threat) {
@@ -230,7 +234,6 @@ impl Threat {
         // update_for_event, since we merge right before processing an event.
         self.sense = other.sense;
         self.status = min(self.status, other.status);
-        self.escaped = self.escaped && other.escaped;
     }
 
     fn update_for_event(&mut self, me: &Entity, event: &Event) {
@@ -249,14 +252,21 @@ impl Threat {
         }
     }
 
-    fn update_for_sighting(&mut self, other: &EntityKnowledge) {
+    fn update_for_sighting(&mut self, me: &Entity, other: &EntityKnowledge) {
         self.pos = other.pos;
         self.time = other.time;
         self.sense = other.sense;
         self.asleep = other.asleep;
 
-        let hostile = other.delta > 0;
-        let status = if hostile { ThreatStatus::Hostile } else { ThreatStatus::Neutral };
+        let status = if me.predator && other.player {
+            ThreatStatus::Neutral
+        } else if other.delta > 0 {
+            ThreatStatus::Hostile
+        } else if !me.predator && other.delta == 0 {
+            ThreatStatus::Friendly
+        } else {
+            ThreatStatus::Neutral
+        };
         self.status = min(self.status, status);
     }
 }
@@ -264,6 +274,14 @@ impl Threat {
 impl ThreatState {
     fn debug(&self, slice: &mut Slice, time: Timestamp) {
         slice.write_str("  ThreatState:").newline();
+        slice.write_str(&format!("    active: {}", self.active)).newline();
+        slice.write_str(&format!("    reset: {}", self.reset)).newline();
+        slice.newline();
+        slice.write_str(&format!("    fight: {}", self.fight)).newline();
+        slice.write_str(&format!("    our_strength: {}", self.our_strength)).newline();
+        slice.write_str(&format!("    their_strength: {}", self.their_strength)).newline();
+        slice.write_str(&format!("    win_probability: {}", self.win_probability)).newline();
+        slice.newline();
         for x in &self.threats { x.debug(slice, time) }
     }
 
@@ -275,7 +293,7 @@ impl ThreatState {
         for other in &me.known.entities {
             if !other.visible { break; }
             let Some(threat) = self.get_by_entity(me, other.eid) else { continue };
-            threat.update_for_sighting(other);
+            threat.update_for_sighting(me, other);
         }
 
         self.hostile.clear();
@@ -291,7 +309,34 @@ impl ThreatState {
             self.hostile.extend_from_slice(&self.unknown);
             self.hostile.sort_by_key(|x| me.known.time - x.time);
         }
-        if let Some(x) = self.hostile.first() { self.reset = x.time > prev_time; }
+        if let Some(x) = self.hostile.first() && x.time > prev_time {
+            self.active = true;
+            self.reset = true;
+        } else if self.hostile.is_empty() {
+            self.active = false;
+        }
+
+        let boost = 1.5;
+        let strength = |predator: bool| { if predator { 3. } else { 1. } };
+        let mut their_strength = 0.;
+        let mut our_strength = strength(me.predator);
+        for x in &self.threats {
+            let age = me.known.time - x.time;
+            if age > ACTIVE_THREAT_TIME { break; }
+
+            let decay = (-1. * (age.nsec() as f64 / ACTIVE_THREAT_TIME.nsec() as f64)).exp2();
+            if x.status == ThreatStatus::Hostile  {
+                their_strength += decay * strength(!me.predator);
+            }
+            if x.status == ThreatStatus::Friendly {
+                our_strength += decay * strength(me.predator);
+            }
+        }
+        our_strength *= boost;
+        self.our_strength = our_strength;
+        self.their_strength = their_strength;
+        self.win_probability = our_strength / (our_strength + their_strength);
+        self.fight = self.win_probability > 0.5;
 
         debug_assert!(self.check_invariants());
     }
@@ -844,27 +889,41 @@ impl Strategy for ChaseStrategy {
         let predator = ctx.entity.predator;
         let turns_left = ctx.shared.till_hunger;
         let cutoff = max(MAX_HUNGER_CARNIVORE / 2, 1);
-        if predator && turns_left >= cutoff { return (Priority::Skip, 0); }
+
+        let fight_for_food = predator && turns_left < cutoff;
+        let fight_for_life = ctx.shared.threats.active;
+        if !fight_for_food && !fight_for_life { return (Priority::Skip, 0); }
 
         let Context { known, pos, .. } = *ctx;
-        let mut targets: Vec<_> = known.entities.iter().filter(
-            |x| x.delta < 0 && (known.time - x.time) < MAX_SEARCH_TIME).collect();
-        if targets.is_empty() { return (Priority::Skip, 0); }
+        let mut targets: Vec<(Point, Timestamp)> = vec![];
+        if fight_for_life {
+            targets = ctx.shared.threats.hostile.iter().map(
+                |x| (x.pos, x.time)).collect();
+        }
+        if targets.is_empty() && fight_for_food {
+            targets = known.entities.iter().filter_map(
+                |x| if x.delta < 0 { Some((x.pos, x.time)) } else { None }).collect();
+        }
+        let Some(x) = targets.first() else { return (Priority::Skip, 0); };
+        if (known.time - x.1) >= MAX_SEARCH_TIME { return (Priority::Skip, 0); }
 
         let target = *targets.select_nth_unstable_by_key(
-            0, |x| (known.time - x.time, (x.pos - pos).len_l2_squared())).1;
-        let reset = target.time > ctx.shared.prev_time;
+            0, |x| (known.time - x.1, (pos - x.0).len_l2_squared())).1;
+        let reset = target.1 > ctx.shared.prev_time;
         if reset || !self.path.check(ctx) { self.path.reset(); }
 
-        let age = known.time - target.time;
-        let (last, time) = (target.pos, target.time);
+        let _age = known.time - target.1;
+        let (last, time) = target;
         let (bias, steps) = if !reset && let Some(x) = prev {
             (x.bias, x.steps + 1)
         } else {
-            (target.pos - pos, 0)
+            (last - pos, 0)
         };
         self.target = Some(ChaseTarget { bias, last, time, steps });
-        (Priority::Hunt, age.nsec())
+
+        let priority = if fight_for_life { Priority::Survive } else { Priority::Hunt };
+        let strength = if fight_for_life && ctx.shared.threats.fight { 0 } else { 1 };
+        (priority, strength)
     }
 
     fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
@@ -928,6 +987,7 @@ impl FlightStrategy {
         }
 
         if self.dirs.is_empty() {
+            ctx.shared.threats.active = false;
             ctx.shared.till_assess = rng.random_range(0..MAX_ASSESS);
             self.turn_limit = MIN_FLIGHT_TURNS;
             self.stage = FlightStage::Done;
@@ -993,7 +1053,7 @@ impl Strategy for FlightStrategy {
         } else {
             self.turn_limit
         };
-        (Priority::Survive, 0)
+        (Priority::Survive, if ctx.shared.threats.fight { 1 } else { 0 })
     }
 
     fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
@@ -1082,6 +1142,7 @@ impl Strategy for LookForThreatsStrategy {
             for threat in &mut ctx.shared.threats.threats {
                 threat.status = min(threat.status, ThreatStatus::Scanned);
             }
+            ctx.shared.till_assess = rng.gen_range(0..MAX_ASSESS);
         }
         Some(Action::Look(dir))
     }
@@ -1381,7 +1442,7 @@ pub struct AIState {
 impl AIState {
     pub fn new(predator: bool, rng: &mut RNG) -> Self {
         let strategies: Vec<Box<dyn Strategy>> = vec![
-            Box::new(TrackStrategy::default()),
+            //Box::new(TrackStrategy::default()),
             Box::new(ChaseStrategy::default()),
             Box::new(FlightStrategy::default()),
             Box::new(LookForThreatsStrategy::default()),
