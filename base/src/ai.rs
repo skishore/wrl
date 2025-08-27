@@ -321,14 +321,18 @@ impl ThreatState {
     }
 
     fn get_by_tid(&mut self, me: &Entity, tid: TID) -> Option<ThreatHandle> {
-        if let TID::EID(x) = tid && let Some(x) = me.known.entity(x) && x.friend {
-            return None;
-        }
+        if self.known_good(me, tid) { return None; }
+
         Some(*self.threat_index.entry(tid).and_modify(|&mut x| {
             self.threats.move_to_front(x);
         }).or_insert_with(|| {
             self.threats.push_front(Threat::default())
         }))
+    }
+
+    fn known_good(&self, me: &Entity, tid: TID) -> bool {
+        let TID::EID(x) = tid else { return false };
+        x == me.eid || me.known.entity(x).map(|x| x.friend).unwrap_or(false)
     }
 
     fn check_invariants(&self) -> bool {
