@@ -187,6 +187,7 @@ struct Threat {
 
     // Flags:
     asleep: bool,
+    seen: bool,
 }
 
 #[derive(Default)]
@@ -215,18 +216,24 @@ impl Default for Threat {
             sense: Sense::Sight,
             status: ThreatStatus::Unknown,
             asleep: false,
+            seen: false,
         }
     }
 }
 
 impl Threat {
     fn debug(&self, slice: &mut Slice, time: Timestamp) {
+        let mut flags = vec![];
+        if self.asleep { flags.push("Asleep"); }
+        if self.seen { flags.push("Seen "); }
+        if flags.is_empty() { flags.push("None"); }
+
         slice.write_str("    Threat:").newline();
         slice.write_str(&format!("      age: {:?}", time - self.time)).newline();
         slice.write_str(&format!("      pos: {:?}", self.pos)).newline();
         slice.write_str(&format!("      sense: {:?}", self.sense)).newline();
         slice.write_str(&format!("      status: {:?}", self.status)).newline();
-        slice.write_str(&format!("      asleep: {}", self.asleep)).newline();
+        slice.write_str(&format!("      flags: {}", flags.join(" | "))).newline();
     }
 
     fn merge_from(&mut self, other: &Threat) {
@@ -234,6 +241,7 @@ impl Threat {
         // update_for_event, since we merge right before processing an event.
         self.sense = other.sense;
         self.status = min(self.status, other.status);
+        self.seen |= other.seen;
     }
 
     fn update_for_event(&mut self, me: &Entity, event: &Event) {
@@ -257,6 +265,7 @@ impl Threat {
         self.time = other.time;
         self.sense = other.sense;
         self.asleep = other.asleep;
+        self.seen = true;
 
         let status = if me.predator && other.player {
             ThreatStatus::Neutral
@@ -316,27 +325,38 @@ impl ThreatState {
             self.active = false;
         }
 
-        let boost = 1.5;
-        let strength = |predator: bool| { if predator { 3. } else { 1. } };
-        let mut their_strength = 0.;
+        let boost = 1.25;
+        let strength = |predator: bool| { if predator { 2. } else { 1. } };
+        let mut known_strength = 0.;
+        let mut unknown_strength = 0.;
         let mut our_strength = strength(me.predator);
+
         for x in &self.threats {
             let age = me.known.time - x.time;
             if age > ACTIVE_THREAT_TIME { break; }
 
-            let decay = (-1. * (age.nsec() as f64 / ACTIVE_THREAT_TIME.nsec() as f64)).exp2();
+            let decay = 1. - age.nsec() as f64 / ACTIVE_THREAT_TIME.nsec() as f64;
             if x.status == ThreatStatus::Hostile  {
-                their_strength += decay * strength(!me.predator);
+                let s = if x.seen { &mut known_strength } else { &mut unknown_strength };
+                *s += decay * strength(!me.predator);
             }
             if x.status == ThreatStatus::Friendly {
                 our_strength += decay * strength(me.predator);
             }
         }
+
         our_strength *= boost;
+        let mut their_strength = unknown_strength;
+        if their_strength < known_strength { their_strength = known_strength; }
+
         self.our_strength = our_strength;
         self.their_strength = their_strength;
         self.win_probability = our_strength / (our_strength + their_strength);
-        self.fight = self.win_probability > 0.5;
+        if self.win_probability > 0.6 {
+            self.fight = true;
+        } else if self.win_probability < 0.4 {
+            self.fight = false;
+        }
 
         debug_assert!(self.check_invariants());
     }
@@ -1235,6 +1255,8 @@ fn search_around(ctx: &mut Context, path: &mut CachedPath, age: Timedelta,
     };
 
     if center != pos && is_search_candidate(center) {
+        // HACK: CachedPath should handle this case for us.
+        if (center - pos).len_l1() == 1 { return Some(Action::Look(center - pos)); }
         if let Some(x) = path.start(ctx, center, turns) { return Some(x); }
     }
 
