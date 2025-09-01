@@ -14,7 +14,7 @@ use crate::knowledge::{Knowledge, Scent};
 //////////////////////////////////////////////////////////////////////////////
 
 const ATTACK_RANGE: i32 = 8;
-const MAX_HP: i32 = 300;
+const MAX_HP: i32 = 6;
 
 const SCENT_TRAIL_SIZE: usize = 64;
 const SCENT_SPREAD: f64 = 1.;
@@ -91,6 +91,10 @@ impl Entity {
     pub fn name(&self) -> &'static str {
         if self.player { return "skishore"; }
         if self.predator { "Rattata" } else { "Pidgey" }
+    }
+
+    pub fn hp_fraction(&self) -> f64 {
+        self.cur_hp as f64 / std::cmp::max(self.max_hp, 1) as f64
     }
 
     pub fn get_scent_at(&self, p: Point) -> f64 {
