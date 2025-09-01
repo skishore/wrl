@@ -25,7 +25,7 @@ use crate::ui::{UI, get_direction};
 
 pub const MOVE_TIMER: i32 = 960;
 pub const TURN_TIMER: i32 = 120;
-pub const WORLD_SIZE: i32 = 50;
+pub const WORLD_SIZE: i32 = 30;
 
 pub const FOV_RADIUS_NPC: i32 = 12;
 pub const FOV_RADIUS_PC_: i32 = 21;
@@ -733,7 +733,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
         }
         Action::Attack(target) => {
             let entity = &state.board.entities[eid];
-            let (range, source) = (entity.range, entity.pos);
+            let (predator, range, source) = (entity.predator, entity.range, entity.pos);
             if !can_attack(&state.board, entity, target, range) {
                 return ActionResult::failure();
             }
@@ -788,7 +788,10 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 let cb = move |board: &mut Board, env: &mut UpdateEnv| {
                     let Some(target) = board.entities.get_mut(tid) else { return; };
 
-                    let damage = 1;
+                    let mut damage = 1;
+                    let strong = predator && !target.predator;
+                    if strong && env.rng.gen::<f64>() < 0.5 { damage *= 2; }
+
                     if target.cur_hp > damage {
                         target.cur_hp -= damage;
                         return;

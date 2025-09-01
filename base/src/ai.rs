@@ -188,6 +188,10 @@ struct Threat {
     sense: Sense,
     status: ThreatStatus,
 
+    // Stats:
+    hp: f64,
+    delta: i32,
+
     // Flags:
     asleep: bool,
     seen: bool,
@@ -210,13 +214,19 @@ struct ThreatState {
     win_probability: f64,
 }
 
-impl Default for Threat {
-    fn default() -> Self {
+impl Threat {
+    fn prior(me: &Entity) -> Self {
         Self {
             pos: Default::default(),
             time: Default::default(),
             sense: Sense::Sight,
             status: ThreatStatus::Unknown,
+
+            // Stats:
+            hp: 1.,
+            delta: if me.predator { -1 } else { 1 },
+
+            // Flags:
             asleep: false,
             seen: false,
         }
@@ -235,6 +245,8 @@ impl Threat {
         slice.write_str(&format!("      pos: {:?}", self.pos)).newline();
         slice.write_str(&format!("      sense: {:?}", self.sense)).newline();
         slice.write_str(&format!("      status: {:?}", self.status)).newline();
+        slice.write_str(&format!("      hp: {:.2}", self.hp)).newline();
+        slice.write_str(&format!("      delta: {}", self.delta)).newline();
         slice.write_str(&format!("      flags: {}", flags.join(" | "))).newline();
     }
 
@@ -266,10 +278,14 @@ impl Threat {
         self.pos = other.pos;
         self.time = other.time;
         self.sense = other.sense;
+
+        self.hp = other.hp;
+        self.delta = other.delta;
+
         self.asleep = other.asleep;
         self.seen = true;
 
-        let status = if me.predator && other.player {
+        let status = if other.player {
             ThreatStatus::Neutral
         } else if other.delta > 0 {
             ThreatStatus::Hostile
@@ -290,7 +306,7 @@ impl ThreatState {
         slice.write_str(&format!("    state: {:?}", self.state)).newline();
         slice.write_str(&format!("    our_strength: {:.2}", self.our_strength)).newline();
         slice.write_str(&format!("    their_strength: {:.2}", self.their_strength)).newline();
-        slice.write_str(&format!("    win_probability: {}", self.win_probability)).newline();
+        slice.write_str(&format!("    win_probability: {:.2}", self.win_probability)).newline();
         slice.newline();
         for x in &self.threats { x.debug(slice, time) }
     }
@@ -312,11 +328,17 @@ impl ThreatState {
 
         let was_active = self.state != FightOrFlight::Safe;
         let mut active = was_active;
+        let mut hidden_hostile = 0;
+        let mut seen_hostile = 0;
 
         for x in &self.threats {
             if me.known.time - x.time > ACTIVE_THREAT_TIME { break; }
+
             if x.status == ThreatStatus::Hostile { self.hostile.push(x.clone()); }
             if x.status == ThreatStatus::Unknown { self.unknown.push(x.clone()); }
+
+            if x.status == ThreatStatus::Hostile && !x.seen { hidden_hostile += 1; }
+            if x.status == ThreatStatus::Hostile && x.seen { seen_hostile += 1; }
         }
         if !self.hostile.is_empty() {
             self.hostile.extend_from_slice(&self.unknown);
@@ -329,29 +351,24 @@ impl ThreatState {
             active = false;
         }
 
-        let boost = 1.25;
-        let strength = |predator: bool| { if predator { 2. } else { 1. } };
-        let mut known_strength = 0.;
-        let mut unknown_strength = 0.;
-        let mut our_strength = strength(me.predator);
+        let strength = |x: &Threat| { 2f64.powi(x.delta.signum()) * x.hp };
+        let mut hidden_count = max(hidden_hostile - seen_hostile, 0);
+        let mut our_strength = me.hp_fraction();
+        let mut their_strength = 0.;
 
         for x in &self.threats {
             let age = me.known.time - x.time;
             if age > ACTIVE_THREAT_TIME { break; }
 
-            let decay = 1. - age.nsec() as f64 / ACTIVE_THREAT_TIME.nsec() as f64;
-            if x.status == ThreatStatus::Hostile  {
-                let s = if x.seen { &mut known_strength } else { &mut unknown_strength };
-                *s += decay * strength(!me.predator);
-            }
-            if x.status == ThreatStatus::Friendly {
-                our_strength += decay * strength(me.predator);
+            if x.status == ThreatStatus::Hostile {
+                if !x.seen && hidden_count == 0 { continue; }
+                if !x.seen { hidden_count -= 1; }
+                their_strength += strength(x);
+            } else if x.status == ThreatStatus::Friendly {
+                let decay = 1. - age.nsec() as f64 / ACTIVE_THREAT_TIME.nsec() as f64;
+                our_strength += decay * strength(x);
             }
         }
-
-        our_strength *= boost;
-        let mut their_strength = unknown_strength;
-        if their_strength < known_strength { their_strength = known_strength; }
 
         self.our_strength = our_strength;
         self.their_strength = their_strength;
@@ -400,7 +417,7 @@ impl ThreatState {
         Some(*self.threat_index.entry(tid).and_modify(|&mut x| {
             self.threats.move_to_front(x);
         }).or_insert_with(|| {
-            self.threats.push_front(Threat::default())
+            self.threats.push_front(Threat::prior(me))
         }))
     }
 
@@ -917,7 +934,7 @@ impl Strategy for ChaseStrategy {
 
         let predator = ctx.entity.predator;
         let turns_left = ctx.shared.till_hunger;
-        let cutoff = max(MAX_HUNGER_CARNIVORE / 2, 1);
+        let cutoff = max(MAX_HUNGER_CARNIVORE, 1); // / 2, 1);
 
         let state = ctx.shared.threats.state;
         let fight = state == FightOrFlight::Fight;

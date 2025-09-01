@@ -638,7 +638,7 @@ impl Knowledge {
         entry.name = other.name();
         entry.time = time;
 
-        entry.hp = other.cur_hp as f64 / max(other.max_hp, 1) as f64;
+        entry.hp = other.hp_fraction();
         entry.pp = 1. - clamp(other.move_timer as f64 / MOVE_TIMER as f64, 0., 1.);
         entry.delta = trophic_level(other) - trophic_level(me);
 
