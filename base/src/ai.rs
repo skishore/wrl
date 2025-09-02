@@ -1009,6 +1009,12 @@ struct FlightStrategy {
 impl FlightStrategy {
     fn done(&self) -> bool { self.stage == FlightStage::Done }
 
+    fn mark_flight_successful(&mut self, ctx: &mut Context) {
+        ctx.shared.threats.state = FightOrFlight::Safe;
+        self.turn_limit = MIN_FLIGHT_TURNS;
+        self.stage = FlightStage::Done;
+    }
+
     fn look(&mut self, ctx: &mut Context) -> Option<Action> {
         let (pos, rng) = (ctx.pos, &mut ctx.env.rng);
         self.path.reset();
@@ -1035,10 +1041,8 @@ impl FlightStrategy {
         }
 
         if self.dirs.is_empty() {
-            ctx.shared.threats.state = FightOrFlight::Safe;
             ctx.shared.till_assess = rng.random_range(0..MAX_ASSESS);
-            self.turn_limit = MIN_FLIGHT_TURNS;
-            self.stage = FlightStage::Done;
+            self.mark_flight_successful(ctx);
         }
         Some(Action::Look(dir))
     }
@@ -1076,6 +1080,14 @@ impl Strategy for FlightStrategy {
         let reset = ctx.shared.threats.reset;
         let fight = ctx.shared.threats.state == FightOrFlight::Fight;
         if self.done() && !reset { return (Priority::Skip, 0); }
+
+        // Flight can end because if the enemies were defeated in combat.
+        //
+        // (Should we also reset flight state if we turn back to fight them?)
+        if !self.done() && ctx.shared.threats.hostile.is_empty() {
+            self.mark_flight_successful(ctx);
+            return (Priority::Skip, 0);
+        }
 
         let looking = !self.dirs.is_empty();
         let hiding = is_hiding_place(ctx, ctx.pos);
