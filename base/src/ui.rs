@@ -688,7 +688,8 @@ impl UI {
 
             let glyph = if let Some(x) = entity {
                 let big = x.player && !x.sneaking;
-                let glyph = if x.player && x.sneaking { Glyph::wide('e') } else { x.glyph };
+                let glyph = x.species.glyph;
+                let glyph = if x.player && x.sneaking { Glyph::wide('e') } else { glyph };
                 if x.hp == 0. { Glyph::wdfg('%', 0xff0000) }
                 else if obscured && !big { glyph.with_fg(tile.glyph.fg()) }
                 else { glyph }
@@ -860,7 +861,7 @@ impl UI {
             slice.set(point, glyph.with_fg(Color::black()).with_bg(0xff0000));
         }
         for (_, other) in &board.entities {
-            slice.set(slice_point(other.pos), other.glyph);
+            slice.set(slice_point(other.pos), other.species.glyph);
         }
         for pos in entity.known.debug_noise_sources() {
             let glyph = Glyph::wdfg('?', Color::black()).with_bg(0xffff00);
@@ -873,7 +874,7 @@ impl UI {
                 let moved = entity_at_pos.map(|x| x.eid) != Some(other.eid);
                 if moved { 0xff0000 } else { 0xffff00 }
             };
-            let glyph = other.glyph.with_fg(Color::black()).with_bg(color);
+            let glyph = other.species.glyph.with_fg(Color::black()).with_bg(color);
             let Point(x, y) = other.pos - offset;
             slice.set(Point(2 * x, y), glyph);
         };
@@ -958,14 +959,14 @@ impl UI {
         rivals.truncate(max(slice.size().1, 0) as usize / 2);
 
         for rival in rivals {
-            let EntityKnowledge { glyph, hp, name, .. } = *rival;
+            let EntityKnowledge { hp, species, .. } = *rival;
             let hp_color = Self::hp_color(hp);
             let hp_text = format!("{}%", max((100.0 * hp).floor() as i32, 1));
-            let (sn, sh) = (name.chars().count(), hp_text.chars().count());
+            let (sn, sh) = (species.name.chars().count(), hp_text.chars().count());
             let ss = max(16 - sn as i32 - sh as i32, 0) as usize;
 
             slice.newline();
-            slice.write_chr(glyph).space().write_str(name);
+            slice.write_chr(species.glyph).space().write_str(species.name);
             slice.spaces(ss).set_fg(Some(hp_color)).write_str(&hp_text).newline();
 
             let targeted = match &self.target {
@@ -1164,7 +1165,7 @@ impl UI {
         slice.newline();
         let (hp, pp) = (entity.hp, entity.pp);
         let (hp_color, pp_color) = (Self::hp_color(hp), 0x54a8fc.into());
-        slice.set_fg(fg).write_str(&prefix).write_str(entity.name).newline();
+        slice.set_fg(fg).write_str(&prefix).write_str(entity.species.name).newline();
         status_bar_line("HP: ", hp, hp_color, slice);
         status_bar_line("PP: ", pp, pp_color, slice);
         slice.newline();

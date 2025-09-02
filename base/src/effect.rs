@@ -158,8 +158,9 @@ fn add_sparkle(effect: &mut Effect, sparkle: &Sparkle, mut frame: i32, point: Po
 }
 
 fn get_glyph_at(board: &Board, p: Point) -> Glyph {
-    let entity = board.get_cell(p).eid.and_then(|x| board.get_entity(x));
-    entity.map(|x| x.glyph).unwrap_or(get_underlying_glyph_at(board, p))
+    let cell = board.get_cell(p);
+    let entity = cell.eid.and_then(|x| board.get_entity(x));
+    entity.map(|x| x.species.glyph).unwrap_or(cell.tile.glyph)
 }
 
 fn get_underlying_glyph_at(board: &Board, p: Point) -> Glyph {

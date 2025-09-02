@@ -1,4 +1,4 @@
-use std::cmp::max;
+use std::cmp::{max, min};
 use std::num::NonZeroU64;
 
 use rand::Rng;
@@ -6,7 +6,8 @@ use rand::Rng;
 use thin_vec::{ThinVec, thin_vec};
 
 use crate::static_assert_size;
-use crate::base::{Glyph, HashMap, Point, RNG, clamp};
+use crate::base::{HashMap, Point, RNG, clamp};
+use crate::dex::Species;
 use crate::entity::{EID, Entity};
 use crate::game::{MOVE_TIMER, Board, Item, Light, Tile};
 use crate::list::{Handle, List};
@@ -93,7 +94,7 @@ impl Timestamp {
     pub fn bump(&self) -> Self { self.latch(Timedelta::default()) }
 
     pub fn latch(&self, other: Timedelta) -> Self {
-        let other = std::cmp::max(other, Timedelta(1));
+        let other = max(other, Timedelta(1));
         let value = self.0 + (other.0 as u64);
         let latch = value - (value % Timedelta::NSEC_PER_MSEC as u64);
         Self(if latch > self.0 { latch } else { value })
@@ -201,9 +202,8 @@ pub struct EntityKnowledge {
     pub eid: EID,
     pub pos: Point,
     pub dir: Point,
-    pub glyph: Glyph,
     pub sense: Sense,
-    pub name: &'static str,
+    pub species: &'static Species,
     pub time: Timestamp,
 
     // Stats:
@@ -219,7 +219,7 @@ pub struct EntityKnowledge {
     pub visible: bool,
 }
 #[cfg(target_pointer_width = "64")]
-static_assert_size!(EntityKnowledge, 88);
+static_assert_size!(EntityKnowledge, 72);
 
 // Minimal knowledge about an entity that we're tracking by scent or sound.
 // Used to tag events with a UID such that same UID => same event source.
@@ -278,14 +278,13 @@ impl CellKnowledge {
 }
 
 impl EntityKnowledge {
-    fn new(eid: EID) -> Self {
+    fn new(eid: EID, species: &'static Species) -> Self {
         Self {
             eid,
             pos: Default::default(),
             dir: Default::default(),
-            glyph: Default::default(),
             sense: Sense::Sight,
-            name: Default::default(),
+            species,
             time: Default::default(),
 
             // Stats:
@@ -309,8 +308,8 @@ impl SourceKnowledge {
     }
 
     pub fn freshness(&self) -> f64 {
-        let limit = std::cmp::max(SOURCE_TURN_LIMIT - 1, 1);
-        1. - std::cmp::min(self.turns, limit) as f64 / limit as f64
+        let limit = max(SOURCE_TURN_LIMIT - 1, 1);
+        1. - min(self.turns, limit) as f64 / limit as f64
     }
 }
 
@@ -620,7 +619,7 @@ impl Knowledge {
 
         // Create a new EntityKnowledge instance or mark an old one as fresh.
         let handle = cached.entity.unwrap_or_else(
-            || self.entities.push_front(EntityKnowledge::new(other.eid)));
+            || self.entities.push_front(EntityKnowledge::new(other.eid, other.species)));
         if cached.entity.is_some() {
             self.entities.move_to_front(handle);
             let (s, t) = (self.entities[handle].pos, other.pos);
@@ -630,12 +629,13 @@ impl Knowledge {
         };
         let entry = &mut self.entities[handle];
 
+        // Only a few species can lie about their identity. Update it anyway.
+        entry.species = other.species;
+
         // Update our knowledge with the entity's latest state.
         entry.pos = other.pos;
         entry.dir = other.dir;
-        entry.glyph = other.glyph;
         entry.sense = sense;
-        entry.name = other.name();
         entry.time = time;
 
         entry.hp = other.hp_fraction();

@@ -8,13 +8,11 @@ use slotmap::dense::DenseSlotMap;
 
 use crate::static_assert_size;
 use crate::ai::AIState;
-use crate::base::{dirs, sample, Glyph, Point, RNG};
+use crate::base::{dirs, sample, Point, RNG};
+use crate::dex::Species;
 use crate::knowledge::{Knowledge, Scent};
 
 //////////////////////////////////////////////////////////////////////////////
-
-const ATTACK_RANGE: i32 = 8;
-const MAX_HP: i32 = 6;
 
 const SCENT_TRAIL_SIZE: usize = 64;
 const SCENT_SPREAD: f64 = 1.;
@@ -26,24 +24,22 @@ const SCENT_BASE: f64 = 0.25;
 // Entity
 
 pub struct EntityArgs {
-    pub glyph: Glyph,
+    pub pos: Point,
     pub player: bool,
     pub predator: bool,
-    pub pos: Point,
-    pub speed: f64,
+    pub species: &'static Species,
 }
 
 pub struct Entity {
     pub eid: EID,
-    pub glyph: Glyph,
+    pub species: &'static Species,
     pub known: Box<Knowledge>,
     pub ai: Box<AIState>,
     pub cur_hp: i32,
     pub max_hp: i32,
+    pub speed: f64,
     pub move_timer: i32,
     pub turn_timer: i32,
-    pub range: i32,
-    pub speed: f64,
 
     // Location:
     pub pos: Point,
@@ -61,15 +57,14 @@ impl Entity {
     fn new(eid: EID, args: &EntityArgs, rng: &mut RNG) -> Self {
         Self {
             eid,
-            glyph: args.glyph,
+            species: args.species,
             known: Default::default(),
             ai: Box::new(AIState::new(args.predator, rng)),
-            cur_hp: MAX_HP,
-            max_hp: MAX_HP,
+            cur_hp: args.species.hp,
+            speed: args.species.speed,
+            max_hp: args.species.hp,
             move_timer: 0,
             turn_timer: 0,
-            range: ATTACK_RANGE,
-            speed: args.speed,
 
             // Location:
             pos: args.pos,
@@ -85,12 +80,8 @@ impl Entity {
     }
 
     pub fn desc(&self) -> String {
-        if self.player { "you".into() } else { format!("the wild {}", self.name()) }
-    }
-
-    pub fn name(&self) -> &'static str {
-        if self.player { return "skishore"; }
-        if self.predator { "Rattata" } else { "Pidgey" }
+        let name = self.species.name;
+        if self.player { "you".into() } else { format!("the wild {}", name) }
     }
 
     pub fn hp_fraction(&self) -> f64 {

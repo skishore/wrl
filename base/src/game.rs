@@ -10,6 +10,7 @@ use crate::static_assert_size;
 use crate::ai::{AIEnv, AIState};
 use crate::base::{Buffer, Color, Glyph};
 use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs};
+use crate::dex::{Attack, Species};
 use crate::effect::{Effect, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
 use crate::knowledge::{Knowledge, Scent, Timedelta, Timestamp};
@@ -32,9 +33,6 @@ pub const FOV_RADIUS_PC_: i32 = 21;
 
 const FOV_RADIUS_IN_TALL_GRASS: usize = 4;
 const VISIBILITY_LOSS: i32 = VISIBILITY_LOSSES[FOV_RADIUS_IN_TALL_GRASS - 1];
-
-const SPEED_PC_: f64 = 1.;
-const SPEED_NPC: f64 = 1.;
 
 const LIGHT: Light = Light::Sun(Point(2, 0));
 const WEATHER: Weather = Weather::None;
@@ -73,8 +71,6 @@ pub struct Tile {
     pub glyph: Glyph,
     pub description: &'static str,
 }
-#[cfg(target_pointer_width = "64")]
-static_assert_size!(Tile, 32);
 
 impl Tile {
     pub fn get(ch: char) -> &'static Tile { TILES.get(&ch).unwrap() }
@@ -114,19 +110,20 @@ impl PartialEq for &'static Tile {
 lazy_static! {
     static ref TILES: HashMap<char, Tile> = {
         let items = [
-            ('#', (FLAGS_BLOCKED,     Glyph::wdfg('#', 0x106000), "a tree")),
-            ('.', (FLAGS_NONE,        Glyph::wdfg('.', 0xe0ffc0), "grass")),
-            (',', (FLAGS_NONE,        Glyph::wdfg('`', 0x60c060), "weeds")),
-            ('"', (FLAGS_TALL_GRASS,  Glyph::wdfg('"', 0x60c000), "tall grass")),
-            ('|', (FLAGS_TALL_GRASS,  Glyph::wdfg('|', 0x60c000), "reeds")),
-            ('+', (FLAGS_NONE,        Glyph::wdfg('+', 0xff6060), "a flower")),
-            ('~', (FLAGS_FRESH_WATER, Glyph::wdfg('~', 0x0080ff), "water")),
-            ('B', (FLAGS_BERRY_TREE,  Glyph::wdfg('#', 0xc08000), "a berry tree")),
-            ('=', (FLAGS_NONE,        Glyph::wdfg('=', 0xff8000), "a bridge")),
-            ('R', (FLAGS_NONE,        Glyph::wdfg('.', 0xff8000), "a path")),
+            ('#', FLAGS_BLOCKED,     ('#', 0x106000), "a tree"),
+            ('.', FLAGS_NONE,        ('.', 0xe0ffc0), "grass"),
+            (',', FLAGS_NONE,        ('`', 0x60c060), "weeds"),
+            ('"', FLAGS_TALL_GRASS,  ('"', 0x60c000), "tall grass"),
+            ('|', FLAGS_TALL_GRASS,  ('|', 0x60c000), "reeds"),
+            ('+', FLAGS_NONE,        ('+', 0xff6060), "a flower"),
+            ('~', FLAGS_FRESH_WATER, ('~', 0x0080ff), "water"),
+            ('B', FLAGS_BERRY_TREE,  ('#', 0xc08000), "a berry tree"),
+            ('=', FLAGS_NONE,        ('=', 0xff8000), "a bridge"),
+            ('R', FLAGS_NONE,        ('.', 0xff8000), "a path"),
         ];
         let mut result = HashMap::default();
-        for (ch, (flags, glyph, description)) in items {
+        for (ch, flags, glyph, description) in items {
+            let glyph = Glyph::wdfg(glyph.0, glyph.1);
             result.insert(ch, Tile { flags, glyph, description });
         }
         result
@@ -145,6 +142,10 @@ pub fn show_item(item: &Item) -> Glyph {
         Item::Berry  => Glyph::wdfg('*', 0xc08000),
         Item::Corpse => Glyph::wdfg('%', 0xffffff),
     }
+}
+
+pub fn capitalize(mut line: String) -> String {
+    line.get_mut(..1).map(|x| x.make_ascii_uppercase()); line
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -555,6 +556,8 @@ fn advance_turn(board: &mut Board) -> Option<EID> {
 
 // Action
 
+pub struct AttackAction { pub attack: &'static Attack, pub target: Point }
+
 pub struct EatAction { pub target: Point, pub item: Option<Item> }
 
 pub struct MoveAction { pub look: Point, pub step: Point, pub turns: f64 }
@@ -566,7 +569,7 @@ pub enum Action {
     WaitForInput,
     Look(Point),
     Move(MoveAction),
-    Attack(Point),
+    Attack(AttackAction),
     Drink(Point),
     Eat(EatAction),
 }
@@ -584,8 +587,9 @@ impl ActionResult {
     fn success_turns(turns: f64) -> Self { Self { success: true,  moves: 0., turns } }
 }
 
-fn can_attack(board: &Board, entity: &Entity, target: Point, range: i32) -> bool {
+fn can_attack(board: &Board, entity: &Entity, action: &AttackAction) -> bool {
     let (known, source) = (&entity.known, entity.pos);
+    let (range, target) = (action.attack.range, action.target);
     if (source - target).len_nethack() > range { return false; }
     if !known.get(target).visible() { return false; }
     if source == target { return false; }
@@ -685,7 +689,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             // Moving diagonally is slower. Moving quickly is noisier.
             let noisy = turns <= 1.;
             let turns = step.len_l2() * turns;
-            let color = entity.glyph.fg();
+            let color = entity.species.glyph.fg();
             let player = entity.player;
             let source = entity.pos;
             let target = source + step;
@@ -731,10 +735,11 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 }
             }
         }
-        Action::Attack(target) => {
+        Action::Attack(action) => {
             let entity = &state.board.entities[eid];
-            let (predator, range, source) = (entity.predator, entity.range, entity.pos);
-            if !can_attack(&state.board, entity, target, range) {
+            let source = entity.pos;
+            let AttackAction { attack, target } = action;
+            if !can_attack(&state.board, entity, &action) {
                 return ActionResult::failure();
             }
 
@@ -754,7 +759,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             // Deliver the AttackEvent to each entity in the list.
             let data = EventData::Attack(AttackEvent { target: None });
             let mut event = state.board.create_event(eid, data, source);
-            let mut player_saw_target = false;
+            let mut logged = false;
             for Sighting { eid: oid, source_seen, target_seen } in sightings {
                 if oid == eid { continue; }
 
@@ -767,19 +772,18 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 let entities = &state.board.entities;
                 let attacker = if source_seen { Some(&entities[eid]) } else { None };
                 let attacked = if target_seen { tid.map(|x| &entities[x]) } else { None };
-                player_saw_target = attacked.is_some();
+                logged = true;
 
-                let mut desc = if let Some(a) = attacker && let Some(b) = attacked {
-                    format!("{} attacked {} with Headbutt!", a.desc(), b.desc())
+                let line = if let Some(a) = attacker && let Some(b) = attacked {
+                    format!("{} attacked {} with {}!", a.desc(), b.desc(), attack.name)
                 } else if let Some(a) = attacker {
-                    format!("{} used Headbutt!", a.desc())
+                    format!("{} used {}!", a.desc(), attack.name)
                 } else if let Some(b) = attacked {
                     format!("Something attacked {}!", b.desc())
                 } else {
                     "You hear fighting nearby!".into()
                 };
-                if let Some(x) = desc.get_mut(..1) { x.make_ascii_uppercase(); }
-                state.ui.log.log(desc);
+                state.ui.log.log(capitalize(line));
             }
 
             let cb = move |board: &mut Board, env: &mut UpdateEnv| {
@@ -787,21 +791,19 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
                 let cb = move |board: &mut Board, env: &mut UpdateEnv| {
                     let Some(target) = board.entities.get_mut(tid) else { return; };
+                    let (pos, desc) = (target.pos, target.desc());
 
-                    let mut damage = 1;
-                    let strong = predator && !target.predator;
-                    if strong && env.rng.gen::<f64>() < 0.5 { damage *= 2; }
+                    let critted = env.rng.gen_range(0..16) == 0;
+                    let factor = if critted { 1.5 } else { 1. } * env.rng.gen_range(0.85..=1.);
+                    let damage = (factor * attack.damage as f64).round() as i32;
+                    let fainted = target.cur_hp <= damage;
 
-                    if target.cur_hp > damage {
+                    if fainted {
+                        board.remove_entity(tid);
+                        board.add_item(pos, Item::Corpse);
+                    } else {
                         target.cur_hp -= damage;
-                        return;
                     }
-
-                    let pos = target.pos;
-                    let desc = target.desc();
-
-                    board.remove_entity(tid);
-                    board.add_item(pos, Item::Corpse);
 
                     let noise = Noise { point: pos, volume: ATTACK_NOISE_RADIUS };
                     let seen = detect(board, &noise, env);
@@ -810,22 +812,20 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                     }).collect();
 
                     for oid in seen {
-                        board.remove_known_entity(oid, tid);
+                        if fainted { board.remove_known_entity(oid, tid); }
                         if !board.entities[oid].player { continue; }
 
-                        if !player_saw_target {
-                            env.ui.log.log(format!("Something attacked {}!", desc));
-                        }
-                        let mut desc = format!("{} fainted!", desc);
-                        if let Some(x) = desc.get_mut(..1) { x.make_ascii_uppercase(); }
-                        env.ui.log.log_append(desc);
+                        let log = &mut env.ui.log;
+                        if !logged { log.log(format!("Something attacked {}!", desc)); }
+                        if critted { log.log_append("A critical hit!"); }
+                        if fainted { log.log_append(capitalize(format!("{} fainted!", desc))); }
                     }
                 };
                 board.add_effect(apply_damage(board, target, Box::new(cb)), env);
             };
 
             let rng = &mut state.env.rng;
-            let effect = effect::HeadbuttEffect(&state.board, rng, source, target);
+            let effect = (attack.effect)(&state.board, rng, source, target);
             state.add_effect(apply_effect(effect, FT::Hit, Box::new(cb)));
             ActionResult::success_moves(1.)
         }
@@ -850,7 +850,7 @@ type CB = Box<dyn Fn(&mut Board, &mut UpdateEnv)>;
 fn apply_flash<T: Into<Color>>(board: &Board, target: Point, color: T, callback: CB) -> Effect {
     let cell = board.get_cell(target);
     let glyph = if let Some(x) = cell.eid {
-        board.entities[x].glyph
+        board.entities[x].species.glyph
     } else if let Some(x) = cell.items.last() {
         show_item(x)
     } else {
@@ -869,7 +869,7 @@ fn apply_damage(board: &Board, target: Point, callback: CB) -> Effect {
     let eid = board.get_cell(target).eid;
     let Some(eid) = eid else { return Effect::default(); };
 
-    let glyph = board.entities[eid].glyph;
+    let glyph = board.entities[eid].species.glyph;
     let flash = glyph.with_fg(Color::black()).with_bg(0xff0000);
     let particle = effect::Particle { glyph: flash, point: target };
     let restored = effect::Particle { glyph, point: target };
@@ -1074,9 +1074,8 @@ impl State {
         }
 
         let input = Action::WaitForInput;
-        let glyph = Glyph::wdfg('@', 0xffffff);
-        let (player, speed) = (true, SPEED_PC_);
-        let args = EntityArgs { glyph, player, predator: false, pos, speed };
+        let (player, species) = (true, Species::get("Human"));
+        let args = EntityArgs { pos, player, predator: false, species };
         let player = board.add_entity(&args, &mut env);
 
         let pos = |board: &Board, rng: &mut RNG| {
@@ -1089,13 +1088,8 @@ impl State {
         for i in 0..(NUM_PREDATORS + NUM_PREY) {
             if let Some(x) = pos(&board, &mut env.rng) {
                 let predator = i < NUM_PREDATORS;
-                let (player, speed) = (false, SPEED_NPC);
-                let glyph = if predator {
-                    Glyph::wdfg('R', 0xa060ff)
-                } else {
-                    Glyph::wdfg('P', 0xd0a070)
-                };
-                let args = EntityArgs { glyph, player, predator, pos: x, speed };
+                let species = Species::get(if predator { "Rattata" } else { "Pidgey" });
+                let args = EntityArgs { pos: x, player: false, predator, species };
                 board.add_entity(&args, &mut env);
             }
         }
