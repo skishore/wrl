@@ -9,7 +9,7 @@ use rand_distr::num_traits::Pow;
 use crate::base::{HashMap, LOS, Point, Slice, RNG, dirs, sample, weighted};
 use crate::entity::{Entity, EID};
 use crate::game::{MOVE_NOISE_RADIUS, Item, move_ready};
-use crate::game::{Action, EatAction, MoveAction};
+use crate::game::{Action, AttackAction, EatAction, MoveAction};
 use crate::knowledge::{CellKnowledge, Knowledge, EntityKnowledge};
 use crate::knowledge::{Event, EventData, Scent, Sense, Timedelta, Timestamp, UID};
 use crate::list::{Handle, List};
@@ -978,7 +978,7 @@ impl Strategy for ChaseStrategy {
         let ChaseTarget { bias, last, time, steps } = *self.target.as_ref()?;
         let age = ctx.known.time - time;
         let visible = age == Timedelta::default();
-        if visible { return Some(attack_target(ctx, last)); }
+        if visible && let Some(x) = attack_target(ctx, last) { return Some(x); }
 
         let turns = if age >= MIN_SEARCH_TIME { WANDER_TURNS } else { 1. };
         if let Some(x) = self.path.follow(ctx, turns) { return Some(x); }
@@ -1203,13 +1203,19 @@ impl Strategy for LookForThreatsStrategy {
 
 // Helpers for ChaseStrategy
 
-fn attack_target(ctx: &mut Context, target: Point) -> Action {
+fn attack_target(ctx: &mut Context, target: Point) -> Option<Action> {
     let Context { entity, known, pos: source, .. } = *ctx;
-    if source == target { return Action::Idle; }
+    if source == target { return None; }
 
-    let range = entity.range;
+    let attacks = &ctx.entity.species.attacks;
+    if attacks.is_empty() { return None; }
+
+    let attack = sample(attacks, ctx.env.rng);
+    let range = attack.range;
     let valid = |x| has_los(x, target, known, range);
-    if move_ready(entity) && valid(source) { return Action::Attack(target); }
+    if move_ready(entity) && valid(source) {
+        return Some(Action::Attack(AttackAction { attack, target }));
+    }
 
     path_to_target(ctx, target, range, valid)
 }
@@ -1226,7 +1232,7 @@ fn has_los(source: Point, target: Point, known: &Knowledge, range: i32) -> bool 
 }
 
 fn path_to_target<F: Fn(Point) -> bool>(
-        ctx: &mut Context, target: Point, range: i32, valid: F) -> Action {
+        ctx: &mut Context, target: Point, range: i32, valid: F) -> Option<Action> {
     let Context { known, pos: source, .. } = *ctx;
     let rng = &mut ctx.env.rng;
     let check = |p: Point| known.get(p).status();
@@ -1258,18 +1264,16 @@ fn path_to_target<F: Fn(Point) -> bool>(
             if check(source + x) != Status::Free { continue; }
             if valid(source + x) { dirs.push(x); }
         }
-        return pick(&dirs, rng);
+        return Some(pick(&dirs, rng));
     }
 
     // Else, pick a direction which brings us in view.
     let result = BFS(source, &valid, BFS_LIMIT_ATTACK, check);
-    if let Some(x) = result && !x.dirs.is_empty() { return pick(&x.dirs, rng); }
+    if let Some(x) = result && !x.dirs.is_empty() { return Some(pick(&x.dirs, rng)); }
 
     // Else, move towards the target.
-    let path = AStar(source, target, ASTAR_LIMIT_ATTACK, check);
-    let dir = path.and_then(
-        |x| if x.is_empty() { None } else { Some(x[0] - source) });
-    step(dir.unwrap_or_else(|| *sample(&dirs::ALL, rng)))
+    let path = AStar(source, target, ASTAR_LIMIT_ATTACK, check)?;
+    Some(step(*path.first()? - source))
 }
 
 fn search_around(ctx: &mut Context, path: &mut CachedPath, age: Timedelta,
