@@ -2,6 +2,7 @@
 #![feature(test)]
 
 mod ai;
+mod dex;
 mod effect;
 mod entity;
 mod knowledge;
