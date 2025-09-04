@@ -9,7 +9,7 @@ use rand_distr::num_traits::Pow;
 use crate::base::{HashMap, LOS, Point, Slice, RNG, dirs, sample, weighted};
 use crate::entity::{Entity, EID};
 use crate::game::{MOVE_NOISE_RADIUS, Item, move_ready};
-use crate::game::{Action, AttackAction, EatAction, MoveAction};
+use crate::game::{Action, AttackAction, CallForHelpAction, EatAction, MoveAction};
 use crate::knowledge::{CellKnowledge, Knowledge, EntityKnowledge};
 use crate::knowledge::{Event, EventData, Scent, Sense, Timedelta, Timestamp, UID};
 use crate::list::{Handle, List};
@@ -47,6 +47,9 @@ const FLIGHT_PATH_TURNS: i32 = 8;
 const MIN_FLIGHT_TURNS: i32 = 16;
 const MAX_FLIGHT_TURNS: i32 = 64;
 const ACTIVE_THREAT_TIME: Timedelta = Timedelta::from_seconds(96.);
+
+const CALL_FOR_HELP_LIMIT: Timedelta = Timedelta::from_seconds(4.);
+const CALL_FOR_HELP_RETRY: Timedelta = Timedelta::from_seconds(24.);
 
 const MIN_SEARCH_TIME: Timedelta = Timedelta::from_seconds(24.);
 const MAX_SEARCH_TIME: Timedelta = Timedelta::from_seconds(48.);
@@ -187,6 +190,7 @@ struct Threat {
     time: Timestamp,
     sense: Sense,
     status: ThreatStatus,
+    called: Timestamp,
 
     // Stats:
     hp: f64,
@@ -221,6 +225,7 @@ impl Threat {
             time: Default::default(),
             sense: Sense::Sight,
             status: ThreatStatus::Unknown,
+            called: Default::default(),
 
             // Stats:
             hp: 1.,
@@ -245,6 +250,7 @@ impl Threat {
         slice.write_str(&format!("      pos: {:?}", self.pos)).newline();
         slice.write_str(&format!("      sense: {:?}", self.sense)).newline();
         slice.write_str(&format!("      status: {:?}", self.status)).newline();
+        slice.write_str(&format!("      called: {:?}", time - self.called)).newline();
         slice.write_str(&format!("      hp: {:.2}", self.hp)).newline();
         slice.write_str(&format!("      delta: {}", self.delta)).newline();
         slice.write_str(&format!("      flags: {}", flags.join(" | "))).newline();
@@ -267,6 +273,10 @@ impl Threat {
         match &event.data {
             EventData::Attack(x) => if x.target == Some(me.eid) {
                 self.status = min(self.status, ThreatStatus::Hostile);
+            },
+            EventData::CallForHelp(_) => {
+                if !me.predator { self.status = min(self.status, ThreatStatus::Friendly); }
+                self.called = event.time;
             },
             EventData::Forget(_) => {},
             EventData::Move(_) => {},
@@ -902,6 +912,48 @@ impl Strategy for TrackStrategy {
 
 //////////////////////////////////////////////////////////////////////////////
 
+#[derive(Default)]
+struct CallForHelpStrategy {}
+
+impl Strategy for CallForHelpStrategy {
+    fn get_path(&self) -> &[Point] { &[] }
+
+    fn debug(&self, slice: &mut Slice, _: Timestamp) {
+        slice.write_str("CallForHelp").newline();
+    }
+
+    fn bid(&mut self, ctx: &mut Context, _: bool) -> (Priority, i64) {
+        let state = ctx.shared.threats.state;
+        let fight = state == FightOrFlight::Fight;
+        let fight_for_life = state != FightOrFlight::Safe;
+        if !fight_for_life { return (Priority::Skip, 0); }
+
+        let mut call = false;
+        let time = ctx.shared.turn_time;
+        for x in &ctx.shared.threats.threats {
+            if time - x.time > CALL_FOR_HELP_LIMIT { break; }
+            if x.status != ThreatStatus::Friendly { continue; }
+            if time - x.called > CALL_FOR_HELP_RETRY { call = true; }
+        }
+        if !call { return (Priority::Skip, 0); }
+
+        (Priority::Survive, if fight { 0 } else { 1 })
+    }
+
+    fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
+        let time = ctx.shared.turn_time;
+        for x in &mut ctx.shared.threats.threats {
+            if time - x.time > CALL_FOR_HELP_LIMIT { break; }
+            if x.status == ThreatStatus::Friendly { x.called = time; }
+        }
+        Some(Action::CallForHelp(CallForHelpAction { targets: vec![] }))
+    }
+
+    fn reject(&mut self) {}
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 #[derive(Debug)]
 struct ChaseTarget {
     bias: Point,
@@ -970,7 +1022,7 @@ impl Strategy for ChaseStrategy {
         self.target = Some(ChaseTarget { bias, last, time, steps });
 
         let priority = if fight_for_life { Priority::Survive } else { Priority::Hunt };
-        let strength = if fight_for_life && fight { 0 } else { 1 };
+        let strength = if fight_for_life && fight { 1 } else { 2 };
         (priority, strength)
     }
 
@@ -1114,7 +1166,7 @@ impl Strategy for FlightStrategy {
         } else {
             self.turn_limit
         };
-        (Priority::Survive, if fight { 1 } else { 0 })
+        (Priority::Survive, if fight { 2 } else { 0 })
     }
 
     fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
@@ -1512,6 +1564,7 @@ impl AIState {
             //Box::new(TrackStrategy::default()),
             Box::new(ChaseStrategy::default()),
             Box::new(FlightStrategy::default()),
+            Box::new(CallForHelpStrategy::default()),
             Box::new(LookForThreatsStrategy::default()),
             //Box::new(RestStrategy::default()),
             Box::new(BasicNeedsStrategy::new(BasicNeed::EatMeat)),

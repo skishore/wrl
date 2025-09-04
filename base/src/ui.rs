@@ -767,7 +767,7 @@ impl UI {
         // Render any animation that's currently running.
         if let Some(frame) = frame {
             for &effect::Particle { point, glyph } in frame {
-                if !known.get(point).visible() { continue; }
+                //if !known.get(point).visible() { continue; }
                 let Point(x, y) = point - offset;
                 slice.set(Point(2 * x, y), glyph);
             }
