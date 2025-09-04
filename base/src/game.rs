@@ -13,8 +13,8 @@ use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs};
 use crate::dex::{Attack, Species};
 use crate::effect::{Effect, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
-use crate::knowledge::{Knowledge, Scent, Timedelta, Timestamp};
-use crate::knowledge::{AttackEvent, EventData, MoveEvent, Sense, Event};
+use crate::knowledge::{Knowledge, Scent, Sense, Timedelta, Timestamp};
+use crate::knowledge::{AttackEvent, CallForHelpEvent, Event, EventData, MoveEvent};
 use crate::mapgen::legacy_mapgen_with_size as mapgen;
 use crate::pathing::Status;
 use crate::shadowcast::{INITIAL_VISIBILITY, VISIBILITY_LOSSES, Vision, VisionArgs};
@@ -37,7 +37,7 @@ const VISIBILITY_LOSS: i32 = VISIBILITY_LOSSES[FOV_RADIUS_IN_TALL_GRASS - 1];
 const LIGHT: Light = Light::Sun(Point(2, 0));
 const WEATHER: Weather = Weather::None;
 const NUM_PREDATORS: i32 = 1;
-const NUM_PREY: i32 = 3;
+const NUM_PREY: i32 = 4;
 
 const UI_DAMAGE_FLASH: i32 = 6;
 const UI_DAMAGE_TICKS: i32 = 6;
@@ -565,6 +565,8 @@ fn advance_turn(board: &mut Board) -> Option<EID> {
 
 pub struct AttackAction { pub attack: &'static Attack, pub target: Point }
 
+pub struct CallForHelpAction { pub targets: Vec<Point> }
+
 pub struct EatAction { pub target: Point, pub item: Option<Item> }
 
 pub struct MoveAction { pub look: Point, pub step: Point, pub turns: f64 }
@@ -577,6 +579,7 @@ pub enum Action {
     Look(Point),
     Move(MoveAction),
     Attack(AttackAction),
+    CallForHelp(CallForHelpAction),
     Drink(Point),
     Eat(EatAction),
 }
@@ -684,6 +687,33 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 board.remove_item(target, item);
             });
             board.add_effect(apply_flash(board, target, color, cb), &mut state.env);
+            ActionResult::success()
+        }
+        Action::CallForHelp(CallForHelpAction { targets: _ }) => {
+            let point = entity.pos;
+            let noise = Noise { cause: Some(eid), point, volume: FOV_RADIUS_NPC };
+            let sightings = get_sightings(&state.board, &noise, &mut state.env);
+
+            // Deliver a CallForHelpEvent to each entity that heard the call.
+            let data = EventData::CallForHelp(CallForHelpEvent {});
+            let mut event = state.board.create_event(eid, data, point);
+            for Sighting { eid: oid, source_seen: seen, .. } in sightings {
+                event.sense = if seen { Sense::Sight } else { Sense::Sound };
+                state.board.observe_event(oid, &event, &mut state.env);
+            }
+
+            let color = 0x00ffff;
+            let board = &mut state.board;
+            let mut effect = Effect::default();
+            for _ in 0..3 {
+                let cb = Box::new(|_: &mut Board, _: &mut UpdateEnv| {});
+                effect = Effect::serial(vec![
+                    effect,
+                    apply_flash(board, point, color, cb),
+                    Effect::pause(UI_DAMAGE_TICKS),
+                ]);
+            }
+            board.add_effect(effect, &mut state.env);
             ActionResult::success()
         }
         Action::Move(MoveAction { look, step, turns }) => {

@@ -136,6 +136,9 @@ pub enum Sense { Sight, Sound, Smell }
 pub struct AttackEvent { pub target: Option<EID> }
 
 #[derive(Clone, Debug, Default)]
+pub struct CallForHelpEvent {}
+
+#[derive(Clone, Debug, Default)]
 pub struct ForgetEvent {}
 
 #[derive(Clone, Debug)]
@@ -147,6 +150,7 @@ pub struct SpotEvent {}
 #[derive(Clone, Debug)]
 pub enum EventData {
     Attack(AttackEvent),
+    CallForHelp(CallForHelpEvent),
     Forget(ForgetEvent),
     Move(MoveEvent),
     Spot(SpotEvent),
