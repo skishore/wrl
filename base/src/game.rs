@@ -470,6 +470,7 @@ impl Board {
 // Event delivery
 
 struct Noise {
+    cause: Option<EID>,
     point: Point,
     volume: i32,
 }
@@ -483,10 +484,11 @@ struct Sighting {
 type Senses = HashMap<EID, Sense>;
 
 fn detect(board: &Board, noise: &Noise, env: &mut UpdateEnv) -> Senses {
-    let Noise { point, volume } = *noise;
+    let Noise { cause, point, volume } = *noise;
     let mut result = Senses::default();
 
     for (eid, entity) in &board.entities {
+        if cause == Some(eid) { continue; }
         if entity.asleep && volume == 1 && point != entity.pos { continue; }
 
         let seen = env.fov.can_see_entity_at(board, entity, point);
@@ -713,12 +715,12 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                     state.board.time = state.board.time.bump();
 
                     let volume = if noisy { MOVE_NOISE_RADIUS } else { 1 };
-                    let noise = Noise { point: source, volume };
+                    let noise = Noise { cause: Some(eid), point: source, volume };
                     let saw_source = detect(&state.board, &noise, &mut state.env);
 
                     state.board.move_entity(eid, target);
 
-                    let noise = Noise { point: target, volume };
+                    let noise = Noise { cause: Some(eid), point: target, volume };
                     let saw_target = detect(&state.board, &noise, &mut state.env);
                     let sightings = combine_views(&state.board, &saw_source, &saw_target);
 
@@ -726,8 +728,6 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                     let data = EventData::Move(MoveEvent { from: source });
                     let mut event = state.board.create_event(eid, data, target);
                     for Sighting { eid: oid, source_seen, target_seen } in sightings {
-                        if oid == eid { continue; }
-
                         let seen = source_seen || target_seen;
                         event.sense = if seen { Sense::Sight } else { Sense::Sound };
                         state.board.observe_event(oid, &event, &mut state.env);
@@ -750,14 +750,15 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
             state.board.time = state.board.time.bump();
 
-            let noise = Noise { point: source, volume: ATTACK_NOISE_RADIUS };
+            let volume = ATTACK_NOISE_RADIUS;
+            let noise = Noise { cause: Some(eid), point: source, volume };
             let saw_source = detect(&state.board, &noise, &mut state.env);
 
             let tid = state.board.get_cell(target).eid;
             let entity = &mut state.board.entities[eid];
             face_direction(entity, target - source);
 
-            let noise = Noise { point: target, volume: ATTACK_NOISE_RADIUS };
+            let noise = Noise { cause: Some(eid), point: target, volume };
             let saw_target = detect(&state.board, &noise, &mut state.env);
             let sightings = combine_views(&state.board, &saw_source, &saw_target);
 
@@ -766,8 +767,6 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let mut event = state.board.create_event(eid, data, source);
             let mut logged = false;
             for Sighting { eid: oid, source_seen, target_seen } in sightings {
-                if oid == eid { continue; }
-
                 let target = if target_seen { tid } else { None };
                 event.data = EventData::Attack(AttackEvent { target });
                 event.sense = if source_seen { Sense::Sight } else { Sense::Sound };
@@ -810,12 +809,11 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                         target.cur_hp -= damage;
                     }
 
-                    let noise = Noise { point: pos, volume: ATTACK_NOISE_RADIUS };
+                    let volume = ATTACK_NOISE_RADIUS;
+                    let noise = Noise { cause: Some(tid), point: pos, volume };
                     let sightings = get_sightings(board, &noise, env);
 
                     for Sighting { eid: oid, source_seen: seen, .. } in sightings {
-                        if oid == tid { continue; }
-
                         if fainted { board.remove_known_entity(oid, tid); }
                         if !seen || !board.entities[oid].player { continue; }
 
