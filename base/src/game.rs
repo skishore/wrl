@@ -513,6 +513,11 @@ fn combine_views(board: &Board, saw_source: &Senses, saw_target: &Senses) -> Vec
     result
 }
 
+fn get_sightings(board: &Board, noise: &Noise, env: &mut UpdateEnv) -> Vec<Sighting> {
+    let seen = detect(board, noise, env);
+    combine_views(board, &seen, &Default::default())
+}
+
 //////////////////////////////////////////////////////////////////////////////
 
 // Turn-taking
@@ -806,14 +811,13 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                     }
 
                     let noise = Noise { point: pos, volume: ATTACK_NOISE_RADIUS };
-                    let seen = detect(board, &noise, env);
-                    let seen: Vec<_> = board.entities.iter().filter_map(|(oid, _)| {
-                        if *seen.get(&oid)? == Sense::Sight { Some(oid) } else { None }
-                    }).collect();
+                    let sightings = get_sightings(board, &noise, env);
 
-                    for oid in seen {
+                    for Sighting { eid: oid, source_seen: seen, .. } in sightings {
+                        if oid == tid { continue; }
+
                         if fainted { board.remove_known_entity(oid, tid); }
-                        if !board.entities[oid].player { continue; }
+                        if !seen || !board.entities[oid].player { continue; }
 
                         let log = &mut env.ui.log;
                         if !logged { log.log(format!("Something attacked {}!", desc)); }
