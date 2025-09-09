@@ -190,7 +190,7 @@ struct Threat {
     time: Timestamp,
     sense: Sense,
     status: ThreatStatus,
-    called: Timestamp,
+    combat: Timestamp,
 
     // Stats:
     hp: f64,
@@ -214,8 +214,13 @@ struct ThreatState {
     reset: bool,
     state: FightOrFlight,
     our_strength: f64,
+    call_strength: f64,
     their_strength: f64,
     win_probability: f64,
+
+    // Calling for help.
+    last_call: Timestamp,
+    call_for_help: bool,
 }
 
 impl Threat {
@@ -225,7 +230,7 @@ impl Threat {
             time: Default::default(),
             sense: Sense::Sight,
             status: ThreatStatus::Unknown,
-            called: Default::default(),
+            combat: Default::default(),
 
             // Stats:
             hp: 1.,
@@ -250,7 +255,7 @@ impl Threat {
         slice.write_str(&format!("      pos: {:?}", self.pos)).newline();
         slice.write_str(&format!("      sense: {:?}", self.sense)).newline();
         slice.write_str(&format!("      status: {:?}", self.status)).newline();
-        slice.write_str(&format!("      called: {:?}", time - self.called)).newline();
+        slice.write_str(&format!("      combat: {:?}", time - self.combat)).newline();
         slice.write_str(&format!("      hp: {:.2}", self.hp)).newline();
         slice.write_str(&format!("      delta: {}", self.delta)).newline();
         slice.write_str(&format!("      flags: {}", flags.join(" | "))).newline();
@@ -260,8 +265,12 @@ impl Threat {
         // No need to update any fields that we unconditionally update in
         // update_for_event, since we merge right before processing an event.
         self.sense = other.sense;
-        self.status = min(self.status, other.status);
         self.seen |= other.seen;
+        self.update_status(other.status);
+    }
+
+    fn update_status(&mut self, status: ThreatStatus) {
+        self.status = min(self.status, status);
     }
 
     fn update_for_event(&mut self, me: &Entity, event: &Event) {
@@ -271,12 +280,14 @@ impl Threat {
         self.asleep = false;
 
         match &event.data {
-            EventData::Attack(x) => if x.target == Some(me.eid) {
-                self.status = min(self.status, ThreatStatus::Hostile);
+            EventData::Attack(x) => {
+                let attacked = x.target == Some(me.eid);
+                if attacked { self.update_status(ThreatStatus::Hostile); }
+                self.combat = event.time;
             },
             EventData::CallForHelp(_) => {
-                if !me.predator { self.status = min(self.status, ThreatStatus::Friendly); }
-                self.called = event.time;
+                if !me.predator { self.update_status(ThreatStatus::Friendly); }
+                self.combat = event.time;
             },
             EventData::Forget(_) => {},
             EventData::Move(_) => {},
@@ -304,7 +315,7 @@ impl Threat {
         } else {
             ThreatStatus::Neutral
         };
-        self.status = min(self.status, status);
+        self.update_status(status);
     }
 }
 
@@ -315,8 +326,11 @@ impl ThreatState {
         slice.write_str(&format!("    reset: {}", self.reset)).newline();
         slice.write_str(&format!("    state: {:?}", self.state)).newline();
         slice.write_str(&format!("    our_strength: {:.2}", self.our_strength)).newline();
+        slice.write_str(&format!("    call_strength: {:.2}", self.call_strength)).newline();
         slice.write_str(&format!("    their_strength: {:.2}", self.their_strength)).newline();
         slice.write_str(&format!("    win_probability: {:.2}", self.win_probability)).newline();
+        slice.write_str(&format!("    call_for_help: {}", self.call_for_help)).newline();
+        slice.write_str(&format!("    last_call: {:?}", time - self.last_call)).newline();
         slice.newline();
         for x in &self.threats { x.debug(slice, time) }
     }
@@ -361,26 +375,33 @@ impl ThreatState {
             active = false;
         }
 
-        let strength = |x: &Threat| { 2f64.powi(x.delta.signum()) * x.hp };
+        let strength = |x: &Threat| { 1.5f64.powi(x.delta.signum()) * x.hp };
         let mut hidden_count = max(hidden_hostile - seen_hostile, 0);
         let mut our_strength = me.hp_fraction();
+        let mut call_strength = our_strength;
         let mut their_strength = 0.;
 
         for x in &self.threats {
-            let age = me.known.time - x.time;
-            if age > ACTIVE_THREAT_TIME { break; }
+            if me.known.time - x.time > ACTIVE_THREAT_TIME { break; }
 
             if x.status == ThreatStatus::Hostile {
                 if !x.seen && hidden_count == 0 { continue; }
                 if !x.seen { hidden_count -= 1; }
                 their_strength += strength(x);
             } else if x.status == ThreatStatus::Friendly {
-                let decay = 1. - age.nsec() as f64 / ACTIVE_THREAT_TIME.nsec() as f64;
-                our_strength += decay * strength(x);
+                let base = strength(x);
+                let delay = me.known.time - x.combat;
+                let ratio = delay.nsec() as f64 / ACTIVE_THREAT_TIME.nsec() as f64;
+                let decay = if ratio > 1. { 0. } else { 1. - ratio };
+                our_strength += base * decay;
+
+                let can_call = me.known.time - x.time <= CALL_FOR_HELP_LIMIT;
+                call_strength += if can_call { base } else { base * decay };
             }
         }
 
         self.our_strength = our_strength;
+        self.call_strength = call_strength;
         self.their_strength = their_strength;
         self.win_probability = our_strength / (our_strength + their_strength);
         let p = self.win_probability;
@@ -392,6 +413,14 @@ impl ThreatState {
             if p < 0.4 { self.state = FightOrFlight::Flight; }
         } else {
             self.state = FightOrFlight::Safe;
+        }
+
+        self.call_for_help = false;
+        if self.state == FightOrFlight::Flight &&
+           (me.known.time - self.last_call) > CALL_FOR_HELP_RETRY {
+            let win_post_call = call_strength / (call_strength + their_strength);
+            self.call_for_help = win_post_call > 0.6;
+            if self.call_for_help { self.state = FightOrFlight::Fight; }
         }
 
         debug_assert!(self.check_invariants());
@@ -923,20 +952,10 @@ impl Strategy for CallForHelpStrategy {
     }
 
     fn bid(&mut self, ctx: &mut Context, _: bool) -> (Priority, i64) {
-        let state = ctx.shared.threats.state;
-        let fight = state == FightOrFlight::Fight;
-        let fight_for_life = state != FightOrFlight::Safe;
-        if !fight_for_life { return (Priority::Skip, 0); }
+        let threats = &ctx.shared.threats;
+        if !threats.call_for_help { return (Priority::Skip, 0); }
 
-        let mut call = false;
-        let time = ctx.shared.turn_time;
-        for x in &ctx.shared.threats.threats {
-            if time - x.time > CALL_FOR_HELP_LIMIT { break; }
-            if x.status != ThreatStatus::Friendly { continue; }
-            if time - x.called > CALL_FOR_HELP_RETRY { call = true; }
-        }
-        if !call { return (Priority::Skip, 0); }
-
+        let fight = threats.state == FightOrFlight::Fight;
         (Priority::Survive, if fight { 0 } else { 1 })
     }
 
@@ -944,8 +963,9 @@ impl Strategy for CallForHelpStrategy {
         let time = ctx.shared.turn_time;
         for x in &mut ctx.shared.threats.threats {
             if time - x.time > CALL_FOR_HELP_LIMIT { break; }
-            if x.status == ThreatStatus::Friendly { x.called = time; }
+            if x.status == ThreatStatus::Friendly { x.combat = time; }
         }
+        ctx.shared.threats.last_call = time;
         Some(Action::CallForHelp(CallForHelpAction { targets: vec![] }))
     }
 
