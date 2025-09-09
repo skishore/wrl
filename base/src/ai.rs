@@ -974,6 +974,16 @@ impl Strategy for CallForHelpStrategy {
 
 //////////////////////////////////////////////////////////////////////////////
 
+// TODO(shaunak): If we're fleeing, spot a potential ally, call for help, and
+// then want to fight, we may start the chase "running away" because of the
+// bias towards our current direction.
+//
+// TODO(shaunak): If an entity is killed and we don't see it die, we may keep
+// hunting for it. That's okay, but if we run out of chase time (48s), we may
+// switch to fleeing from it (flight time goes up to 64 turns or 64-91s).
+//
+// Instead, if we're in FightOrFlight mode Fight and we time out, we should
+// end with an assess (like Flight already does) and then mark targets safe.
 #[derive(Debug)]
 struct ChaseTarget {
     bias: Point,
