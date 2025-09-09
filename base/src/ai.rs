@@ -974,6 +974,16 @@ impl Strategy for CallForHelpStrategy {
 
 //////////////////////////////////////////////////////////////////////////////
 
+// TODO(shaunak): If we're fleeing, spot a potential ally, call for help, and
+// then want to fight, we may start the chase "running away" because of the
+// bias towards our current direction.
+//
+// TODO(shaunak): If an entity is killed and we don't see it die, we may keep
+// hunting for it. That's okay, but if we run out of chase time (48s), we may
+// switch to fleeing from it (flight time goes up to 64 turns or 64-91s).
+//
+// Instead, if we're in FightOrFlight mode Fight and we time out, we should
+// end with an assess (like Flight already does) and then mark targets safe.
 #[derive(Debug)]
 struct ChaseTarget {
     bias: Point,
@@ -1088,6 +1098,10 @@ impl FlightStrategy {
     }
 
     fn look(&mut self, ctx: &mut Context) -> Option<Action> {
+        // TODO(shaunak): look should fail if we can see the enemy and if we're
+        // not in a hidden cell, or if we are in a hidden cell but were still
+        // attacked. (The latter should cause us to flag the enemy as "we can't
+        // hide from this foe" - maybe they're psychic or can see in the dark?)
         let (pos, rng) = (ctx.pos, &mut ctx.env.rng);
         self.path.reset();
 
