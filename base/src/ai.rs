@@ -8,7 +8,7 @@ use rand_distr::num_traits::Pow;
 
 use crate::base::{HashMap, LOS, Point, Slice, RNG, dirs, sample, weighted};
 use crate::entity::{Entity, EID};
-use crate::game::{MOVE_NOISE_RADIUS, Item, move_ready};
+use crate::game::{MOVE_VOLUME, Item, move_ready};
 use crate::game::{Action, AttackAction, CallForHelpAction, EatAction, MoveAction};
 use crate::knowledge::{CellKnowledge, Knowledge, EntityKnowledge};
 use crate::knowledge::{Event, EventData, Scent, Sense, Timedelta, Timestamp, UID};
@@ -1346,7 +1346,7 @@ fn path_to_target<F: Fn(Point) -> bool>(
         let cell = known.get(target);
         let (shade, tile) = (cell.shade(), cell.tile());
         let obscured = shade || matches!(tile, Some(x) if x.limits_vision());
-        let distance = if obscured { 1 } else { min(range, MOVE_NOISE_RADIUS) };
+        let distance = if obscured { 1 } else { min(range, MOVE_VOLUME) };
 
         assert!(!dirs.is_empty());
         let scores: Vec<_> = dirs.iter().map(

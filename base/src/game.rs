@@ -44,8 +44,9 @@ const UI_DAMAGE_TICKS: i32 = 6;
 
 const SLOWED_TURNS: f64 = 2.;
 
-pub const ATTACK_NOISE_RADIUS: i32 = FOV_RADIUS_NPC;
-pub const MOVE_NOISE_RADIUS: i32 = 4;
+pub const ATTACK_VOLUME: i32 = FOV_RADIUS_NPC;
+pub const CALL_VOLUME: i32 = FOV_RADIUS_NPC;
+pub const MOVE_VOLUME: i32 = 4;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Input { Escape, BackTab, Char(char) }
@@ -687,7 +688,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
         }
         Action::CallForHelp(CallForHelpAction { look }) => {
             let point = entity.pos;
-            let noise = Noise { cause: Some(eid), point, volume: FOV_RADIUS_NPC };
+            let noise = Noise { cause: Some(eid), point, volume: CALL_VOLUME };
             let sightings = get_sightings(&state.board, &noise, &mut state.env);
 
             // Deliver a CallForHelpEvent to each entity that heard the call.
@@ -745,7 +746,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 Status::Free => {
                     state.board.time = state.board.time.bump();
 
-                    let volume = if noisy { MOVE_NOISE_RADIUS } else { 1 };
+                    let volume = if noisy { MOVE_VOLUME } else { 1 };
                     let noise = Noise { cause: Some(eid), point: source, volume };
                     let saw_source = detect(&state.board, &noise, &mut state.env);
 
@@ -781,7 +782,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
             state.board.time = state.board.time.bump();
 
-            let volume = ATTACK_NOISE_RADIUS;
+            let volume = ATTACK_VOLUME;
             let noise = Noise { cause: Some(eid), point: source, volume };
             let saw_source = detect(&state.board, &noise, &mut state.env);
 
@@ -840,7 +841,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                         target.cur_hp -= damage;
                     }
 
-                    let volume = ATTACK_NOISE_RADIUS;
+                    let volume = ATTACK_VOLUME;
                     let noise = Noise { cause: Some(tid), point: pos, volume };
                     let sightings = get_sightings(board, &noise, env);
 
