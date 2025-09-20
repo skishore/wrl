@@ -337,6 +337,8 @@ impl ThreatState {
 
     fn update(&mut self, me: &Entity, prev_time: Timestamp) {
         for event in &me.known.events {
+            // TODO(shaunak): Maybe only if it's a friendly call?
+            if let EventData::CallForHelp(_) = event.data { self.last_call = event.time; }
             let Some(threat) = self.get_by_event(me, event) else { continue };
             threat.update_for_event(me, event);
         }
@@ -961,12 +963,14 @@ impl Strategy for CallForHelpStrategy {
 
     fn accept(&mut self, ctx: &mut Context) -> Option<Action> {
         let time = ctx.shared.turn_time;
+        let look = ctx.shared.threats.hostile.first().map(
+            |x| x.pos - ctx.pos).unwrap_or(ctx.dir);
         for x in &mut ctx.shared.threats.threats {
             if time - x.time > CALL_FOR_HELP_LIMIT { break; }
             if x.status == ThreatStatus::Friendly { x.combat = time; }
         }
         ctx.shared.threats.last_call = time;
-        Some(Action::CallForHelp(CallForHelpAction { targets: vec![] }))
+        Some(Action::CallForHelp(CallForHelpAction { look }))
     }
 
     fn reject(&mut self) {}
@@ -974,10 +978,6 @@ impl Strategy for CallForHelpStrategy {
 
 //////////////////////////////////////////////////////////////////////////////
 
-// TODO(shaunak): If we're fleeing, spot a potential ally, call for help, and
-// then want to fight, we may start the chase "running away" because of the
-// bias towards our current direction.
-//
 // TODO(shaunak): If an entity is killed and we don't see it die, we may keep
 // hunting for it. That's okay, but if we run out of chase time (48s), we may
 // switch to fleeing from it (flight time goes up to 64 turns or 64-91s).
