@@ -79,6 +79,8 @@ impl Entity {
         }
     }
 
+    // Getters
+
     pub fn desc(&self) -> String {
         let name = self.species.name;
         if self.player { "you".into() } else { format!("the wild {}", name) }
@@ -107,6 +109,12 @@ impl Entity {
         let num = (-l2_squared / (2. * variance)).exp();
         let den = (std::f64::consts::TAU * variance).sqrt();
         base * num / den * dropoff.powi(age as i32)
+    }
+
+    // Mutators
+
+    pub fn face_direction(&mut self, dir: Point) {
+        if dir != dirs::NONE { self.dir = dir; }
     }
 }
 

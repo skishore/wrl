@@ -8,8 +8,10 @@ use crate::game::{Board, UpdateEnv};
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub enum FT { Fire, Ice, Hit, Summon, Withdraw }
 
+pub type CB = Box<dyn Fn(&mut Board, &mut UpdateEnv)>;
+
 pub enum Event {
-    Callback { frame: i32, callback: Box<dyn Fn(&mut Board, &mut UpdateEnv)> },
+    Callback { frame: i32, callback: CB },
     Other { frame: i32, point: Point, what: FT },
 }
 
@@ -74,6 +76,11 @@ impl Effect {
             self.frames.push(Vec::new());
         }
         self.frames[frame as usize].push(particle);
+    }
+
+    pub fn sub_on_finished(&mut self, callback: CB) {
+        let frame = self.frames.len() as i32;
+        self.add_event(Event::Callback { frame, callback });
     }
 
     // Implementations for Effect::Constant, Effect::Pause, etc.

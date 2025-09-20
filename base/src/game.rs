@@ -11,7 +11,7 @@ use crate::ai::{AIEnv, AIState};
 use crate::base::{Buffer, Color, Glyph};
 use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs};
 use crate::dex::{Attack, Species};
-use crate::effect::{Effect, Frame, FT, self};
+use crate::effect::{CB, Effect, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
 use crate::knowledge::{Knowledge, Scent, Sense, Timedelta, Timestamp};
 use crate::knowledge::{AttackEvent, CallForHelpEvent, Event, EventData, MoveEvent};
@@ -565,7 +565,7 @@ fn advance_turn(board: &mut Board) -> Option<EID> {
 
 pub struct AttackAction { pub attack: &'static Attack, pub target: Point }
 
-pub struct CallForHelpAction { pub targets: Vec<Point> }
+pub struct CallForHelpAction { pub look: Point }
 
 pub struct EatAction { pub target: Point, pub item: Option<Item> }
 
@@ -612,10 +612,6 @@ fn can_attack(board: &Board, entity: &Entity, action: &AttackAction) -> bool {
     })
 }
 
-fn face_direction(entity: &mut Entity, dir: Point) {
-    if dir != dirs::NONE { entity.dir = dir; }
-}
-
 fn plan(state: &mut State, eid: EID) -> Action {
     let player = eid == state.player;
     if player { return replace(&mut state.input, Action::WaitForInput); }
@@ -652,14 +648,14 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             ActionResult::success()
         }
         Action::Look(dir) => {
-            face_direction(entity, dir);
+            entity.face_direction(dir);
             ActionResult::success()
         }
         Action::Drink(target) => {
             let dir = target - entity.pos;
             if dir.len_l1() > 1 { return ActionResult::failure(); }
 
-            face_direction(entity, dir);
+            entity.face_direction(dir);
             let okay = state.board.get_cell(target).tile.can_drink();
             if !okay { return ActionResult::failure(); }
 
@@ -672,7 +668,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let dir = target - entity.pos;
             if dir.len_l1() > 1 { return ActionResult::failure(); }
 
-            face_direction(entity, dir);
+            entity.face_direction(dir);
             let cell = state.board.get_cell(target);
             let okay = match item {
                 Some(x) => cell.items.iter().find(|&&y| y == x).is_some(),
@@ -689,7 +685,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             board.add_effect(apply_flash(board, target, color, cb), &mut state.env);
             ActionResult::success()
         }
-        Action::CallForHelp(CallForHelpAction { targets: _ }) => {
+        Action::CallForHelp(CallForHelpAction { look }) => {
             let point = entity.pos;
             let noise = Noise { cause: Some(eid), point, volume: FOV_RADIUS_NPC };
             let sightings = get_sightings(&state.board, &noise, &mut state.env);
@@ -713,11 +709,16 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                     Effect::pause(UI_DAMAGE_TICKS),
                 ]);
             }
+            let cb = move |board: &mut Board, _: &mut UpdateEnv| {
+                let Some(entity) = board.entities.get_mut(eid) else { return };
+                entity.face_direction(look);
+            };
+            effect.sub_on_finished(Box::new(cb));
             board.add_effect(effect, &mut state.env);
             ActionResult::success()
         }
         Action::Move(MoveAction { look, step, turns }) => {
-            face_direction(entity, look);
+            entity.face_direction(look);
             let slowed = turns < SLOWED_TURNS && !move_ready(entity);
             let turns = if slowed { SLOWED_TURNS } else { turns };
             if step == dirs::NONE { return ActionResult::success_turns(turns); }
@@ -733,11 +734,11 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
             match state.board.get_status(target) {
                 Status::Blocked | Status::Unknown => {
-                    face_direction(&mut state.board.entities[eid], step);
+                    state.board.entities[eid].face_direction(step);
                     ActionResult::failure()
                 }
                 Status::Occupied => {
-                    face_direction(&mut state.board.entities[eid], step);
+                    state.board.entities[eid].face_direction(step);
                     if player { state.ui.log.log_failure("There's something in the way!"); }
                     ActionResult::failure()
                 }
@@ -786,7 +787,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
             let tid = state.board.get_cell(target).eid;
             let entity = &mut state.board.entities[eid];
-            face_direction(entity, target - source);
+            entity.face_direction(target - source);
 
             let noise = Noise { cause: Some(eid), point: target, volume };
             let saw_target = detect(&state.board, &noise, &mut state.env);
@@ -877,8 +878,6 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 //
 // We also need to figure out if items are "hidden" the same way entities are.
 
-type CB = Box<dyn Fn(&mut Board, &mut UpdateEnv)>;
-
 fn apply_flash<T: Into<Color>>(board: &Board, target: Point, color: T, callback: CB) -> Effect {
     let cell = board.get_cell(target);
     let glyph = if let Some(x) = cell.eid {
@@ -892,8 +891,7 @@ fn apply_flash<T: Into<Color>>(board: &Board, target: Point, color: T, callback:
     let flash = glyph.with_fg(Color::black()).with_bg(color);
     let particle = effect::Particle { glyph: flash, point: target };
     let mut effect = Effect::constant(particle, UI_DAMAGE_FLASH);
-    let frame = effect.frames.len() as i32;
-    effect.add_event(effect::Event::Callback { frame, callback });
+    effect.sub_on_finished(callback);
     effect
 }
 
@@ -909,8 +907,7 @@ fn apply_damage(board: &Board, target: Point, callback: CB) -> Effect {
         Effect::constant(particle, UI_DAMAGE_FLASH),
         Effect::constant(restored, UI_DAMAGE_TICKS),
     ]);
-    let frame = effect.frames.len() as i32;
-    effect.add_event(effect::Event::Callback { frame, callback });
+    effect.sub_on_finished(callback);
     effect
 }
 
