@@ -411,15 +411,15 @@ struct DijkstraNode {
 
 #[derive(Default)]
 struct DijkstraState {
-    dirty: Vec<Point>,
+    dirty: Vec<usize>,
     lists: Vec<DijkstraLink>,
-    map: Matrix<DijkstraNode>,
+    nodes: Vec<DijkstraNode>,
 }
 
 impl DijkstraState {
-    fn link(&mut self, base: i32, score: i32) -> &mut DijkstraLink {
-        if base == 0 { return &mut self.lists[score as usize]; }
-        &mut self.map.data[base as usize - 1].link
+    fn link(&mut self, index: i32, score: i32) -> &mut DijkstraLink {
+        if index == 0 { return &mut self.lists[score as usize]; }
+        &mut self.nodes[index as usize - 1].link
     }
 }
 
@@ -427,12 +427,7 @@ impl DijkstraState {
 // call site, and then, when we check a cell's status, we map Unknown -> Free
 // iff that cell is "visible" under that Vision.
 thread_local! {
-    static CACHE: RefCell<(AStarState, DijkstraState)> = {
-        let map = Matrix::new(Point::default(), DijkstraNode::default());
-        let d = DijkstraState { dirty: vec![], lists: vec![], map };
-        let a = AStarState::default();
-        (a, d).into()
-    };
+    static CACHE: RefCell<(AStarState, DijkstraState)> = Default::default();
 }
 
 #[derive(Default)]
@@ -453,16 +448,14 @@ pub fn DijkstraMap<F: Fn(Point) -> Status>(
         source: Point, check: F, cells: i32, limit: i32) -> Neighborhood {
     CACHE.with_borrow_mut(|cache|{
         // Make sure the Matrix has enough space for the search.
-        let n = 2 * limit + 1;
         let state = &mut cache.1;
-        if state.map.size.0 < n || state.map.size.1 < n {
-            state.map = Matrix::new(Point(n, n), DijkstraNode::default());
-        }
+        let n = ((2 * limit + 1) as usize).pow(2);
+        if state.nodes.len() < n { state.nodes.resize_with(n, Default::default); }
         let result = CachedDijkstraMap(state, source, check, cells, limit);
 
         // Restore the cached state to a clean condition.
         let state = &mut cache.1;
-        for &p in &state.dirty { state.map.set(p, DijkstraNode::default()); }
+        for &p in &state.dirty { state.nodes[p] = Default::default(); }
         state.dirty.clear();
         state.lists.clear();
 
@@ -481,6 +474,12 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
 
     let initial = Point(limit, limit);
     let offset = source - initial;
+    let extent = 2 * limit + 1;
+
+    let get_index = |Point(x, y): Point| {
+        if !(0 <= x && x < extent && 0 <= y && y < extent) { return None; }
+        Some((x + y * extent) as usize)
+    };
 
     let init = |state: &mut DijkstraState,
                 index: usize, point: Point, score: i32, status: Status| {
@@ -495,7 +494,7 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
         let tail = state.link(prev, score);
         tail.next = (index as i32) + 1;
 
-        let entry = &mut state.map.data[index];
+        let entry = &mut state.nodes[index];
         entry.link.prev = prev;
         entry.link.next = 0;
         entry.point = point;
@@ -506,14 +505,14 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
     let step = |state: &mut DijkstraState,
                 dir: Point, prev_point: Point, prev_score: i32| {
         let point = prev_point + dir;
-        let Some(index) = state.map.index(point) else { return; };
+        let Some(index) = get_index(point) else { return };
 
-        let entry = &mut state.map.data[index];
+        let entry = &mut state.nodes[index];
         let visited = entry.status.is_some();
         let status = entry.status.unwrap_or_else(|| check(point + offset));
 
         entry.status = Some(status);
-        if !visited { state.dirty.push(point); }
+        if !visited { state.dirty.push(index); }
 
         let diagonal = dir.0 != 0 && dir.1 != 0;
         let occupied = status == Status::Occupied;
@@ -531,7 +530,7 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
         init(state, index, point, score, status);
     };
 
-    let index = state.map.index(initial).unwrap();
+    let index = get_index(initial).unwrap();
     init(state, index, initial, 0, Status::Free);
 
     let mut current = 0;
@@ -543,12 +542,12 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
         // Remove the entry at the head of the selected list.
         let head = &mut state.lists[current];
         let prev = head.next as usize - 1;
-        let next = state.map.data[prev].link.next;
+        let next = state.nodes[prev].link.next;
         head.next = next;
         let next = state.link(next, current as i32);
         next.prev = 0;
 
-        let node = &state.map.data[prev];
+        let node = &state.nodes[prev];
         let DijkstraNode { point, score, .. } = *node;
         let value = (point + offset, score);
 
