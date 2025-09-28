@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::cmp::{max, min};
+use std::num::NonZeroI32;
 
 use crate::base::{HashMap, LOS, Matrix, Point, dirs};
 
@@ -393,14 +394,14 @@ const DIJKSTRA_COST: i32 = 5;
 const DIJKSTRA_DIAGONAL_PENALTY: i32 = 2;
 const DIJKSTRA_OCCUPIED_PENALTY: i32 = 20;
 
-#[repr(C)]
+#[derive(Clone, Copy, Eq, PartialEq)] struct DijkstraNodeIndex(NonZeroI32);
+
 #[derive(Clone, Default)]
 struct DijkstraLink {
-    next: i32,
-    prev: i32,
+    next: Option<DijkstraNodeIndex>,
+    prev: Option<DijkstraNodeIndex>,
 }
 
-#[repr(C)]
 #[derive(Clone, Default)]
 struct DijkstraNode {
     link: DijkstraLink,
@@ -410,22 +411,38 @@ struct DijkstraNode {
 }
 
 #[derive(Default)]
-struct DijkstraState {
-    dirty: Vec<usize>,
-    lists: Vec<DijkstraLink>,
-    nodes: Vec<DijkstraNode>,
+struct DijkstraNodes {
+    data: Vec<DijkstraNode>,
 }
 
-impl DijkstraState {
-    fn link(&mut self, index: i32, score: i32) -> &mut DijkstraLink {
-        if index == 0 { return &mut self.lists[score as usize]; }
-        &mut self.nodes[index as usize - 1].link
+impl DijkstraNodes {
+    fn ensure_space(&mut self, len: usize) {
+        if self.data.len() < len { self.data.resize_with(len, Default::default) };
+    }
+
+    fn get_node(&self, index: DijkstraNodeIndex) -> &DijkstraNode {
+        &self.data[index.0.get() as usize - 1]
+    }
+
+    fn mut_node(&mut self, index: DijkstraNodeIndex) -> &mut DijkstraNode {
+        &mut self.data[index.0.get() as usize - 1]
     }
 }
 
-// TODO: We can get rid of the usage of Vision here if we precompute it in the
-// call site, and then, when we check a cell's status, we map Unknown -> Free
-// iff that cell is "visible" under that Vision.
+#[derive(Default)]
+struct DijkstraState {
+    dirty: Vec<DijkstraNodeIndex>,
+    lists: Vec<DijkstraLink>,
+    nodes: DijkstraNodes,
+}
+
+impl DijkstraState {
+    fn link(&mut self, index: Option<DijkstraNodeIndex>, score: i32) -> &mut DijkstraLink {
+        if let Some(x) = index { return &mut self.nodes.mut_node(x).link; }
+        &mut self.lists[score as usize]
+    }
+}
+
 thread_local! {
     static CACHE: RefCell<(AStarState, DijkstraState)> = Default::default();
 }
@@ -448,14 +465,14 @@ pub fn DijkstraMap<F: Fn(Point) -> Status>(
         source: Point, check: F, cells: i32, limit: i32) -> Neighborhood {
     CACHE.with_borrow_mut(|cache|{
         // Make sure the Matrix has enough space for the search.
+        let n = 2 * limit + 1;
         let state = &mut cache.1;
-        let n = ((2 * limit + 1) as usize).pow(2);
-        if state.nodes.len() < n { state.nodes.resize_with(n, Default::default); }
+        state.nodes.ensure_space((n * n) as usize);
         let result = CachedDijkstraMap(state, source, check, cells, limit);
 
         // Restore the cached state to a clean condition.
         let state = &mut cache.1;
-        for &p in &state.dirty { state.nodes[p] = Default::default(); }
+        for &p in &state.dirty { *state.nodes.mut_node(p) = Default::default(); }
         state.dirty.clear();
         state.lists.clear();
 
@@ -478,11 +495,11 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
 
     let get_index = |Point(x, y): Point| {
         if !(0 <= x && x < extent && 0 <= y && y < extent) { return None; }
-        Some((x + y * extent) as usize)
+        Some(DijkstraNodeIndex(unsafe { NonZeroI32::new_unchecked(x + y * extent + 1) }))
     };
 
     let init = |state: &mut DijkstraState,
-                index: usize, point: Point, score: i32, status: Status| {
+                index: DijkstraNodeIndex, point: Point, score: i32, status: Status| {
         while state.lists.len() <= score as usize {
             state.lists.push(DijkstraLink::default())
         }
@@ -490,13 +507,13 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
         // Add the entry to the tail of its selected list.
         let head = &mut state.lists[score as usize];
         let prev = head.prev;
-        head.prev = (index as i32) + 1;
+        head.prev = Some(index);
         let tail = state.link(prev, score);
-        tail.next = (index as i32) + 1;
+        tail.next = Some(index);
 
-        let entry = &mut state.nodes[index];
+        let entry = state.nodes.mut_node(index);
         entry.link.prev = prev;
-        entry.link.next = 0;
+        entry.link.next = Default::default();
         entry.point = point;
         entry.score = score;
         entry.status = Some(status);
@@ -507,7 +524,7 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
         let point = prev_point + dir;
         let Some(index) = get_index(point) else { return };
 
-        let entry = &mut state.nodes[index];
+        let entry = state.nodes.mut_node(index);
         let visited = entry.status.is_some();
         let status = entry.status.unwrap_or_else(|| check(point + offset));
 
@@ -536,18 +553,18 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
     let mut current = 0;
     loop {
         let lists = &state.lists;
-        while current < lists.len() && lists[current].next == 0 { current += 1; }
+        while current < lists.len() && lists[current].next.is_none() { current += 1; }
         if current == lists.len() { break; }
 
         // Remove the entry at the head of the selected list.
         let head = &mut state.lists[current];
-        let prev = head.next as usize - 1;
-        let next = state.nodes[prev].link.next;
+        let prev = head.next.unwrap();
+        let next = state.nodes.mut_node(prev).link.next;
         head.next = next;
         let next = state.link(next, current as i32);
-        next.prev = 0;
+        next.prev = None;
 
-        let node = &state.nodes[prev];
+        let node = state.nodes.get_node(prev);
         let DijkstraNode { point, score, .. } = *node;
         let value = (point + offset, score);
 
