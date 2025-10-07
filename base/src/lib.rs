@@ -1,6 +1,7 @@
 #![feature(test)]
 
 mod ai;
+mod bhv;
 mod dex;
 mod effect;
 mod entity;
