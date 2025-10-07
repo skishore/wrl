@@ -848,7 +848,7 @@ impl UI {
         let path = entity.ai.get_path();
         let slice_point = |p: Point| Point(2 * (p.0 - offset.0), p.1 - offset.1);
 
-        for &p in path.iter().skip(1) {
+        for &p in path {
             let point = slice_point(p);
             let mut glyph = slice.get(point);
             if glyph.ch() == Glyph::wide(' ').ch() { glyph = Glyph::wide('.'); }
@@ -861,7 +861,7 @@ impl UI {
             let color = (score << 16) | (score << 8) | (score / 2 + 128);
             slice.set(point, glyph.with_bg(color));
         }
-        if let Some(&p) = path.first() {
+        if let Some(&p) = path.last() {
             let point = slice_point(p);
             let glyph = slice.get(point);
             slice.set(point, glyph.with_fg(Color::black()).with_bg(0xff0000));
