@@ -561,6 +561,13 @@ impl UI {
         }
     }
 
+    pub fn get_map_cell(&self, entity: &Entity, point: Point) -> Option<Point> {
+        let Rect { root, size } = self.layout.map;
+        let Point(x, y) = point - root;
+        if !(0 <= x && x < size.0 && 0 <= y && y < size.1) { return None; }
+        Some(Point(x / 2, y) + self.get_map_offset(entity))
+    }
+
     // Update entry points
 
     pub fn animate_move(&mut self, color: Color, point: Point) {
