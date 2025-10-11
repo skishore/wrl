@@ -3,17 +3,20 @@ use std::io::{self, Write};
 use game_loop::{game_loop, TimeTrait};
 use termion::{clear, color};
 use termion::cursor::{Goto, Hide, Show};
-use termion::event::Key;
-use termion::input::TermRead;
-use termion::raw::IntoRawMode;
+use termion::event::{Event, Key, MouseButton, MouseEvent};
+use termion::input::{MouseTerminal, TermRead};
+use termion::raw::{IntoRawMode, RawTerminal};
 use termion::screen::{ToAlternateScreen, ToMainScreen};
 
 use wrl_base::base::{Char, Color, Glyph, Matrix, Point};
 use wrl_base::game::{Input, State};
 
+type RawMouseTerminal = MouseTerminal<RawTerminal<io::Stdout>>;
+
 struct Screen {
     extent: Point,
-    output: termion::raw::RawTerminal<io::Stdout>,
+    offset: Point,
+    output: RawMouseTerminal,
     next: Matrix<Glyph>,
     prev: Matrix<Glyph>,
     fg: Option<Color>,
@@ -25,9 +28,11 @@ impl Screen {
         let prev = Matrix::new(size, ' '.into());
         let next = Matrix::new(size, ' '.into());
         let (x, y) = termion::terminal_size().unwrap();
-        let output = io::stdout().into_raw_mode().unwrap();
+        let output = io::stdout().into_raw_mode().unwrap().into();
         let (fg, bg) = (None, None);
-        Self { extent: Point(x as i32, y as i32), output, next, prev, fg, bg }
+        let extent = Point(x as i32, y as i32);
+        let offset = Point((extent - size).0 / 2 + 1, (extent - size).1 / 2 + 1);
+        Self { extent, offset, output, next, prev, fg, bg }
     }
 
     fn render(&mut self, stats: &Stats, delta: f64) -> io::Result<()> {
@@ -46,8 +51,8 @@ impl Screen {
             if start > limit { continue; }
 
             lines_changed += 1;
-            let mx = ((self.extent.0 - sx) / 2 + start + 1) as u16;
-            let my = ((self.extent.1 - sy) / 2 + y + 1) as u16;
+            let mx = (self.offset.0 + start) as u16;
+            let my = (self.offset.1 + y) as u16;
             write!(self.output, "{}", Goto(mx, my))?;
 
             let mut x = start;
@@ -161,11 +166,29 @@ impl Stats {
     }
 }
 
-fn input(key: Key) -> Option<Input> {
+fn key_input(key: Key) -> Option<Input> {
     match key {
         Key::BackTab => Some(Input::BackTab),
         Key::Char(ch) => Some(Input::Char(ch)),
         Key::Esc => Some(Input::Escape),
+        _ => None,
+    }
+}
+
+fn mouse_input(mouse: MouseEvent, screen: &Screen) -> Option<Input> {
+    match mouse {
+        MouseEvent::Press(MouseButton::Left, x, y) => {
+            let pos = Point(x as i32, y as i32) - screen.offset;
+            if screen.prev.contains(pos) { Some(Input::Click(pos)) } else { None }
+        },
+        _ => None,
+    }
+}
+
+fn input(event: Event, screen: &Screen) -> Option<Input> {
+    match event {
+        Event::Key(key) => key_input(key),
+        Event::Mouse(mouse) => mouse_input(mouse, screen),
         _ => None,
     }
 }
@@ -181,7 +204,7 @@ fn main() {
     let mut output = Matrix::default();
     game.render(&mut output);
 
-    let mut inputs = termion::async_stdin().keys();
+    let mut events = termion::async_stdin().events();
     let mut screen = Screen::new(output.size);
     screen.enter_alt_screen().unwrap();
     screen.write_status_message("<calculating FPS...>").unwrap();
@@ -192,11 +215,10 @@ fn main() {
 
     game_loop(game, 60, 0.01, |g| {
         let start = game_loop::Time::now();
-        if let Some(Ok(key)) = inputs.next() {
-            if key == Key::Ctrl('c') {
-                g.exit();
-            } else if let Some(input) = input(key) {
-                g.game.add_input(input);
+        if let Some(Ok(e)) = events.next() {
+            match e {
+                Event::Key(Key::Ctrl('c')) => g.exit(),
+                x => if let Some(x) = input(x, &screen) { g.game.add_input(x); }
             }
         }
         g.game.update();

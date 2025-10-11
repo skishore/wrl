@@ -49,7 +49,7 @@ pub const CALL_VOLUME: i32 = FOV_RADIUS_NPC;
 pub const MOVE_VOLUME: i32 = 4;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Input { Escape, BackTab, Char(char) }
+pub enum Input { Escape, BackTab, Char(char), Click(Point) }
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -934,6 +934,15 @@ fn process_input(state: &mut State, input: Input) {
         let j = (i + if input == Input::Char('q') { l - 1 } else { 1 }) % l;
         state.pov = if j == 0 { None } else { Some(eids[j]) };
         state.ui.debug = Default::default();
+        return;
+    }
+
+    if let Input::Click(pos) = input {
+        let pov = state.get_pov_entity();
+        let Some(pos) = state.ui.get_map_cell(pov, pos) else { return };
+        let Some(eid) = state.board.get_cell(pos).eid else { return };
+        let off = eid == state.player || state.pov == Some(eid);
+        state.pov = if off { None } else { Some(eid) };
         return;
     }
 
