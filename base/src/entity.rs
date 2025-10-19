@@ -111,6 +111,10 @@ impl Entity {
         base * num / den * dropoff.powi(age as i32)
     }
 
+    pub fn too_big_to_hide(&self) -> bool {
+        self.player && !self.sneaking
+    }
+
     // Mutators
 
     pub fn face_direction(&mut self, dir: Point) {
