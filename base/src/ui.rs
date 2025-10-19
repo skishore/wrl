@@ -694,9 +694,8 @@ impl UI {
             let shadowed = cell.shade();
 
             let glyph = if let Some(x) = entity {
-                let big = x.player && !x.sneaking;
-                let glyph = x.species.glyph;
-                let glyph = if x.player && x.sneaking { Glyph::wide('e') } else { glyph };
+                let big = x.too_big_to_hide();
+                let glyph = Self::knowledge_glyph(x);
                 if x.hp == 0. { Glyph::wdfg('%', 0xff0000) }
                 else if obscured && !big { glyph.with_fg(tile.glyph.fg()) }
                 else { glyph }
@@ -868,12 +867,11 @@ impl UI {
             slice.set(point, glyph.with_fg(Color::black()).with_bg(0xff0000));
         }
         for (_, other) in &board.entities {
-            slice.set(slice_point(other.pos), other.species.glyph);
+            slice.set(slice_point(other.pos), Self::entity_glyph(other));
         }
         for pos in entity.known.debug_noise_sources() {
             let glyph = Glyph::wdfg('?', Color::black()).with_bg(0xffff00);
-            let Point(x, y) = pos - offset;
-            slice.set(Point(2 * x, y), glyph);
+            slice.set(slice_point(pos), glyph);
         }
         for other in &entity.known.entities {
             let color = if other.visible { 0x00ff00 } else {
@@ -881,9 +879,8 @@ impl UI {
                 let moved = entity_at_pos.map(|x| x.eid) != Some(other.eid);
                 if moved { 0xff0000 } else { 0xffff00 }
             };
-            let glyph = other.species.glyph.with_fg(Color::black()).with_bg(color);
-            let Point(x, y) = other.pos - offset;
-            slice.set(Point(2 * x, y), glyph);
+            let glyph = Self::knowledge_glyph(other).with_fg(Color::black()).with_bg(color);
+            slice.set(slice_point(other.pos), glyph);
         };
     }
 
@@ -1264,6 +1261,16 @@ impl UI {
     }
 
     // Static helpers
+
+    fn entity_glyph(entity: &Entity) -> Glyph {
+        let sneaking = entity.player && entity.sneaking;
+        if sneaking { Glyph::wide('e') } else { entity.species.glyph }
+    }
+
+    fn knowledge_glyph(entity: &EntityKnowledge) -> Glyph {
+        let sneaking = entity.player && entity.sneaking;
+        if sneaking { Glyph::wide('e') } else { entity.species.glyph }
+    }
 
     fn hp_color(hp: f64) -> Color {
         (if hp <= 0.25 { 0xff0000 } else if hp <= 0.50 { 0xffff00 } else { 0x00a800 }).into()

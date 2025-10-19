@@ -304,6 +304,10 @@ impl EntityKnowledge {
             visible: false,
         }
     }
+
+    pub fn too_big_to_hide(&self) -> bool {
+        self.player && !self.sneaking
+    }
 }
 
 impl SourceKnowledge {
@@ -382,8 +386,7 @@ impl Knowledge {
             let entity = (|| {
                 if !see_big_entities { return None; }
                 let other = board.get_entity(eid?)?;
-                let big = other.player && !other.sneaking;
-                if !big && !see_all_entities { return None; }
+                if !see_all_entities && !other.too_big_to_hide() { return None; }
                 Some(self.see_entity(me, other))
             })();
 
