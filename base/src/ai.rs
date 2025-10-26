@@ -203,7 +203,7 @@ fn TickBasicNeeds(ctx: &mut Ctx) -> Result {
     if !entity.asleep {
         bb.till_assess = max(bb.till_assess - 1, 0);
     }
-    Result::Unused
+    Result::Failed
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -324,9 +324,9 @@ fn make_tree() -> Box<dyn Bhv> {
     Box::new(pri![
         "Root",
         cb!("TickBasicNeeds", TickBasicNeeds),
-        act!("FollowDirs", FollowDirs),
-        act!("FollowPath", FollowPath),
-        act!("Assess", Assess),
+        act!("Continue(LookAround)", FollowDirs),
+        act!("Continue(Explore)", FollowPath),
+        act!("LookAround", Assess),
         act!("Explore", Explore),
     ])
 }
@@ -351,9 +351,8 @@ impl AIState {
     }
 
     pub fn debug(&self, slice: &mut Slice) {
-        let mut debug = Debug::default();
+        let mut debug = Debug { depth: 0, slice };
         self.tree.debug(&mut debug);
-        for x in &debug.lines { slice.write_str(x).newline(); }
         slice.newline();
         let bb = &self.blackboard;
         slice.write_str(&format!("till_assess: {}", bb.till_assess)).newline();
