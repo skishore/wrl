@@ -63,6 +63,8 @@ struct Blackboard {
     till_assess: i32,
     till_hunger: i32,
     till_thirst: i32,
+    hunger: bool,
+    thirst: bool,
 }
 
 impl Blackboard {
@@ -73,6 +75,8 @@ impl Blackboard {
             till_assess: rng.random_range(0..MAX_ASSESS),
             till_hunger: rng.random_range(0..MAX_HUNGER),
             till_thirst: rng.random_range(0..MAX_THIRST),
+            hunger: false,
+            thirst: false,
         }
     }
 }
@@ -341,16 +345,18 @@ fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
 
 #[allow(non_snake_case)]
 fn Hunger(x: &mut Ctx) -> i64 {
-    let limit = max(MAX_HUNGER / 2, 1);
-    let value = x.blackboard.till_hunger;
-    if value >= limit { -1 } else { (100 * (limit - value) / limit) as i64 }
+    let (limit, value) = (max(MAX_HUNGER / 2, 1), x.blackboard.till_hunger);
+    if value >= limit { return -1; }
+    if x.blackboard.hunger { return 101; }
+    (100 * (limit - value) / limit) as i64
 }
 
 #[allow(non_snake_case)]
 fn Thirst(x: &mut Ctx) -> i64 {
-    let limit = max(MAX_THIRST / 2, 1);
-    let value = x.blackboard.till_thirst;
-    if value >= limit { -1 } else { (100 * (limit - value) / limit) as i64 }
+    let (limit, value) = (max(MAX_THIRST / 2, 1), x.blackboard.till_thirst);
+    if value >= limit { return -1; }
+    if x.blackboard.thirst { return 101; }
+    (100 * (limit - value) / limit) as i64
 }
 
 #[allow(non_snake_case)]
@@ -407,6 +413,8 @@ fn Eat() -> impl Bhv {
         act!("Follow(MoveToFood)", |x| FollowPath(x, PathKind::MoveToFood)),
         act!("MoveToFood", |x| MoveToNeed(x, HasFood, PathKind::MoveToFood)),
     ]
+    .on_enter(|x| x.blackboard.hunger = true)
+    .on_exit(|x| x.blackboard.hunger = false)
 }
 
 #[allow(non_snake_case)]
@@ -417,6 +425,8 @@ fn Drink() -> impl Bhv {
         act!("Follow(MoveToWater)", |x| FollowPath(x, PathKind::MoveToWater)),
         act!("MoveToWater", |x| MoveToNeed(x, HasWater, PathKind::MoveToWater)),
     ]
+    .on_enter(|x| x.blackboard.thirst = true)
+    .on_exit(|x| x.blackboard.thirst = false)
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -460,6 +470,8 @@ impl AIState {
         self.tree.debug(&mut debug);
         slice.newline();
         let bb = &self.blackboard;
+        slice.write_str(&format!("hunger: {}", bb.hunger)).newline();
+        slice.write_str(&format!("thirst: {}", bb.thirst)).newline();
         slice.write_str(&format!("till_assess: {}", bb.till_assess)).newline();
         slice.write_str(&format!("till_hunger: {}", bb.till_hunger)).newline();
         slice.write_str(&format!("till_thirst: {}", bb.till_thirst)).newline();

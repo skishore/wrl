@@ -62,6 +62,14 @@ impl<S: Label, T: Bhv> Node<S, T> {
     pub fn new(label: S, tree: T) -> Self {
         Self { last: None, label, tree }
     }
+
+    pub fn on_enter<F: Fn(&mut Ctx) -> ()>(self, f: F) -> Node<S, OnEnter<F, T>> {
+        Node::new(self.label, OnEnter(f, self.tree))
+    }
+
+    pub fn on_exit<F: Fn(&mut Ctx) -> ()>(self, f: F) -> Node<S, OnExit<F, T>> {
+        Node::new(self.label, OnExit(f, self.tree))
+    }
 }
 
 impl<S: Label, T: Bhv> Bhv for Node<S, T> {
@@ -90,6 +98,30 @@ impl<S: Label, T: Bhv> Bhv for Node<S, T> {
         let last = self.tree.tick(ctx);
         self.last = Some(last);
         last
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// Enter / Exit
+
+pub struct OnEnter<S, T>(S, T);
+
+impl<S: Fn(&mut Ctx) -> (), T: Bhv> Bhv for OnEnter<S, T> {
+    fn debug(&self, debug: &mut Debug) { self.1.debug(debug) }
+    fn reset(&mut self, ctx: &mut Ctx) { self.1.reset(ctx) }
+    fn tick(&mut self, ctx: &mut Ctx) -> Result { (self.0)(ctx); self.1.tick(ctx) }
+}
+
+pub struct OnExit<S, T>(S, T);
+
+impl<S: Fn(&mut Ctx) -> (), T: Bhv> Bhv for OnExit<S, T> {
+    fn debug(&self, debug: &mut Debug) { self.1.debug(debug) }
+    fn reset(&mut self, ctx: &mut Ctx) { self.1.reset(ctx); (self.0)(ctx) }
+    fn tick(&mut self, ctx: &mut Ctx) -> Result {
+        let result = self.1.tick(ctx);
+        if result == Result::Failed { (self.0)(ctx); }
+        result
     }
 }
 
