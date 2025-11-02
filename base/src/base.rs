@@ -346,6 +346,11 @@ impl<'a> Slice<'a> {
 
     pub fn get_cursor(&self) -> Point { self.cursor }
 
+    pub fn set_cursor(&mut self, p: Point) {
+        self.cursor = p;
+        self.set_fg(None).set_bg(None);
+    }
+
     pub fn newline(&mut self) -> &mut Self {
         self.newlines(1)
     }

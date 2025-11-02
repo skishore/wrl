@@ -5,7 +5,7 @@ use rand::Rng;
 use rand_distr::{Distribution, Normal};
 use rand_distr::num_traits::Pow;
 
-use crate::{act, cb, pri, seq};
+use crate::{act, cb, pri, seq, util};
 use crate::base::{Point, RNG, Slice, dirs, weighted};
 use crate::bhv::{Bhv, Debug, Result};
 use crate::entity::{Entity, EID};
@@ -32,10 +32,8 @@ const ASSESS_TURNS_EXPLORE: i32 = 8;
 const ASSESS_TURNS_FLIGHT: i32 = 1;
 
 const MAX_ASSESS: i32 = 32;
-const MAX_RESTED: i32 = 4096;
-const MAX_THIRST: i32 = 256;
-const MAX_HUNGER_HERBIVORE: i32 = 1024;
-const MAX_HUNGER_CARNIVORE: i32 = 2048;
+const MAX_THIRST: i32 = 128;
+const MAX_HUNGER: i32 = 512;
 
 const WANDER_TURNS: f64 = 2.;
 
@@ -63,6 +61,8 @@ struct Blackboard {
     dirs: Vec<Point>,
     path: CachedPath,
     till_assess: i32,
+    till_hunger: i32,
+    till_thirst: i32,
 }
 
 impl Blackboard {
@@ -71,6 +71,8 @@ impl Blackboard {
             dirs: Default::default(),
             path: Default::default(),
             till_assess: rng.random_range(0..MAX_ASSESS),
+            till_hunger: rng.random_range(0..MAX_HUNGER),
+            till_thirst: rng.random_range(0..MAX_THIRST),
         }
     }
 }
@@ -202,6 +204,8 @@ fn TickBasicNeeds(ctx: &mut Ctx) -> Result {
     let (bb, entity) = (&mut *ctx.blackboard, ctx.entity);
     if !entity.asleep {
         bb.till_assess = max(bb.till_assess - 1, 0);
+        bb.till_hunger = max(bb.till_hunger - 1, 0);
+        bb.till_thirst = max(bb.till_thirst - 1, 0);
     }
     Result::Failed
 }
@@ -264,31 +268,40 @@ fn Explore(ctx: &mut Ctx) -> Option<Action> {
     let scores: Vec<_> = ctx.neighborhood.visited.iter().map(
         |&(p, distance)| (p, score(p, distance))).collect();
     let target = select_target(&scores, ctx.env)?;
-    FindPath(ctx, target)
+    FindPath(ctx, target, PathKind::Explore)
 }
 
 //////////////////////////////////////////////////////////////////////////////
 
 // Pathfinding
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PathKind { MoveToFood, MoveToWater, Explore }
+
 #[derive(Default)]
 struct CachedPath {
+    kind: Option<PathKind>,
     path: Vec<Point>,
     step: usize,
 }
 
 #[allow(non_snake_case)]
-fn FindPath(ctx: &mut Ctx, target: Point) -> Option<Action> {
+fn FindPath(ctx: &mut Ctx, target: Point, kind: PathKind) -> Option<Action> {
     ensure_vision(ctx);
     let (pos, check) = (ctx.pos, get_check(ctx));
-    let path = AStar(pos, target, ASTAR_LIMIT_WANDER, check)?;
-    ctx.blackboard.path = CachedPath { path, step: 0 };
+    let mut path = AStar(pos, target, ASTAR_LIMIT_WANDER, check)?;
+    match kind {
+        PathKind::MoveToFood | PathKind::MoveToWater => { path.pop(); },
+        PathKind::Explore => (),
+    };
+    ctx.blackboard.path = CachedPath { kind: Some(kind), path, step: 0 };
     ctx.blackboard.path.path.insert(0, pos);
-    FollowPath(ctx)
+    FollowPath(ctx, kind)
 }
 
 #[allow(non_snake_case)]
-fn FollowPath(ctx: &mut Ctx) -> Option<Action> {
+fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
+    if ctx.blackboard.path.kind != Some(kind) { return None; }
     let (known, pos) = (ctx.known, ctx.pos);
     let path = std::mem::take(&mut ctx.blackboard.path);
     if path.path.is_empty() { return None; }
@@ -311,21 +324,108 @@ fn FollowPath(ctx: &mut Ctx) -> Option<Action> {
     let next = path.path[path.step + 1];
     let step = next - pos;
     let look = step;
-    ctx.blackboard.path = path;
-    ctx.blackboard.path.step += 1;
+
+    if path.step + 2 < path.path.len() {
+        ctx.blackboard.path = path;
+        ctx.blackboard.path.step += 1;
+    }
     Some(Action::Move(MoveAction { look, step, turns: WANDER_TURNS }))
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+#[allow(non_snake_case)]
+fn Hunger(x: &mut Ctx) -> i64 {
+    let limit = max(MAX_HUNGER / 2, 1);
+    let value = x.blackboard.till_hunger;
+    if value >= limit { -1 } else { (100 * (limit - value) / limit) as i64 }
+}
+
+#[allow(non_snake_case)]
+fn Thirst(x: &mut Ctx) -> i64 {
+    let limit = max(MAX_THIRST / 2, 1);
+    let value = x.blackboard.till_thirst;
+    if value >= limit { -1 } else { (100 * (limit - value) / limit) as i64 }
+}
+
+#[allow(non_snake_case)]
+fn HasFood(x: &CellKnowledge) -> bool { x.tile.can_eat() }
+
+#[allow(non_snake_case)]
+fn HasWater(x: &CellKnowledge) -> bool { x.tile.can_drink() }
+
+#[allow(non_snake_case)]
+fn MoveToNeed<F: Fn(&CellKnowledge) -> bool>(
+        ctx: &mut Ctx, f: F, kind: PathKind) -> Option<Action> {
+    ensure_neighborhood(ctx);
+
+    let n = &ctx.neighborhood;
+    let Ctx { known, .. } = *ctx;
+    for &(point, _) in n.blocked.iter().chain(&n.visited) {
+        if !known.get(point).cell().map(&f).unwrap_or(false) { continue; }
+        return FindPath(ctx, point, kind);
+    }
+    None
+}
+
+#[allow(non_snake_case)]
+fn EatFoodNearby(ctx: &mut Ctx) -> Option<Action> {
+    let Ctx { known, pos, .. } = *ctx;
+    let valid = |p: Point| known.get(p).cell().map(HasFood).unwrap_or(false);
+    for &dir in [dirs::NONE].iter().chain(&dirs::ALL) {
+        if valid(pos + dir) {
+            ctx.blackboard.till_hunger = MAX_HUNGER;
+            return Some(Action::Eat(EatAction { target: pos + dir, item: None }));
+        }
+    }
+    None
+}
+
+#[allow(non_snake_case)]
+fn DrinkWaterNearby(ctx: &mut Ctx) -> Option<Action> {
+    let Ctx { known, pos, .. } = *ctx;
+    let valid = |p: Point| known.get(p).cell().map(HasWater).unwrap_or(false);
+    for &dir in [dirs::NONE].iter().chain(&dirs::ALL) {
+        if valid(pos + dir) {
+            ctx.blackboard.till_thirst = MAX_THIRST;
+            return Some(Action::Drink(pos + dir));
+        }
+    }
+    None
+}
+
+#[allow(non_snake_case)]
+fn Eat() -> impl Bhv {
+    pri![
+        "EatFood",
+        act!("EatFoodNearby", EatFoodNearby),
+        act!("Follow(MoveToFood)", |x| FollowPath(x, PathKind::MoveToFood)),
+        act!("MoveToFood", |x| MoveToNeed(x, HasFood, PathKind::MoveToFood)),
+    ]
+}
+
+#[allow(non_snake_case)]
+fn Drink() -> impl Bhv {
+    pri![
+        "DrinkWater",
+        act!("DrinkWaterNearby", DrinkWaterNearby),
+        act!("Follow(MoveToWater)", |x| FollowPath(x, PathKind::MoveToWater)),
+        act!("MoveToWater", |x| MoveToNeed(x, HasWater, PathKind::MoveToWater)),
+    ]
 }
 
 //////////////////////////////////////////////////////////////////////////////
 
 // Top-level tree
 
-fn make_tree() -> Box<dyn Bhv> {
+#[allow(non_snake_case)]
+fn Root() -> Box<dyn Bhv> {
     Box::new(pri![
         "Root",
         cb!("TickBasicNeeds", TickBasicNeeds),
-        act!("Continue(LookAround)", FollowDirs),
-        act!("Continue(Explore)", FollowPath),
+        act!("Follow(LookAround)", FollowDirs),
+        util!["BasicNeeds", (Hunger, Eat()), (Thirst, Drink())],
+        act!("Follow(Explore)", |x| FollowPath(x, PathKind::Explore)),
         act!("LookAround", Assess),
         act!("Explore", Explore),
     ])
@@ -343,7 +443,7 @@ pub struct AIState {
 impl AIState {
     pub fn new(predator: bool, rng: &mut RNG) -> Self {
         let blackboard = Blackboard::new(predator, rng);
-        Self { blackboard, tree: make_tree() }
+        Self { blackboard, tree: Root() }
     }
 
     pub fn get_path(&self) -> &[Point] {
@@ -356,7 +456,10 @@ impl AIState {
         slice.newline();
         let bb = &self.blackboard;
         slice.write_str(&format!("till_assess: {}", bb.till_assess)).newline();
+        slice.write_str(&format!("till_hunger: {}", bb.till_hunger)).newline();
+        slice.write_str(&format!("till_thirst: {}", bb.till_thirst)).newline();
         slice.write_str(&format!("dirs: {} items", bb.dirs.len())).newline();
+        slice.write_str(&format!("path: {:?}", bb.path.kind)).newline();
     }
 
     pub fn plan(&mut self, entity: &Entity, env: &mut AIEnv) -> Action {
