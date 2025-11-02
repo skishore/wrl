@@ -6,7 +6,7 @@ use rand_distr::{Distribution, Normal};
 use rand_distr::num_traits::Pow;
 
 use crate::{act, cb, pri, seq, util};
-use crate::base::{Point, RNG, Slice, dirs, weighted};
+use crate::base::{LOS, Point, RNG, Slice, dirs, weighted};
 use crate::bhv::{Bhv, Debug, Result};
 use crate::entity::{Entity, EID};
 use crate::game::{Action, AttackAction, CallForHelpAction, EatAction, MoveAction};
@@ -302,12 +302,13 @@ fn FindPath(ctx: &mut Ctx, target: Point, kind: PathKind) -> Option<Action> {
 #[allow(non_snake_case)]
 fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
     if ctx.blackboard.path.kind != Some(kind) { return None; }
+
     let (known, pos) = (ctx.known, ctx.pos);
     let path = std::mem::take(&mut ctx.blackboard.path);
     if path.path.is_empty() { return None; }
 
+    let (i, j) = (path.step, path.step + 1);
     let valid = (||{
-        let (i, j) = (path.step, path.step + 1);
         let Some(&prev) = path.path.get(i) else { return false };
         let Some(&next) = path.path.get(j) else { return false };
         if prev != ctx.pos { return false };
@@ -321,9 +322,13 @@ fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
     })();
     if !valid { return None; }
 
-    let next = path.path[path.step + 1];
-    let step = next - pos;
-    let look = step;
+    let next = path.path[j];
+    let mut target = next;
+    for &point in path.path.iter().skip(j).take(8) {
+        let los = LOS(pos, point);
+        if los.iter().all(|&x| !known.get(x).blocked()) { target = point; }
+    }
+    let (look, step) = (target - pos, next - pos);
 
     if path.step + 2 < path.path.len() {
         ctx.blackboard.path = path;
