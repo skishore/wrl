@@ -1,14 +1,16 @@
 use std::cmp::{max, min};
 use std::f64::consts::TAU;
+use std::ops::RangeInclusive;
 
 use rand::Rng;
 use rand_distr::{Distribution, Normal};
 use rand_distr::num_traits::Pow;
 
 use crate::{act, cb, pri, seq, util};
-use crate::base::{LOS, Point, RNG, Slice, dirs, weighted};
+use crate::base::{LOS, Point, RNG, Slice, dirs, sample, weighted};
 use crate::bhv::{Bhv, Debug, Result};
 use crate::entity::{Entity, EID};
+use crate::game::{MOVE_VOLUME, Item, move_ready};
 use crate::game::{Action, AttackAction, CallForHelpAction, EatAction, MoveAction};
 use crate::knowledge::{CellKnowledge, Knowledge, EntityKnowledge};
 use crate::pathing::{AStar, BFS, DijkstraLength, DijkstraMap, Neighborhood, Status};
@@ -32,8 +34,11 @@ const ASSESS_TURNS_EXPLORE: i32 = 8;
 const ASSESS_TURNS_FLIGHT: i32 = 1;
 
 const MAX_ASSESS: i32 = 32;
-const MAX_THIRST: i32 = 128;
 const MAX_HUNGER: i32 = 512;
+const MAX_THIRST: i32 = 128;
+const ASSESS_GAIN: RangeInclusive<i32> = (MAX_ASSESS / 2)..=MAX_ASSESS;
+const HUNGER_GAIN: RangeInclusive<i32> = (MAX_HUNGER / 4)..=(MAX_HUNGER / 2);
+const THIRST_GAIN: RangeInclusive<i32> = (MAX_THIRST / 4)..=(MAX_THIRST / 2);
 
 const WANDER_TURNS: f64 = 2.;
 
@@ -63,6 +68,8 @@ struct Blackboard {
     till_assess: i32,
     till_hunger: i32,
     till_thirst: i32,
+    finding_food_: bool,
+    finding_water: bool,
     hunger: bool,
     thirst: bool,
 }
@@ -75,6 +82,8 @@ impl Blackboard {
             till_assess: rng.random_range(0..MAX_ASSESS),
             till_hunger: rng.random_range(0..MAX_HUNGER),
             till_thirst: rng.random_range(0..MAX_THIRST),
+            finding_food_: false,
+            finding_water: false,
             hunger: false,
             thirst: false,
         }
@@ -210,6 +219,11 @@ fn TickBasicNeeds(ctx: &mut Ctx) -> Result {
         bb.till_assess = max(bb.till_assess - 1, 0);
         bb.till_hunger = max(bb.till_hunger - 1, 0);
         bb.till_thirst = max(bb.till_thirst - 1, 0);
+
+        if bb.till_hunger < MAX_HUNGER / 8 { bb.hunger = true; }
+        if bb.till_thirst < MAX_THIRST / 8 { bb.thirst = true; }
+        if bb.till_hunger >= 7 * MAX_HUNGER / 8 { bb.hunger = false; }
+        if bb.till_thirst >= 7 * MAX_THIRST / 8 { bb.thirst = false; }
     }
     Result::Failed
 }
@@ -223,7 +237,10 @@ fn FollowDirs(ctx: &mut Ctx) -> Option<Action> {
     let (bb, rng) = (&mut *ctx.blackboard, &mut *ctx.env.rng);
     let dir = bb.dirs.pop()?;
 
-    if bb.dirs.is_empty() { bb.till_assess = rng.gen_range(0..MAX_ASSESS); }
+    if bb.dirs.is_empty() {
+        let gain = rng.gen_range(ASSESS_GAIN);
+        bb.till_assess = min(bb.till_assess + gain, MAX_ASSESS);
+    }
     Some(Action::Look(dir))
 }
 
@@ -280,12 +297,13 @@ fn Explore(ctx: &mut Ctx) -> Option<Action> {
 // Pathfinding
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PathKind { MoveToFood, MoveToWater, Explore }
+pub enum PathKind { MoveToFood, MoveToWater, BerryTree, Explore }
 
 #[derive(Default)]
 struct CachedPath {
     kind: Option<PathKind>,
     path: Vec<Point>,
+    skip: usize,
     step: usize,
 }
 
@@ -293,12 +311,12 @@ struct CachedPath {
 fn FindPath(ctx: &mut Ctx, target: Point, kind: PathKind) -> Option<Action> {
     ensure_vision(ctx);
     let (pos, check) = (ctx.pos, get_check(ctx));
-    let mut path = AStar(pos, target, ASTAR_LIMIT_WANDER, check)?;
-    match kind {
-        PathKind::MoveToFood | PathKind::MoveToWater => { path.pop(); },
-        PathKind::Explore => (),
+    let path = AStar(pos, target, ASTAR_LIMIT_WANDER, check)?;
+    let skip = match kind {
+        PathKind::MoveToFood | PathKind::MoveToWater | PathKind::BerryTree => 1,
+        PathKind::Explore => 0,
     };
-    ctx.blackboard.path = CachedPath { kind: Some(kind), path, step: 0 };
+    ctx.blackboard.path = CachedPath { kind: Some(kind), path, skip, step: 0 };
     ctx.blackboard.path.path.insert(0, pos);
     FollowPath(ctx, kind)
 }
@@ -322,7 +340,7 @@ fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
             Status::Occupied => p != next,
             Status::Blocked => false,
         };
-        path.path.iter().skip(j).all(|&x| valid(x))
+        path.path.iter().skip(j).rev().skip(path.skip).rev().all(|&x| valid(x))
     })();
     if !valid { return None; }
 
@@ -334,7 +352,7 @@ fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
     }
     let (look, step) = (target - pos, next - pos);
 
-    if path.step + 2 < path.path.len() {
+    if path.step + path.skip + 2 < path.path.len() {
         ctx.blackboard.path = path;
         ctx.blackboard.path.step += 1;
     }
@@ -344,23 +362,139 @@ fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
 //////////////////////////////////////////////////////////////////////////////
 
 #[allow(non_snake_case)]
+fn AttackPathTarget(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
+    if ctx.blackboard.path.kind != Some(kind) { return None; }
+    let target = *ctx.blackboard.path.path.last()?;
+    AttackTarget(ctx, target)
+}
+
+#[allow(non_snake_case)]
+fn AttackTarget(ctx: &mut Ctx, target: Point) -> Option<Action> {
+    let Ctx { entity, known, pos: source, .. } = *ctx;
+    if source == target { return None; }
+
+    let attacks = &ctx.entity.species.attacks;
+    if attacks.is_empty() { return None; }
+
+    let attack = sample(attacks, ctx.env.rng);
+    let range = attack.range;
+    let valid = |x| HasLOS(x, target, known, range);
+    if move_ready(entity) && valid(source) {
+        return Some(Action::Attack(AttackAction { attack, target }));
+    }
+    PathToTarget(ctx, target, range, valid)
+}
+
+#[allow(non_snake_case)]
+fn HasLOS(source: Point, target: Point, known: &Knowledge, range: i32) -> bool {
+    if (source - target).len_nethack() > range { return false; }
+    if !known.get(target).visible() { return false; }
+    let los = LOS(source, target);
+    let last = los.len() - 1;
+    los.iter().enumerate().all(|(i, &p)| {
+        if i == 0 || i == last { return true; }
+        known.get(p).status() == Status::Free
+    })
+}
+
+#[allow(non_snake_case)]
+fn PathToTarget<F: Fn(Point) -> bool>(
+        ctx: &mut Ctx, target: Point, range: i32, valid: F) -> Option<Action> {
+    let Ctx { known, pos: source, .. } = *ctx;
+    let rng = &mut ctx.env.rng;
+    let check = |p: Point| known.get(p).status();
+    let step = |dir: Point| {
+        let look = target - source - dir;
+        Action::Move(MoveAction { step: dir, look, turns: 1. })
+    };
+
+    // Given a non-empty list of "good" directions (each of which brings us
+    // close to attacking the target), choose one closest to our attack range.
+    let pick = |dirs: &Vec<Point>, rng: &mut RNG| {
+        let cell = known.get(target);
+        let (shade, tile) = (cell.shade(), cell.tile());
+        let obscured = shade || match tile {
+            Some(x) => x.limits_vision() && !x.blocks_movement(),
+            None => false,
+        };
+        let distance = if obscured { 1 } else { min(range, MOVE_VOLUME) };
+
+        assert!(!dirs.is_empty());
+        let scores: Vec<_> = dirs.iter().map(
+            |&x| ((x + source - target).len_nethack() - distance).abs()).collect();
+        let best = *scores.iter().reduce(|acc, x| min(acc, x)).unwrap();
+        let opts: Vec<_> = (0..dirs.len()).filter(|&i| scores[i] == best).collect();
+        step(dirs[*sample(&opts, rng)])
+    };
+
+    // If we could already attack the target, don't move out of view.
+    if valid(source) {
+        let mut dirs = vec![Point::default()];
+        for &x in &dirs::ALL {
+            if check(source + x) != Status::Free { continue; }
+            if valid(source + x) { dirs.push(x); }
+        }
+        return Some(pick(&dirs, rng));
+    }
+
+    // Else, pick a direction which brings us in view.
+    let result = BFS(source, &valid, BFS_LIMIT_ATTACK, check);
+    if let Some(x) = result && !x.dirs.is_empty() { return Some(pick(&x.dirs, rng)); }
+
+    // Else, move towards the target.
+    let path = AStar(source, target, ASTAR_LIMIT_ATTACK, check)?;
+    Some(step(*path.first()? - source))
+}
+
+#[allow(non_snake_case)]
+fn HasBerryTree(x: &CellKnowledge) -> bool { x.tile.drops_berries() }
+
+#[allow(non_snake_case)]
+fn FindNearbyBerry(ctx: &mut Ctx) -> Option<Action> {
+    let Ctx { known, pos, .. } = *ctx;
+    let valid = |p: Point| known.get(p).cell().map(HasBerryTree).unwrap_or(false);
+    for &dir in &dirs::ALL {
+        let target = pos + dir;
+        if !valid(target) { continue; }
+        // Horrible hack because we use the path target as the attack target...
+        let kind = Some(PathKind::BerryTree);
+        ctx.blackboard.path = CachedPath { kind, path: vec![pos, target], skip: 1, step: 0 };
+        return None;
+    }
+    None
+}
+
+#[allow(non_snake_case)]
+fn ForageForBerries() -> impl Bhv {
+    pri![
+        "ForageForBerries",
+        act!("FindNearbyBerry", FindNearbyBerry),
+        act!("AttackBerryTree", |x| AttackPathTarget(x, PathKind::BerryTree)),
+        act!("Follow(BerryTree)", |x| FollowPath(x, PathKind::BerryTree)),
+        act!("MoveToBerryTree", |x| MoveToNeed(x, HasBerryTree, PathKind::BerryTree)),
+    ]
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+#[allow(non_snake_case)]
 fn Hunger(x: &mut Ctx) -> i64 {
-    let (limit, value) = (max(MAX_HUNGER / 2, 1), x.blackboard.till_hunger);
-    if value >= limit { return -1; }
-    if x.blackboard.hunger { return 101; }
+    if !x.blackboard.hunger { return -1; }
+    if x.blackboard.finding_food_ { return 101; }
+    let (limit, value) = (MAX_HUNGER, x.blackboard.till_hunger);
     (100 * (limit - value) / limit) as i64
 }
 
 #[allow(non_snake_case)]
 fn Thirst(x: &mut Ctx) -> i64 {
-    let (limit, value) = (max(MAX_THIRST / 2, 1), x.blackboard.till_thirst);
-    if value >= limit { return -1; }
-    if x.blackboard.thirst { return 101; }
+    if !x.blackboard.thirst { return -1; }
+    if x.blackboard.finding_water { return 101; }
+    let (limit, value) = (MAX_THIRST, x.blackboard.till_thirst);
     (100 * (limit - value) / limit) as i64
 }
 
 #[allow(non_snake_case)]
-fn HasFood(x: &CellKnowledge) -> bool { x.tile.can_eat() }
+fn HasFood(x: &CellKnowledge) -> bool { x.items.contains(&Item::Berry) }
 
 #[allow(non_snake_case)]
 fn HasWater(x: &CellKnowledge) -> bool { x.tile.can_drink() }
@@ -384,10 +518,11 @@ fn EatFoodNearby(ctx: &mut Ctx) -> Option<Action> {
     let Ctx { known, pos, .. } = *ctx;
     let valid = |p: Point| known.get(p).cell().map(HasFood).unwrap_or(false);
     for &dir in [dirs::NONE].iter().chain(&dirs::ALL) {
-        if valid(pos + dir) {
-            ctx.blackboard.till_hunger = MAX_HUNGER;
-            return Some(Action::Eat(EatAction { target: pos + dir, item: None }));
-        }
+        let target = pos + dir;
+        if !valid(target) { continue; }
+        let gain = ctx.env.rng.gen_range(HUNGER_GAIN);
+        ctx.blackboard.till_hunger = min(ctx.blackboard.till_hunger + gain, MAX_HUNGER);
+        return Some(Action::Eat(EatAction { target, item: Some(Item::Berry) }));
     }
     None
 }
@@ -397,10 +532,11 @@ fn DrinkWaterNearby(ctx: &mut Ctx) -> Option<Action> {
     let Ctx { known, pos, .. } = *ctx;
     let valid = |p: Point| known.get(p).cell().map(HasWater).unwrap_or(false);
     for &dir in [dirs::NONE].iter().chain(&dirs::ALL) {
-        if valid(pos + dir) {
-            ctx.blackboard.till_thirst = MAX_THIRST;
-            return Some(Action::Drink(pos + dir));
-        }
+        let target = pos + dir;
+        if !valid(target) { continue; }
+        let gain = ctx.env.rng.gen_range(THIRST_GAIN);
+        ctx.blackboard.till_thirst = min(ctx.blackboard.till_thirst + gain, MAX_THIRST);
+        return Some(Action::Drink(pos + dir));
     }
     None
 }
@@ -412,9 +548,10 @@ fn Eat() -> impl Bhv {
         act!("EatFoodNearby", EatFoodNearby),
         act!("Follow(MoveToFood)", |x| FollowPath(x, PathKind::MoveToFood)),
         act!("MoveToFood", |x| MoveToNeed(x, HasFood, PathKind::MoveToFood)),
+        ForageForBerries(),
     ]
-    .on_enter(|x| x.blackboard.hunger = true)
-    .on_exit(|x| x.blackboard.hunger = false)
+    .on_enter(|x| x.blackboard.finding_food_ = true)
+    .on_exit(|x| x.blackboard.finding_food_ = false)
 }
 
 #[allow(non_snake_case)]
@@ -425,8 +562,8 @@ fn Drink() -> impl Bhv {
         act!("Follow(MoveToWater)", |x| FollowPath(x, PathKind::MoveToWater)),
         act!("MoveToWater", |x| MoveToNeed(x, HasWater, PathKind::MoveToWater)),
     ]
-    .on_enter(|x| x.blackboard.thirst = true)
-    .on_exit(|x| x.blackboard.thirst = false)
+    .on_enter(|x| x.blackboard.finding_water = true)
+    .on_exit(|x| x.blackboard.finding_water = false)
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -470,11 +607,16 @@ impl AIState {
         self.tree.debug(&mut debug);
         slice.newline();
         let bb = &self.blackboard;
-        slice.write_str(&format!("hunger: {}", bb.hunger)).newline();
-        slice.write_str(&format!("thirst: {}", bb.thirst)).newline();
-        slice.write_str(&format!("till_assess: {}", bb.till_assess)).newline();
-        slice.write_str(&format!("till_hunger: {}", bb.till_hunger)).newline();
-        slice.write_str(&format!("till_thirst: {}", bb.till_thirst)).newline();
+        slice.write_str(&format!("finding_food_: {}", bb.finding_food_)).newline();
+        slice.write_str(&format!("finding_water: {}", bb.finding_water)).newline();
+        slice.write_str(&format!(
+                "till_assess: {} / {}", bb.till_assess, MAX_ASSESS)).newline();
+        slice.write_str(&format!(
+                "till_hunger: {} / {}{}", bb.till_hunger, MAX_HUNGER,
+                if bb.hunger { " (hungry)" } else { "" })).newline();
+        slice.write_str(&format!(
+                "till_thirst: {} / {}{}", bb.till_thirst, MAX_THIRST,
+                if bb.thirst { " (thirsty)" } else { "" })).newline();
         slice.write_str(&format!("dirs: {} items", bb.dirs.len())).newline();
         slice.write_str(&format!("path: {:?}", bb.path.kind)).newline();
     }
