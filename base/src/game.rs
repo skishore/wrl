@@ -9,7 +9,7 @@ use thin_vec::{ThinVec, thin_vec};
 use crate::static_assert_size;
 use crate::ai::{AIEnv, AIState};
 use crate::base::{Buffer, Color, Glyph};
-use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs};
+use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs, sample, weighted};
 use crate::dex::{Attack, Species};
 use crate::effect::{CB, Effect, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
@@ -60,11 +60,12 @@ const FLAG_LIMITS_VISION: u32 = 1 << 1;
 const FLAG_BLOCKS_MOVEMENT: u32 = 1 << 2;
 const FLAG_CAN_DRINK: u32 = 1 << 3;
 const FLAG_CAN_EAT: u32 = 1 << 4;
+const FLAG_BERRY: u32 = 1 << 5;
 
 const FLAGS_NONE: u32 = 0;
 const FLAGS_BLOCKED: u32 = FLAG_BLOCKS_MOVEMENT | FLAG_BLOCKS_VISION;
 const FLAGS_FRESH_WATER: u32 = FLAG_BLOCKS_MOVEMENT | FLAG_CAN_DRINK;
-const FLAGS_BERRY_TREE: u32 = FLAG_BLOCKS_MOVEMENT | FLAG_LIMITS_VISION | FLAG_CAN_EAT;
+const FLAGS_BERRY_TREE: u32 = FLAG_BLOCKS_MOVEMENT | FLAG_LIMITS_VISION | FLAG_BERRY;
 const FLAGS_TALL_GRASS: u32 = FLAG_LIMITS_VISION;
 
 pub struct Tile {
@@ -83,6 +84,7 @@ impl Tile {
     pub fn blocks_vision(&self) -> bool { self.flags & FLAG_BLOCKS_VISION != 0 }
     pub fn limits_vision(&self) -> bool { self.flags & FLAG_LIMITS_VISION != 0 }
     pub fn blocks_movement(&self) -> bool { self.flags & FLAG_BLOCKS_MOVEMENT != 0 }
+    pub fn drops_berries(&self) -> bool { self.flags & FLAG_BERRY != 0 }
 
     // Derived predicates.
     pub fn casts_shadow(&self) -> bool { self.blocks_vision() }
@@ -140,7 +142,7 @@ pub enum Item { Berry, Corpse }
 
 pub fn show_item(item: &Item) -> Glyph {
     match item {
-        Item::Berry  => Glyph::wdfg('*', 0xc08000),
+        Item::Berry  => Glyph::wdfg('o', 0xc08000),
         Item::Corpse => Glyph::wdfg('%', 0xffffff),
     }
 }
@@ -678,7 +680,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             if !okay { return ActionResult::failure(); }
 
             let board = &mut state.board;
-            let color = if item.is_some() { 0xff0000 } else { 0xffff00 };
+            let color = if item == Some(Item::Corpse) { 0xff0000 } else { 0xffff00 };
             let cb = Box::new(move |board: &mut Board, _: &mut UpdateEnv| {
                 let Some(item) = item else { return };
                 board.remove_item(target, item);
@@ -823,6 +825,15 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             }
 
             let cb = move |board: &mut Board, env: &mut UpdateEnv| {
+                if board.get_tile(target).drops_berries() {
+                    let count = *weighted(&[(1, 0), (2, 1), (1, 2)], &mut env.rng);
+                    for _ in 0..count {
+                        let dir = *sample(&dirs::ALL, &mut env.rng);
+                        if board.get_status(target + dir) == Status::Blocked { continue; }
+                        board.add_item(target + dir, Item::Berry);
+                    }
+                }
+
                 let Some(tid) = tid else { return; };
 
                 let cb = move |board: &mut Board, env: &mut UpdateEnv| {
