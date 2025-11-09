@@ -829,6 +829,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let entity = &state.board.entities[eid];
             let AttackAction { attack, target } = action;
             if !can_attack(&state.board, entity, &action) {
+                state.board.entities[eid].face_direction(target - source);
                 return ActionResult::failure();
             }
 
