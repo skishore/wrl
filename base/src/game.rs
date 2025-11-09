@@ -526,6 +526,53 @@ fn get_sightings(board: &Board, noise: &Noise, env: &mut UpdateEnv) -> Vec<Sight
 
 //////////////////////////////////////////////////////////////////////////////
 
+// Attack effects
+
+fn hit_tile(board: &mut Board, env: &mut UpdateEnv, target: Point) {
+    if !board.get_tile(target).drops_berries() { return; }
+
+    let options: Vec<_> = dirs::ALL.clone().into_iter().filter(
+        |&x| board.get_status(target + x) != Status::Blocked).collect();
+    if options.is_empty() { return; }
+
+    let rng = &mut env.rng;
+    let n = *weighted(&[(1, 0), (2, 1), (1, 2)], rng);
+    for _ in 0..n { board.add_item(target + *sample(&options, rng), Item::Berry); }
+}
+
+fn hit_entity(board: &mut Board, env: &mut UpdateEnv, attack: &Attack, logged: bool, tid: EID) {
+    let Some(target) = board.entities.get_mut(tid) else { return; };
+    let (pos, desc) = (target.pos, target.desc());
+
+    let critted = env.rng.gen_range(0..16) == 0;
+    let factor = if critted { 1.5 } else { 1. } * env.rng.gen_range(0.85..=1.);
+    let damage = (factor * attack.damage as f64).round() as i32;
+    let fainted = target.cur_hp <= damage;
+
+    if fainted {
+        board.remove_entity(tid);
+        board.add_item(pos, Item::Corpse);
+    } else {
+        target.cur_hp -= damage;
+    }
+
+    let volume = ATTACK_VOLUME;
+    let noise = Noise { cause: Some(tid), point: pos, volume };
+    let sightings = get_sightings(board, &noise, env);
+
+    for Sighting { eid: oid, source_seen: seen, .. } in sightings {
+        if fainted { board.remove_known_entity(oid, tid); }
+        if !seen || !board.entities[oid].player { continue; }
+
+        let log = &mut env.ui.log;
+        if !logged { log.log(format!("Something attacked {}!", desc)); }
+        if critted { log.log_append("A critical hit!"); }
+        if fainted { log.log_append(capitalize(format!("{} fainted!", desc))); }
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 // Turn-taking
 
 pub fn move_ready(entity: &Entity) -> bool { entity.move_timer <= 0 }
@@ -828,46 +875,12 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             }
 
             let cb = move |board: &mut Board, env: &mut UpdateEnv| {
-                if board.get_tile(target).drops_berries() {
-                    let count = *weighted(&[(1, 0), (2, 1), (1, 2)], &mut env.rng);
-                    for _ in 0..count {
-                        let dir = *sample(&dirs::ALL, &mut env.rng);
-                        if board.get_status(target + dir) == Status::Blocked { continue; }
-                        board.add_item(target + dir, Item::Berry);
-                    }
-                }
+                hit_tile(board, env, target);
 
                 let Some(tid) = tid else { return; };
 
                 let cb = move |board: &mut Board, env: &mut UpdateEnv| {
-                    let Some(target) = board.entities.get_mut(tid) else { return; };
-                    let (pos, desc) = (target.pos, target.desc());
-
-                    let critted = env.rng.gen_range(0..16) == 0;
-                    let factor = if critted { 1.5 } else { 1. } * env.rng.gen_range(0.85..=1.);
-                    let damage = (factor * attack.damage as f64).round() as i32;
-                    let fainted = target.cur_hp <= damage;
-
-                    if fainted {
-                        board.remove_entity(tid);
-                        board.add_item(pos, Item::Corpse);
-                    } else {
-                        target.cur_hp -= damage;
-                    }
-
-                    let volume = ATTACK_VOLUME;
-                    let noise = Noise { cause: Some(tid), point: pos, volume };
-                    let sightings = get_sightings(board, &noise, env);
-
-                    for Sighting { eid: oid, source_seen: seen, .. } in sightings {
-                        if fainted { board.remove_known_entity(oid, tid); }
-                        if !seen || !board.entities[oid].player { continue; }
-
-                        let log = &mut env.ui.log;
-                        if !logged { log.log(format!("Something attacked {}!", desc)); }
-                        if critted { log.log_append("A critical hit!"); }
-                        if fainted { log.log_append(capitalize(format!("{} fainted!", desc))); }
-                    }
+                    hit_entity(board, env, attack, logged, tid);
                 };
                 board.add_effect(apply_damage(board, target, Box::new(cb)), env);
             };
