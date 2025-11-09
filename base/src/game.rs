@@ -39,6 +39,7 @@ const WEATHER: Weather = Weather::None;
 const NUM_PREDATORS: i32 = 1;
 const NUM_PREY: i32 = 4;
 
+const UI_FLASH: i32 = 4;
 const UI_DAMAGE_FLASH: i32 = 6;
 const UI_DAMAGE_TICKS: i32 = 6;
 
@@ -638,6 +639,7 @@ fn plan(state: &mut State, eid: EID) -> Action {
 fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
     let entity = &mut state.board.entities[eid];
     entity.asleep = matches!(action, Action::Rest);
+    let source = entity.pos;
 
     match action {
         Action::Idle => ActionResult::success(),
@@ -646,8 +648,8 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
         Action::SniffAround => {
             let (pos, color) = (entity.pos, 0xffff00);
             let board = &mut state.board;
-            let cb = Box::new(|_: &mut Board, _: &mut UpdateEnv| {});
-            board.add_effect(apply_flash(board, pos, color, cb), &mut state.env);
+            let effect = apply_flash(board, pos, color, None);
+            board.add_effect(effect, &mut state.env);
             ActionResult::success()
         }
         Action::Look(dir) => {
@@ -655,20 +657,24 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             ActionResult::success()
         }
         Action::Drink(target) => {
-            let dir = target - entity.pos;
+            let (source, dir) = (entity.pos, target - entity.pos);
             if dir.len_l1() > 1 { return ActionResult::failure(); }
 
             entity.face_direction(dir);
             let okay = state.board.get_cell(target).tile.can_drink();
             if !okay { return ActionResult::failure(); }
 
+            let color = 0x0080ff;
             let board = &mut state.board;
-            let cb = Box::new(|_: &mut Board, _: &mut UpdateEnv| {});
-            board.add_effect(apply_flash(board, target, 0x0000ff, cb), &mut state.env);
+            let effect = Effect::serial(vec![
+                apply_flash(board, target, color, None),
+                apply_flash(board, source, color, None).delay(UI_FLASH / 2),
+            ]);
+            board.add_effect(effect, &mut state.env);
             ActionResult::success()
         }
         Action::Eat(EatAction { target, item }) => {
-            let dir = target - entity.pos;
+            let (source, dir) = (entity.pos, target - entity.pos);
             if dir.len_l1() > 1 { return ActionResult::failure(); }
 
             entity.face_direction(dir);
@@ -685,17 +691,20 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 let Some(item) = item else { return };
                 board.remove_item(target, item);
             });
-            board.add_effect(apply_flash(board, target, color, cb), &mut state.env);
+            let effect = Effect::serial(vec![
+                apply_flash(board, target, color, Some(cb)),
+                apply_flash(board, source, color, None).delay(UI_FLASH / 2),
+            ]);
+            board.add_effect(effect, &mut state.env);
             ActionResult::success()
         }
         Action::CallForHelp(CallForHelpAction { look }) => {
-            let point = entity.pos;
-            let noise = Noise { cause: Some(eid), point, volume: CALL_VOLUME };
+            let noise = Noise { cause: Some(eid), point: source, volume: CALL_VOLUME };
             let sightings = get_sightings(&state.board, &noise, &mut state.env);
 
             // Deliver a CallForHelpEvent to each entity that heard the call.
             let data = EventData::CallForHelp(CallForHelpEvent {});
-            let mut event = state.board.create_event(eid, data, point);
+            let mut event = state.board.create_event(eid, data, source);
             for Sighting { eid: oid, source_seen: seen, .. } in sightings {
                 event.sense = if seen { Sense::Sight } else { Sense::Sound };
                 state.board.observe_event(oid, &event, &mut state.env);
@@ -705,12 +714,8 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let board = &mut state.board;
             let mut effect = Effect::default();
             for _ in 0..3 {
-                let cb = Box::new(|_: &mut Board, _: &mut UpdateEnv| {});
-                effect = Effect::serial(vec![
-                    effect,
-                    apply_flash(board, point, color, cb),
-                    Effect::pause(UI_DAMAGE_TICKS),
-                ]);
+                effect = effect.then(apply_flash(board, source, color, None));
+                effect = effect.then(Effect::pause(UI_FLASH));
             }
             let cb = move |board: &mut Board, _: &mut UpdateEnv| {
                 let Some(entity) = board.entities.get_mut(eid) else { return };
@@ -732,7 +737,6 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let turns = step.len_l2() * turns;
             let color = entity.species.glyph.fg();
             let player = entity.player;
-            let source = entity.pos;
             let target = source + step;
 
             match state.board.get_status(target) {
@@ -776,7 +780,6 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
         }
         Action::Attack(action) => {
             let entity = &state.board.entities[eid];
-            let source = entity.pos;
             let AttackAction { attack, target } = action;
             if !can_attack(&state.board, entity, &action) {
                 return ActionResult::failure();
@@ -890,7 +893,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 //
 // We also need to figure out if items are "hidden" the same way entities are.
 
-fn apply_flash<T: Into<Color>>(board: &Board, target: Point, color: T, callback: CB) -> Effect {
+fn apply_flash<T: Into<Color>>(board: &Board, target: Point, color: T, cb: Option<CB>) -> Effect {
     let cell = board.get_cell(target);
     let glyph = if let Some(x) = cell.eid {
         board.entities[x].species.glyph
@@ -902,8 +905,8 @@ fn apply_flash<T: Into<Color>>(board: &Board, target: Point, color: T, callback:
 
     let flash = glyph.with_fg(Color::black()).with_bg(color);
     let particle = effect::Particle { glyph: flash, point: target };
-    let mut effect = Effect::constant(particle, UI_DAMAGE_FLASH);
-    effect.sub_on_finished(callback);
+    let mut effect = Effect::constant(particle, UI_FLASH);
+    if let Some(x) = cb { effect.sub_on_finished(x); }
     effect
 }
 
