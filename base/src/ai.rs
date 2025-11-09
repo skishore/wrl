@@ -371,30 +371,27 @@ fn AttackPathTarget(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
 #[allow(non_snake_case)]
 fn AttackTarget(ctx: &mut Ctx, target: Point) -> Option<Action> {
     let Ctx { entity, known, pos: source, .. } = *ctx;
+    if !known.get(target).visible() { return None; }
     if source == target { return None; }
 
     let attacks = &ctx.entity.species.attacks;
     if attacks.is_empty() { return None; }
 
     let attack = sample(attacks, ctx.env.rng);
-    let range = attack.range;
-    let valid = |x| HasLOS(x, target, known, range);
+    let valid = |x| CanAttackTarget(x, target, known, attack.range);
     if move_ready(entity) && valid(source) {
         return Some(Action::Attack(AttackAction { attack, target }));
     }
-    PathToTarget(ctx, target, range, valid)
+    PathToTarget(ctx, target, attack.range, valid)
 }
 
 #[allow(non_snake_case)]
-fn HasLOS(source: Point, target: Point, known: &Knowledge, range: i32) -> bool {
+fn CanAttackTarget(source: Point, target: Point, known: &Knowledge, range: i32) -> bool {
     if (source - target).len_nethack() > range { return false; }
-    if !known.get(target).visible() { return false; }
+    if source == target { return false; }
+
     let los = LOS(source, target);
-    let last = los.len() - 1;
-    los.iter().enumerate().all(|(i, &p)| {
-        if i == 0 || i == last { return true; }
-        known.get(p).status() == Status::Free
-    })
+    los.iter().skip(1).rev().skip(1).all(|&p| known.get(p).status() == Status::Free)
 }
 
 #[allow(non_snake_case)]
@@ -453,15 +450,13 @@ fn HasBerryTree(x: &CellKnowledge) -> bool { x.tile.drops_berries() }
 fn FindNearbyBerry(ctx: &mut Ctx) -> Option<Action> {
     let Ctx { known, pos, .. } = *ctx;
     let valid = |p: Point| known.get(p).cell().map(HasBerryTree).unwrap_or(false);
-    for &dir in &dirs::ALL {
-        let target = pos + dir;
-        if !valid(target) { continue; }
-        // Horrible hack because we use the path target as the attack target...
-        let kind = Some(PathKind::BerryTree);
-        ctx.blackboard.path = CachedPath { kind, path: vec![pos, target], skip: 1, step: 0 };
-        return None;
-    }
-    None
+    let target = ChooseBestNeighbor(ctx, valid)?;
+
+    // Horrible hack because we use the path target as the attack target...
+    let kind = Some(PathKind::BerryTree);
+    ctx.blackboard.path = CachedPath { kind, path: vec![pos, target], skip: 1, step: 0 };
+
+    if !known.get(target).visible() { Some(Action::Look(target - pos)) } else { None }
 }
 
 #[allow(non_snake_case)]
@@ -501,44 +496,54 @@ fn HasWater(x: &CellKnowledge) -> bool { x.tile.can_drink() }
 
 #[allow(non_snake_case)]
 fn MoveToNeed<F: Fn(&CellKnowledge) -> bool>(
-        ctx: &mut Ctx, f: F, kind: PathKind) -> Option<Action> {
+        ctx: &mut Ctx, valid: F, kind: PathKind) -> Option<Action> {
     ensure_neighborhood(ctx);
 
     let n = &ctx.neighborhood;
     let Ctx { known, .. } = *ctx;
     for &(point, _) in n.blocked.iter().chain(&n.visited) {
-        if !known.get(point).cell().map(&f).unwrap_or(false) { continue; }
+        if !known.get(point).cell().map(&valid).unwrap_or(false) { continue; }
         return FindPath(ctx, point, kind);
     }
     None
 }
 
 #[allow(non_snake_case)]
+fn ChooseBestNeighbor<F: Fn(Point) -> bool>(ctx: &Ctx, valid: F) -> Option<Point> {
+    let mut best = (std::f64::NEG_INFINITY, None);
+    let Ctx { pos, dir, .. } = *ctx;
+    for &x in [dirs::NONE].iter().chain(&dirs::ALL) {
+        if !valid(pos + x) { continue; }
+        let score = (dir.dot(x) as f64).pow(2) / x.len_l2_squared() as f64;
+        if score > best.0 { best = (score, Some(pos + x)); }
+    }
+    best.1
+}
+
+#[allow(non_snake_case)]
 fn EatFoodNearby(ctx: &mut Ctx) -> Option<Action> {
     let Ctx { known, pos, .. } = *ctx;
     let valid = |p: Point| known.get(p).cell().map(HasFood).unwrap_or(false);
-    for &dir in [dirs::NONE].iter().chain(&dirs::ALL) {
-        let target = pos + dir;
-        if !valid(target) { continue; }
-        let gain = ctx.env.rng.gen_range(HUNGER_GAIN);
-        ctx.blackboard.till_hunger = min(ctx.blackboard.till_hunger + gain, MAX_HUNGER);
-        return Some(Action::Eat(EatAction { target, item: Some(Item::Berry) }));
-    }
-    None
+    let target = ChooseBestNeighbor(ctx, valid)?;
+
+    if !known.get(target).visible() { return Some(Action::Look(target - pos)); }
+
+    let gain = ctx.env.rng.gen_range(HUNGER_GAIN);
+    ctx.blackboard.till_hunger = min(ctx.blackboard.till_hunger + gain, MAX_HUNGER);
+    Some(Action::Eat(EatAction { target, item: Some(Item::Berry) }))
 }
 
 #[allow(non_snake_case)]
 fn DrinkWaterNearby(ctx: &mut Ctx) -> Option<Action> {
     let Ctx { known, pos, .. } = *ctx;
     let valid = |p: Point| known.get(p).cell().map(HasWater).unwrap_or(false);
-    for &dir in [dirs::NONE].iter().chain(&dirs::ALL) {
-        let target = pos + dir;
-        if !valid(target) { continue; }
-        let gain = ctx.env.rng.gen_range(THIRST_GAIN);
-        ctx.blackboard.till_thirst = min(ctx.blackboard.till_thirst + gain, MAX_THIRST);
-        return Some(Action::Drink(pos + dir));
-    }
-    None
+    let target = ChooseBestNeighbor(ctx, valid)?;
+
+    if !known.get(target).visible() { return Some(Action::Look(target - pos)); }
+
+    let gain = ctx.env.rng.gen_range(THIRST_GAIN);
+    ctx.blackboard.till_thirst = min(ctx.blackboard.till_thirst + gain, MAX_THIRST);
+    Some(Action::Drink(target))
 }
 
 #[allow(non_snake_case)]
