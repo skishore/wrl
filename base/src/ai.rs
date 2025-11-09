@@ -443,33 +443,6 @@ fn PathToTarget<F: Fn(Point) -> bool>(
     Some(step(*path.first()? - source))
 }
 
-#[allow(non_snake_case)]
-fn HasBerryTree(x: &CellKnowledge) -> bool { x.tile.drops_berries() }
-
-#[allow(non_snake_case)]
-fn FindNearbyBerry(ctx: &mut Ctx) -> Option<Action> {
-    let Ctx { known, pos, .. } = *ctx;
-    let valid = |p: Point| known.get(p).cell().map(HasBerryTree).unwrap_or(false);
-    let target = ChooseBestNeighbor(ctx, valid)?;
-
-    // Horrible hack because we use the path target as the attack target...
-    let kind = Some(PathKind::BerryTree);
-    ctx.blackboard.path = CachedPath { kind, path: vec![pos, target], skip: 1, step: 0 };
-
-    if !known.get(target).visible() { Some(Action::Look(target - pos)) } else { None }
-}
-
-#[allow(non_snake_case)]
-fn ForageForBerries() -> impl Bhv {
-    pri![
-        "ForageForBerries",
-        act!("FindNearbyBerry", FindNearbyBerry),
-        act!("AttackBerryTree", |x| AttackPathTarget(x, PathKind::BerryTree)),
-        act!("Follow(BerryTree)", |x| FollowPath(x, PathKind::BerryTree)),
-        act!("MoveToBerryTree", |x| MoveToNeed(x, HasBerryTree, PathKind::BerryTree)),
-    ]
-}
-
 //////////////////////////////////////////////////////////////////////////////
 
 #[allow(non_snake_case)]
@@ -493,6 +466,9 @@ fn HasFood(x: &CellKnowledge) -> bool { x.items.contains(&Item::Berry) }
 
 #[allow(non_snake_case)]
 fn HasWater(x: &CellKnowledge) -> bool { x.tile.can_drink() }
+
+#[allow(non_snake_case)]
+fn HasBerryTree(x: &CellKnowledge) -> bool { x.tile.drops_berries() }
 
 #[allow(non_snake_case)]
 fn MoveToNeed<F: Fn(&CellKnowledge) -> bool>(
@@ -547,7 +523,35 @@ fn DrinkWaterNearby(ctx: &mut Ctx) -> Option<Action> {
 }
 
 #[allow(non_snake_case)]
-fn Eat() -> impl Bhv {
+fn FindNearbyBerry(ctx: &mut Ctx) -> Option<Action> {
+    let Ctx { known, pos, .. } = *ctx;
+    let valid = |p: Point| known.get(p).cell().map(HasBerryTree).unwrap_or(false);
+    let target = ChooseBestNeighbor(ctx, valid)?;
+
+    // Horrible hack because we use the path target as the attack target...
+    let kind = Some(PathKind::BerryTree);
+    ctx.blackboard.path = CachedPath { kind, path: vec![pos, target], skip: 1, step: 0 };
+
+    if !known.get(target).visible() { Some(Action::Look(target - pos)) } else { None }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// Behavior tree configuration
+
+#[allow(non_snake_case)]
+fn ForageForBerries() -> impl Bhv {
+    pri![
+        "ForageForBerries",
+        act!("FindNearbyBerry", FindNearbyBerry),
+        act!("AttackBerryTree", |x| AttackPathTarget(x, PathKind::BerryTree)),
+        act!("Follow(BerryTree)", |x| FollowPath(x, PathKind::BerryTree)),
+        act!("MoveToBerryTree", |x| MoveToNeed(x, HasBerryTree, PathKind::BerryTree)),
+    ]
+}
+
+#[allow(non_snake_case)]
+fn EatFood() -> impl Bhv {
     pri![
         "EatFood",
         act!("EatFoodNearby", EatFoodNearby),
@@ -560,7 +564,7 @@ fn Eat() -> impl Bhv {
 }
 
 #[allow(non_snake_case)]
-fn Drink() -> impl Bhv {
+fn DrinkWater() -> impl Bhv {
     pri![
         "DrinkWater",
         act!("DrinkWaterNearby", DrinkWaterNearby),
@@ -571,17 +575,13 @@ fn Drink() -> impl Bhv {
     .on_exit(|x| x.blackboard.finding_water = false)
 }
 
-//////////////////////////////////////////////////////////////////////////////
-
-// Top-level tree
-
 #[allow(non_snake_case)]
 fn Root() -> Box<dyn Bhv> {
     Box::new(pri![
         "Root",
         cb!("TickBasicNeeds", TickBasicNeeds),
         act!("Follow(LookAround)", FollowDirs),
-        util!["BasicNeeds", (Hunger, Eat()), (Thirst, Drink())],
+        util!["BasicNeeds", (Hunger, EatFood()), (Thirst, DrinkWater())],
         act!("Follow(Explore)", |x| FollowPath(x, PathKind::Explore)),
         act!("LookAround", Assess),
         act!("Explore", Explore),
