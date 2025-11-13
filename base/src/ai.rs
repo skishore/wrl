@@ -318,7 +318,8 @@ fn FindPath(ctx: &mut Ctx, target: Point, kind: PathKind) -> Option<Action> {
     };
     ctx.blackboard.path = CachedPath { kind: Some(kind), path, skip, step: 0 };
     ctx.blackboard.path.path.insert(0, pos);
-    FollowPath(ctx, kind)
+    // TODO: Horrible hack because we use the path target as the attack target...
+    if kind == PathKind::BerryTree { None } else { FollowPath(ctx, kind) }
 }
 
 #[allow(non_snake_case)]
@@ -528,7 +529,7 @@ fn FindNearbyBerry(ctx: &mut Ctx) -> Option<Action> {
     let valid = |p: Point| known.get(p).cell().map(HasBerryTree).unwrap_or(false);
     let target = ChooseBestNeighbor(ctx, valid)?;
 
-    // Horrible hack because we use the path target as the attack target...
+    // TODO: Horrible hack because we use the path target as the attack target...
     let kind = Some(PathKind::BerryTree);
     ctx.blackboard.path = CachedPath { kind, path: vec![pos, target], skip: 1, step: 0 };
 
@@ -539,6 +540,23 @@ fn FindNearbyBerry(ctx: &mut Ctx) -> Option<Action> {
 
 // Behavior tree configuration
 
+// TODO list:
+//
+//  1. Figure out a clean pattern for "continue on old path or select new one"
+//     that works for both "attack", "move next to", and "move to" targets.
+//
+//  2. PathKind-specific validation: for example, the path to a berry is no
+//     longer valid if there's not a berry at the target cell any more.
+//
+//  3. Last-seen cache for cells satisfying a need, to skip repeated searches.
+//
+//  4. Periodically re-plan a path to a need if there is a closer one?
+//
+//  5. Utility-based selection between different needs. But it seems like we'd
+//     need to run searches for multiple ones to get it right. How to?
+//
+//  6. High-priority Survive subtree: Track, Chase, Flee, Hide, CallForHelp...
+
 #[allow(non_snake_case)]
 fn ForageForBerries() -> impl Bhv {
     pri![
@@ -546,7 +564,9 @@ fn ForageForBerries() -> impl Bhv {
         act!("FindNearbyBerry", FindNearbyBerry),
         act!("AttackBerryTree", |x| AttackPathTarget(x, PathKind::BerryTree)),
         act!("Follow(BerryTree)", |x| FollowPath(x, PathKind::BerryTree)),
-        act!("MoveToBerryTree", |x| MoveToNeed(x, HasBerryTree, PathKind::BerryTree)),
+        act!("FindBerryTree", |x| MoveToNeed(x, HasBerryTree, PathKind::BerryTree)),
+        act!("AttackBerryTree", |x| AttackPathTarget(x, PathKind::BerryTree)),
+        act!("Follow(BerryTree)", |x| FollowPath(x, PathKind::BerryTree)),
     ]
 }
 
