@@ -286,45 +286,47 @@ fn Explore(ctx: &mut Ctx) -> Option<Action> {
         base * (cos + 1.).pow(4) / (distance as f64).pow(2)
     };
 
+    let kind = PathKind::Explore;
     let scores: Vec<_> = ctx.neighborhood.visited.iter().map(
         |&(p, distance)| (p, score(p, distance))).collect();
     let target = select_target(&scores, ctx.env)?;
-    FindPath(ctx, target, PathKind::Explore)
+    if FindPath(ctx, target, kind) { FollowPath(ctx, kind) } else { None }
 }
 
 //////////////////////////////////////////////////////////////////////////////
 
 // Pathfinding
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PathKind { MoveToFood, MoveToWater, BerryTree, Explore }
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PathKind { MoveToFood, MoveToWater, BerryTree, Explore, #[default] None }
 
 #[derive(Default)]
 struct CachedPath {
-    kind: Option<PathKind>,
+    kind: PathKind,
     path: Vec<Point>,
     skip: usize,
     step: usize,
 }
 
 #[allow(non_snake_case)]
-fn FindPath(ctx: &mut Ctx, target: Point, kind: PathKind) -> Option<Action> {
+fn FindPath(ctx: &mut Ctx, target: Point, kind: PathKind) -> bool {
     ensure_vision(ctx);
     let (pos, check) = (ctx.pos, get_check(ctx));
-    let path = AStar(pos, target, ASTAR_LIMIT_WANDER, check)?;
+    let path = AStar(pos, target, ASTAR_LIMIT_WANDER, check);
+    let Some(path) = path else { return false };
+
     let skip = match kind {
         PathKind::MoveToFood | PathKind::MoveToWater | PathKind::BerryTree => 1,
-        PathKind::Explore => 0,
+        PathKind::Explore | PathKind::None => 0,
     };
-    ctx.blackboard.path = CachedPath { kind: Some(kind), path, skip, step: 0 };
+    ctx.blackboard.path = CachedPath { kind, path, skip, step: 0 };
     ctx.blackboard.path.path.insert(0, pos);
-    // TODO: Horrible hack because we use the path target as the attack target...
-    if kind == PathKind::BerryTree { None } else { FollowPath(ctx, kind) }
+    true
 }
 
 #[allow(non_snake_case)]
 fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
-    if ctx.blackboard.path.kind != Some(kind) { return None; }
+    if ctx.blackboard.path.kind != kind { return None; }
 
     let (known, pos) = (ctx.known, ctx.pos);
     let path = std::mem::take(&mut ctx.blackboard.path);
@@ -364,7 +366,7 @@ fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
 
 #[allow(non_snake_case)]
 fn AttackPathTarget(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
-    if ctx.blackboard.path.kind != Some(kind) { return None; }
+    if ctx.blackboard.path.kind != kind { return None; }
     let target = *ctx.blackboard.path.path.last()?;
     AttackTarget(ctx, target)
 }
@@ -480,7 +482,7 @@ fn MoveToNeed<F: Fn(&CellKnowledge) -> bool>(
     let Ctx { known, .. } = *ctx;
     for &(point, _) in n.blocked.iter().chain(&n.visited) {
         if !known.get(point).cell().map(&valid).unwrap_or(false) { continue; }
-        return FindPath(ctx, point, kind);
+        return if FindPath(ctx, point, kind) { FollowPath(ctx, kind) } else { None };
     }
     None
 }
@@ -530,8 +532,8 @@ fn FindNearbyBerry(ctx: &mut Ctx) -> Option<Action> {
     let target = ChooseBestNeighbor(ctx, valid)?;
 
     // TODO: Horrible hack because we use the path target as the attack target...
-    let kind = Some(PathKind::BerryTree);
-    ctx.blackboard.path = CachedPath { kind, path: vec![pos, target], skip: 1, step: 0 };
+    let path = LOS(pos, target);
+    ctx.blackboard.path = CachedPath { kind: PathKind::BerryTree, path, skip: 1, step: 0 };
 
     if !known.get(target).visible() { Some(Action::Look(target - pos)) } else { None }
 }
@@ -571,16 +573,20 @@ fn ForageForBerries() -> impl Bhv {
 }
 
 #[allow(non_snake_case)]
-fn EatFood() -> impl Bhv {
+fn EatFoodItems() -> impl Bhv {
     pri![
-        "EatFood",
+        "EatFoodItems",
         act!("EatFoodNearby", EatFoodNearby),
         act!("Follow(MoveToFood)", |x| FollowPath(x, PathKind::MoveToFood)),
         act!("MoveToFood", |x| MoveToNeed(x, HasFood, PathKind::MoveToFood)),
-        ForageForBerries(),
     ]
-    .on_enter(|x| x.blackboard.finding_food_ = true)
-    .on_exit(|x| x.blackboard.finding_food_ = false)
+}
+
+#[allow(non_snake_case)]
+fn EatFood() -> impl Bhv {
+    pri!["EatFood", EatFoodItems(), ForageForBerries()]
+        .on_enter(|x| x.blackboard.finding_food_ = true)
+        .on_exit(|x| x.blackboard.finding_food_ = false)
 }
 
 #[allow(non_snake_case)]
