@@ -126,10 +126,10 @@ fn is_hiding_place(ctx: &Ctx, point: Point) -> bool {
 
 fn get_check<'a>(ctx: &'a Ctx) -> impl Fn(Point) -> Status + use<'a> {
     let (fov, known, pos) = (&ctx.env.fov, ctx.known, ctx.pos);
-    move |p: Point| {
-        let status = known.get(p).status();
-        if status != Status::Unknown { return status; }
-        if fov.can_see(p - pos) { Status::Free } else { Status::Unknown }
+    move |p: Point| match known.get(p).status() {
+        Status::Occupied if (p - pos).len_l1() == 1 => Status::Blocked,
+        Status::Unknown if fov.can_see(p - pos) => Status::Free,
+        x => x,
     }
 }
 
