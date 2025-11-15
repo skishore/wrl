@@ -508,7 +508,7 @@ fn CanRestAt(ctx: &Ctx, point: Point) -> bool {
 trait CellPredicate = Fn(&Ctx, Point) -> bool;
 
 #[allow(non_snake_case)]
-fn FindNeed<F: CellPredicate>(ctx: &mut Ctx, valid: F, kind: PathKind) -> bool {
+fn FindNeed<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> bool {
     ensure_neighborhood(ctx);
 
     let n = &ctx.neighborhood;
@@ -519,17 +519,7 @@ fn FindNeed<F: CellPredicate>(ctx: &mut Ctx, valid: F, kind: PathKind) -> bool {
 }
 
 #[allow(non_snake_case)]
-fn MoveToNeed<F: CellPredicate>(ctx: &mut Ctx, valid: F, kind: PathKind) -> Option<Action> {
-    if FindNeed(ctx, valid, kind) { FollowPath(ctx, kind) } else { None }
-}
-
-#[allow(non_snake_case)]
-fn FollowChecked<F: CellPredicate>(ctx: &mut Ctx, valid: F, kind: PathKind) -> Option<Action> {
-    if CheckPathTarget(ctx, valid, kind) { FollowPath(ctx, kind) } else { None }
-}
-
-#[allow(non_snake_case)]
-fn CheckPathTarget<F: CellPredicate>(ctx: &mut Ctx, valid: F, kind: PathKind) -> bool {
+fn CheckPathTarget<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> bool {
     if ctx.blackboard.path.kind != kind { return false; }
 
     let okay = ctx.blackboard.path.path.last().map(|&x| valid(ctx, x)).unwrap_or(false);
@@ -615,22 +605,23 @@ fn AttackOrFollowPath(kind: PathKind) -> impl Bhv {
     ]
 }
 
+macro_rules! path {
+    ($k:expr, $v:expr, $f:expr) => {
+        crate::bhv::Node::new((), crate::bhv::Composite::new(
+            crate::bhv::PriPolicy {},
+            seq!["FollowExistingPath", cond!("CheckPath", |x| CheckPathTarget(x, $k, $v)), $f],
+            seq!["FindNewPath", cond!("FindPath", |x| FindNeed(x, $k, $v)), $f],
+        ))
+    };
+}
+
 #[allow(non_snake_case)]
 fn ForageForBerries() -> impl Bhv {
     const KIND: PathKind = PathKind::BerryTree;
     pri![
         "ForageForBerries",
         act!("FindNearbyBerryTree", FindNearbyBerryTree),
-        seq![
-            "FollowExistingPath",
-            cond!("CheckForBerryTree", |x| CheckPathTarget(x, HasBerryTree, KIND)),
-            AttackOrFollowPath(KIND),
-        ],
-        seq![
-            "FindNewPath",
-            cond!("FindBerryTree", |x| FindNeed(x, HasBerryTree, KIND)),
-            AttackOrFollowPath(KIND),
-        ],
+        path!(KIND, HasBerryTree, AttackOrFollowPath(KIND)),
     ]
 }
 
@@ -640,8 +631,7 @@ fn EatBerries() -> impl Bhv {
     pri![
         "EatBerries",
         act!("EatBerryNearby", EatBerryNearby),
-        act!("Follow(Berry)", |x| FollowChecked(x, HasBerry, KIND)),
-        act!("MoveToBerry", |x| MoveToNeed(x, HasBerry, KIND)),
+        path!(KIND, HasBerry, act!("FollowPath", |x| FollowPath(x, KIND))),
     ]
 }
 
@@ -654,12 +644,11 @@ fn EatFood() -> impl Bhv {
 
 #[allow(non_snake_case)]
 fn DrinkWater() -> impl Bhv {
-    const KIND: PathKind = PathKind::BerryTree;
+    const KIND: PathKind = PathKind::Water;
     pri![
         "DrinkWater",
         act!("DrinkWaterNearby", DrinkWaterNearby),
-        act!("Follow(Water)", |x| FollowChecked(x, HasWater, KIND)),
-        act!("MoveToWater", |x| MoveToNeed(x, HasWater, KIND)),
+        path!(KIND, HasWater, act!("FollowPath", |x| FollowPath(x, KIND))),
     ]
     .on_enter(|x| x.blackboard.finding_water = true)
     .on_exit(|x| x.blackboard.finding_water = false)
@@ -671,8 +660,7 @@ fn GetRest() -> impl Bhv {
     pri![
         "GetRest",
         act!("RestAtCurrentLocation", RestAtCurrentLocation),
-        act!("Follow(Rest)", |x| FollowChecked(x, CanRestAt, KIND)),
-        act!("MoveToRest", |x| MoveToNeed(x, CanRestAt, KIND)),
+        path!(KIND, CanRestAt, act!("FollowPath", |x| FollowPath(x, KIND))),
     ]
     .on_enter(|x| x.blackboard.getting_rest_ = true)
     .on_exit(|x| x.blackboard.getting_rest_ = false)
