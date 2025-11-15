@@ -721,7 +721,7 @@ impl AIState {
     }
 
     pub fn debug(&self, slice: &mut Slice) {
-        let mut debug = Debug { depth: 0, slice };
+        let mut debug = Debug { depth: 0, slice, verbose: true };
         self.tree.debug(&mut debug);
         slice.newline();
         let bb = &self.blackboard;
