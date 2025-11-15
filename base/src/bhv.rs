@@ -9,6 +9,7 @@ use crate::game::Action;
 pub struct Debug<'a, 'b> {
     pub depth: usize,
     pub slice: &'a mut Slice<'b>,
+    pub verbose: bool,
 }
 
 impl<'a, 'b> Debug<'a, 'b> {
@@ -85,6 +86,9 @@ impl<S: Label, T: Bhv> Bhv for Node<S, T> {
         };
         debug.slice.set_fg(Some(color.into()));
         debug.append(x);
+
+        if !debug.verbose && self.last.is_none() { return; }
+
         debug.indent(1, |x| self.tree.debug(x));
     }
 
@@ -208,6 +212,8 @@ impl Utility {
 
 impl Bhv for Utility {
     fn debug(&self, debug: &mut Debug) {
+        if !debug.verbose && self.1.iter().all(|x| x.0 < 0) { return; }
+
         for (i, x) in self.0.iter().enumerate() {
             let mut cursor = debug.slice.get_cursor();
             x.debug(debug);
