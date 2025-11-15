@@ -148,11 +148,11 @@ impl<T: Fn(&mut Ctx) -> Option<Action>> Bhv for Act<T> {
 
 pub struct Cond<T>(T);
 
-impl<T: Fn(&Ctx) -> bool> Cond<T> {
+impl<T: Fn(&mut Ctx) -> bool> Cond<T> {
     pub fn new(t: T) -> Self { Self(t) }
 }
 
-impl<T: Fn(&Ctx) -> bool> Bhv for Cond<T> {
+impl<T: Fn(&mut Ctx) -> bool> Bhv for Cond<T> {
     fn tick(&mut self, ctx: &mut Ctx) -> Result {
         if (self.0)(ctx) { Result::Success } else { Result::Failed }
     }

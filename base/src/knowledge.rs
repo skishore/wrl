@@ -783,7 +783,7 @@ impl<'a> PointLookup<'a> {
 
     // Derived fields
 
-    pub fn cell(&self) -> Option<&CellKnowledge> {
+    pub fn cell(&self) -> Option<&'a CellKnowledge> {
         Some(&self.root.cells[self.spot?.cell?])
     }
 
