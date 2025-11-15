@@ -36,9 +36,11 @@ const ASSESS_TURNS_FLIGHT: i32 = 1;
 const MAX_ASSESS: i32 = 32;
 const MAX_HUNGER: i32 = 512;
 const MAX_THIRST: i32 = 128;
+const MAX_WEARY_: i32 = 2048;
 const ASSESS_GAIN: RangeInclusive<i32> = (MAX_ASSESS / 2)..=MAX_ASSESS;
 const HUNGER_GAIN: RangeInclusive<i32> = (MAX_HUNGER / 4)..=(MAX_HUNGER / 2);
 const THIRST_GAIN: RangeInclusive<i32> = (MAX_THIRST / 4)..=(MAX_THIRST / 2);
+const RESTED_GAIN: RangeInclusive<i32> = 1..=2;
 
 const WANDER_TURNS: f64 = 2.;
 
@@ -68,10 +70,13 @@ struct Blackboard {
     till_assess: i32,
     till_hunger: i32,
     till_thirst: i32,
+    till_weary_: i32,
     finding_food_: bool,
     finding_water: bool,
+    getting_rest_: bool,
     hunger: bool,
     thirst: bool,
+    weary_: bool,
 }
 
 impl Blackboard {
@@ -82,10 +87,13 @@ impl Blackboard {
             till_assess: rng.random_range(0..MAX_ASSESS),
             till_hunger: rng.random_range(0..MAX_HUNGER),
             till_thirst: rng.random_range(0..MAX_THIRST),
+            till_weary_: rng.random_range(0..MAX_WEARY_),
             finding_food_: false,
             finding_water: false,
+            getting_rest_: false,
             hunger: false,
             thirst: false,
+            weary_: false,
         }
     }
 }
@@ -219,12 +227,16 @@ fn TickBasicNeeds(ctx: &mut Ctx) -> Result {
         bb.till_assess = max(bb.till_assess - 1, 0);
         bb.till_hunger = max(bb.till_hunger - 1, 0);
         bb.till_thirst = max(bb.till_thirst - 1, 0);
-
-        if bb.till_hunger < MAX_HUNGER / 8 { bb.hunger = true; }
-        if bb.till_thirst < MAX_THIRST / 8 { bb.thirst = true; }
-        if bb.till_hunger >= 7 * MAX_HUNGER / 8 { bb.hunger = false; }
-        if bb.till_thirst >= 7 * MAX_THIRST / 8 { bb.thirst = false; }
+        bb.till_weary_ = max(bb.till_weary_ - 1, 0);
     }
+
+    if bb.till_hunger < MAX_HUNGER / 8 { bb.hunger = true; }
+    if bb.till_thirst < MAX_THIRST / 8 { bb.thirst = true; }
+    if bb.till_weary_ < MAX_WEARY_ / 8 { bb.weary_ = true; }
+    if bb.till_hunger >= 7 * MAX_HUNGER / 8 { bb.hunger = false; }
+    if bb.till_thirst >= 7 * MAX_THIRST / 8 { bb.thirst = false; }
+    if bb.till_weary_ >= 7 * MAX_WEARY_ / 8 { bb.weary_ = false; }
+
     Result::Failed
 }
 
@@ -298,7 +310,7 @@ fn Explore(ctx: &mut Ctx) -> Option<Action> {
 // Pathfinding
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum PathKind { Water, Berry, BerryTree, Explore, #[default] None }
+pub enum PathKind { Rest, Water, Berry, BerryTree, Explore, #[default] None }
 
 #[derive(Default)]
 struct CachedPath {
@@ -317,7 +329,7 @@ fn FindPath(ctx: &mut Ctx, target: Point, kind: PathKind) -> bool {
 
     let skip = match kind {
         PathKind::Water | PathKind::Berry | PathKind::BerryTree => 1,
-        PathKind::Explore | PathKind::None => 0,
+        PathKind::Rest | PathKind::Explore | PathKind::None => 0,
     };
     ctx.blackboard.path = CachedPath { kind, path, skip, step: 0 };
     ctx.blackboard.path.path.insert(0, pos);
@@ -465,6 +477,14 @@ fn Thirst(x: &mut Ctx) -> i64 {
 }
 
 #[allow(non_snake_case)]
+fn Weariness(x: &mut Ctx) -> i64 {
+    if !x.blackboard.weary_ { return -1; }
+    if x.blackboard.getting_rest_ { return 101; }
+    let (limit, value) = (MAX_WEARY_, x.blackboard.till_weary_);
+    (100 * (limit - value) / limit) as i64
+}
+
+#[allow(non_snake_case)]
 fn HasBerry(ctx: &Ctx, point: Point) -> bool {
     ctx.known.get(point).cell().map(|x| x.items.contains(&Item::Berry)).unwrap_or(false)
 }
@@ -477,6 +497,12 @@ fn HasWater(ctx: &Ctx, point: Point) -> bool {
 #[allow(non_snake_case)]
 fn HasBerryTree(ctx: &Ctx, point: Point) -> bool {
     ctx.known.get(point).cell().map(|x| x.tile.drops_berries()).unwrap_or(false)
+}
+
+#[allow(non_snake_case)]
+fn CanRestAt(ctx: &Ctx, point: Point) -> bool {
+    if !is_hiding_place(ctx, point) { return false; }
+    point == ctx.pos || ctx.known.get(point).status() == Status::Free
 }
 
 trait CellPredicate = Fn(&Ctx, Point) -> bool;
@@ -556,6 +582,15 @@ fn FindNearbyBerryTree(ctx: &mut Ctx) -> Option<Action> {
     if !known.get(target).visible() { Some(Action::Look(target - pos)) } else { None }
 }
 
+#[allow(non_snake_case)]
+fn RestAtCurrentLocation(ctx: &mut Ctx) -> Option<Action> {
+    if !CanRestAt(ctx, ctx.pos) { return None; }
+
+    let gain = ctx.env.rng.gen_range(RESTED_GAIN);
+    ctx.blackboard.till_weary_ = min(ctx.blackboard.till_weary_ + gain, MAX_WEARY_);
+    Some(Action::Rest)
+}
+
 //////////////////////////////////////////////////////////////////////////////
 
 // Behavior tree configuration
@@ -631,11 +666,25 @@ fn DrinkWater() -> impl Bhv {
 }
 
 #[allow(non_snake_case)]
+fn GetRest() -> impl Bhv {
+    const KIND: PathKind = PathKind::Rest;
+    pri![
+        "GetRest",
+        act!("RestAtCurrentLocation", RestAtCurrentLocation),
+        act!("Follow(Rest)", |x| FollowChecked(x, CanRestAt, KIND)),
+        act!("MoveToRest", |x| MoveToNeed(x, CanRestAt, KIND)),
+    ]
+    .on_enter(|x| x.blackboard.getting_rest_ = true)
+    .on_exit(|x| x.blackboard.getting_rest_ = false)
+}
+
+#[allow(non_snake_case)]
 fn AddressBasicNeeds() -> impl Bhv {
     util![
         "AddressBasicNeeds",
         (Hunger, EatFood()),
         (Thirst, DrinkWater()),
+        (Weariness, GetRest()),
     ]
 }
 
@@ -686,6 +735,9 @@ impl AIState {
         slice.write_str(&format!(
                 "till_thirst: {} / {}{}", bb.till_thirst, MAX_THIRST,
                 if bb.thirst { " (thirsty)" } else { "" })).newline();
+        slice.write_str(&format!(
+                "till_weary_: {} / {}{}", bb.till_weary_, MAX_WEARY_,
+                if bb.weary_ { " (weary)" } else { "" })).newline();
         slice.write_str(&format!("dirs: {} items", bb.dirs.len())).newline();
         slice.write_str(&format!("path: {:?}", bb.path.kind)).newline();
     }
