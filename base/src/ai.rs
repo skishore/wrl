@@ -6,7 +6,7 @@ use rand::Rng;
 use rand_distr::{Distribution, Normal};
 use rand_distr::num_traits::Pow;
 
-use crate::{act, cb, pri, seq, util};
+use crate::{act, cb, cond, pri, seq, util};
 use crate::base::{LOS, Point, RNG, Slice, dirs, sample, weighted};
 use crate::bhv::{Bhv, Debug, Result};
 use crate::entity::{Entity, EID};
@@ -298,7 +298,7 @@ fn Explore(ctx: &mut Ctx) -> Option<Action> {
 // Pathfinding
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum PathKind { MoveToFood, MoveToWater, BerryTree, Explore, #[default] None }
+pub enum PathKind { Water, Berry, BerryTree, Explore, #[default] None }
 
 #[derive(Default)]
 struct CachedPath {
@@ -316,7 +316,7 @@ fn FindPath(ctx: &mut Ctx, target: Point, kind: PathKind) -> bool {
     let Some(path) = path else { return false };
 
     let skip = match kind {
-        PathKind::MoveToFood | PathKind::MoveToWater | PathKind::BerryTree => 1,
+        PathKind::Water | PathKind::Berry | PathKind::BerryTree => 1,
         PathKind::Explore | PathKind::None => 0,
     };
     ctx.blackboard.path = CachedPath { kind, path, skip, step: 0 };
@@ -355,7 +355,7 @@ fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
     }
     let (look, step) = (target - pos, next - pos);
 
-    if path.step + path.skip + 2 < path.path.len() {
+    if path.step + 2 < path.path.len() {
         ctx.blackboard.path = path;
         ctx.blackboard.path.step += 1;
     }
@@ -465,46 +465,68 @@ fn Thirst(x: &mut Ctx) -> i64 {
 }
 
 #[allow(non_snake_case)]
-fn HasFood(x: &CellKnowledge) -> bool { x.items.contains(&Item::Berry) }
-
-#[allow(non_snake_case)]
-fn HasWater(x: &CellKnowledge) -> bool { x.tile.can_drink() }
-
-#[allow(non_snake_case)]
-fn HasBerryTree(x: &CellKnowledge) -> bool { x.tile.drops_berries() }
-
-#[allow(non_snake_case)]
-fn MoveToNeed<F: Fn(&CellKnowledge) -> bool>(
-        ctx: &mut Ctx, valid: F, kind: PathKind) -> Option<Action> {
-    ensure_neighborhood(ctx);
-
-    let n = &ctx.neighborhood;
-    let Ctx { known, .. } = *ctx;
-    for &(point, _) in n.blocked.iter().chain(&n.visited) {
-        if !known.get(point).cell().map(&valid).unwrap_or(false) { continue; }
-        return if FindPath(ctx, point, kind) { FollowPath(ctx, kind) } else { None };
-    }
-    None
+fn HasBerry(ctx: &Ctx, point: Point) -> bool {
+    ctx.known.get(point).cell().map(|x| x.items.contains(&Item::Berry)).unwrap_or(false)
 }
 
 #[allow(non_snake_case)]
-fn ChooseBestNeighbor<F: Fn(Point) -> bool>(ctx: &Ctx, valid: F) -> Option<Point> {
+fn HasWater(ctx: &Ctx, point: Point) -> bool {
+    ctx.known.get(point).cell().map(|x| x.tile.can_drink()).unwrap_or(false)
+}
+
+#[allow(non_snake_case)]
+fn HasBerryTree(ctx: &Ctx, point: Point) -> bool {
+    ctx.known.get(point).cell().map(|x| x.tile.drops_berries()).unwrap_or(false)
+}
+
+trait CellPredicate = Fn(&Ctx, Point) -> bool;
+
+#[allow(non_snake_case)]
+fn FindNeed<F: CellPredicate>(ctx: &mut Ctx, valid: F, kind: PathKind) -> bool {
+    ensure_neighborhood(ctx);
+
+    let n = &ctx.neighborhood;
+    for &(point, _) in n.blocked.iter().chain(&n.visited) {
+        if valid(ctx, point) { return FindPath(ctx, point, kind); }
+    }
+    false
+}
+
+#[allow(non_snake_case)]
+fn MoveToNeed<F: CellPredicate>(ctx: &mut Ctx, valid: F, kind: PathKind) -> Option<Action> {
+    if FindNeed(ctx, valid, kind) { FollowPath(ctx, kind) } else { None }
+}
+
+#[allow(non_snake_case)]
+fn FollowChecked<F: CellPredicate>(ctx: &mut Ctx, valid: F, kind: PathKind) -> Option<Action> {
+    if CheckPathTarget(ctx, valid, kind) { FollowPath(ctx, kind) } else { None }
+}
+
+#[allow(non_snake_case)]
+fn CheckPathTarget<F: CellPredicate>(ctx: &mut Ctx, valid: F, kind: PathKind) -> bool {
+    if ctx.blackboard.path.kind != kind { return false; }
+
+    let okay = ctx.blackboard.path.path.last().map(|&x| valid(ctx, x)).unwrap_or(false);
+    if !okay { ctx.blackboard.path = Default::default(); }
+    okay
+}
+
+#[allow(non_snake_case)]
+fn ChooseBestNeighbor<F: CellPredicate>(ctx: &Ctx, valid: F) -> Option<Point> {
     let mut best = (std::f64::NEG_INFINITY, None);
     let Ctx { pos, dir, .. } = *ctx;
     for &x in [dirs::NONE].iter().chain(&dirs::ALL) {
-        if !valid(pos + x) { continue; }
-        let score = (dir.dot(x) as f64).pow(2) / x.len_l2_squared() as f64;
+        if !valid(ctx, pos + x) { continue; }
+        let score = (dir.dot(x) as f64).pow(2) / max(x.len_l2_squared(), 1) as f64;
         if score > best.0 { best = (score, Some(pos + x)); }
     }
     best.1
 }
 
 #[allow(non_snake_case)]
-fn EatFoodNearby(ctx: &mut Ctx) -> Option<Action> {
+fn EatBerryNearby(ctx: &mut Ctx) -> Option<Action> {
     let Ctx { known, pos, .. } = *ctx;
-    let valid = |p: Point| known.get(p).cell().map(HasFood).unwrap_or(false);
-    let target = ChooseBestNeighbor(ctx, valid)?;
-
+    let target = ChooseBestNeighbor(ctx, HasBerry)?;
     if !known.get(target).visible() { return Some(Action::Look(target - pos)); }
 
     let gain = ctx.env.rng.gen_range(HUNGER_GAIN);
@@ -515,9 +537,7 @@ fn EatFoodNearby(ctx: &mut Ctx) -> Option<Action> {
 #[allow(non_snake_case)]
 fn DrinkWaterNearby(ctx: &mut Ctx) -> Option<Action> {
     let Ctx { known, pos, .. } = *ctx;
-    let valid = |p: Point| known.get(p).cell().map(HasWater).unwrap_or(false);
-    let target = ChooseBestNeighbor(ctx, valid)?;
-
+    let target = ChooseBestNeighbor(ctx, HasWater)?;
     if !known.get(target).visible() { return Some(Action::Look(target - pos)); }
 
     let gain = ctx.env.rng.gen_range(THIRST_GAIN);
@@ -526,12 +546,10 @@ fn DrinkWaterNearby(ctx: &mut Ctx) -> Option<Action> {
 }
 
 #[allow(non_snake_case)]
-fn FindNearbyBerry(ctx: &mut Ctx) -> Option<Action> {
+fn FindNearbyBerryTree(ctx: &mut Ctx) -> Option<Action> {
     let Ctx { known, pos, .. } = *ctx;
-    let valid = |p: Point| known.get(p).cell().map(HasBerryTree).unwrap_or(false);
-    let target = ChooseBestNeighbor(ctx, valid)?;
+    let target = ChooseBestNeighbor(ctx, HasBerryTree)?;
 
-    // TODO: Horrible hack because we use the path target as the attack target...
     let path = LOS(pos, target);
     ctx.blackboard.path = CachedPath { kind: PathKind::BerryTree, path, skip: 1, step: 0 };
 
@@ -544,61 +562,81 @@ fn FindNearbyBerry(ctx: &mut Ctx) -> Option<Action> {
 
 // TODO list:
 //
-//  1. Figure out a clean pattern for "continue on old path or select new one"
-//     that works for both "attack", "move next to", and "move to" targets.
+//  1. Last-seen cache for cells satisfying a need, to skip repeated searches.
 //
-//  2. PathKind-specific validation: for example, the path to a berry is no
-//     longer valid if there's not a berry at the target cell any more.
+//  2. Periodically re-plan a path to a need if there is a closer one?
 //
-//  3. Last-seen cache for cells satisfying a need, to skip repeated searches.
-//
-//  4. Periodically re-plan a path to a need if there is a closer one?
-//
-//  5. Utility-based selection between different needs. But it seems like we'd
+//  3. Utility-based selection between different needs. But it seems like we'd
 //     need to run searches for multiple ones to get it right. How to?
 //
-//  6. High-priority Survive subtree: Track, Chase, Flee, Hide, CallForHelp...
+//  4. High-priority Survive subtree: Track, Chase, Flee, Hide, CallForHelp...
 
 #[allow(non_snake_case)]
-fn ForageForBerries() -> impl Bhv {
+fn AttackOrFollowPath(kind: PathKind) -> impl Bhv {
     pri![
-        "ForageForBerries",
-        act!("FindNearbyBerry", FindNearbyBerry),
-        act!("AttackBerryTree", |x| AttackPathTarget(x, PathKind::BerryTree)),
-        act!("Follow(BerryTree)", |x| FollowPath(x, PathKind::BerryTree)),
-        act!("FindBerryTree", |x| MoveToNeed(x, HasBerryTree, PathKind::BerryTree)),
-        act!("AttackBerryTree", |x| AttackPathTarget(x, PathKind::BerryTree)),
-        act!("Follow(BerryTree)", |x| FollowPath(x, PathKind::BerryTree)),
+        "AttackOrFollowPath",
+        act!("AttackPathTarget", move |x| AttackPathTarget(x, kind)),
+        act!("FollowPath", move |x| FollowPath(x, kind)),
     ]
 }
 
 #[allow(non_snake_case)]
-fn EatFoodItems() -> impl Bhv {
+fn ForageForBerries() -> impl Bhv {
+    const KIND: PathKind = PathKind::BerryTree;
     pri![
-        "EatFoodItems",
-        act!("EatFoodNearby", EatFoodNearby),
-        act!("Follow(MoveToFood)", |x| FollowPath(x, PathKind::MoveToFood)),
-        act!("MoveToFood", |x| MoveToNeed(x, HasFood, PathKind::MoveToFood)),
+        "ForageForBerries",
+        act!("FindNearbyBerryTree", FindNearbyBerryTree),
+        seq![
+            "FollowExistingPath",
+            cond!("CheckForBerryTree", |x| CheckPathTarget(x, HasBerryTree, KIND)),
+            AttackOrFollowPath(KIND),
+        ],
+        seq![
+            "FindNewPath",
+            cond!("FindBerryTree", |x| FindNeed(x, HasBerryTree, KIND)),
+            AttackOrFollowPath(KIND),
+        ],
+    ]
+}
+
+#[allow(non_snake_case)]
+fn EatBerries() -> impl Bhv {
+    const KIND: PathKind = PathKind::Berry;
+    pri![
+        "EatBerries",
+        act!("EatBerryNearby", EatBerryNearby),
+        act!("Follow(Berry)", |x| FollowChecked(x, HasBerry, KIND)),
+        act!("MoveToBerry", |x| MoveToNeed(x, HasBerry, KIND)),
     ]
 }
 
 #[allow(non_snake_case)]
 fn EatFood() -> impl Bhv {
-    pri!["EatFood", EatFoodItems(), ForageForBerries()]
+    pri!["EatFood", EatBerries(), ForageForBerries()]
         .on_enter(|x| x.blackboard.finding_food_ = true)
         .on_exit(|x| x.blackboard.finding_food_ = false)
 }
 
 #[allow(non_snake_case)]
 fn DrinkWater() -> impl Bhv {
+    const KIND: PathKind = PathKind::BerryTree;
     pri![
         "DrinkWater",
         act!("DrinkWaterNearby", DrinkWaterNearby),
-        act!("Follow(MoveToWater)", |x| FollowPath(x, PathKind::MoveToWater)),
-        act!("MoveToWater", |x| MoveToNeed(x, HasWater, PathKind::MoveToWater)),
+        act!("Follow(Water)", |x| FollowChecked(x, HasWater, KIND)),
+        act!("MoveToWater", |x| MoveToNeed(x, HasWater, KIND)),
     ]
     .on_enter(|x| x.blackboard.finding_water = true)
     .on_exit(|x| x.blackboard.finding_water = false)
+}
+
+#[allow(non_snake_case)]
+fn AddressBasicNeeds() -> impl Bhv {
+    util![
+        "AddressBasicNeeds",
+        (Hunger, EatFood()),
+        (Thirst, DrinkWater()),
+    ]
 }
 
 #[allow(non_snake_case)]
@@ -607,7 +645,7 @@ fn Root() -> Box<dyn Bhv> {
         "Root",
         cb!("TickBasicNeeds", TickBasicNeeds),
         act!("Follow(LookAround)", FollowDirs),
-        util!["BasicNeeds", (Hunger, EatFood()), (Thirst, DrinkWater())],
+        AddressBasicNeeds(),
         act!("Follow(Explore)", |x| FollowPath(x, PathKind::Explore)),
         act!("LookAround", Assess),
         act!("Explore", Explore),

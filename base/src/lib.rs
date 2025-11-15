@@ -1,5 +1,6 @@
 #![feature(let_chains)]
 #![feature(test)]
+#![feature(trait_alias)]
 
 mod ai;
 mod bhv;
