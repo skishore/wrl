@@ -12,7 +12,7 @@ use crate::bhv::{Bhv, Debug, Result};
 use crate::entity::{Entity, EID};
 use crate::game::{MOVE_VOLUME, Item, move_ready};
 use crate::game::{Action, AttackAction, CallForHelpAction, EatAction, MoveAction};
-use crate::knowledge::{CellKnowledge, Knowledge, EntityKnowledge};
+use crate::knowledge::{CellKnowledge, Knowledge, EntityKnowledge, Timedelta, Timestamp};
 use crate::pathing::{AStar, BFS, DijkstraLength, DijkstraMap, Neighborhood, Status};
 use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
 
@@ -37,10 +37,14 @@ const MAX_ASSESS: i32 = 32;
 const MAX_HUNGER: i32 = 512;
 const MAX_THIRST: i32 = 128;
 const MAX_WEARY_: i32 = 2048;
+
 const ASSESS_GAIN: RangeInclusive<i32> = (MAX_ASSESS / 2)..=MAX_ASSESS;
 const HUNGER_GAIN: RangeInclusive<i32> = (MAX_HUNGER / 4)..=(MAX_HUNGER / 2);
 const THIRST_GAIN: RangeInclusive<i32> = (MAX_THIRST / 4)..=(MAX_THIRST / 2);
 const RESTED_GAIN: RangeInclusive<i32> = 1..=2;
+
+const MIN_SEARCH_TIME: Timedelta = Timedelta::from_seconds(24.);
+const MAX_SEARCH_TIME: Timedelta = Timedelta::from_seconds(48.);
 
 const WANDER_TURNS: f64 = 2.;
 
@@ -67,6 +71,12 @@ pub struct AIEnv<'a> {
 struct Blackboard {
     dirs: Vec<Point>,
     path: CachedPath,
+    target: Option<ChaseTarget>,
+
+    prev_time: Timestamp,
+    turn_time: Timestamp,
+
+    // Basic needs:
     till_assess: i32,
     till_hunger: i32,
     till_thirst: i32,
@@ -84,6 +94,12 @@ impl Blackboard {
         Self {
             dirs: Default::default(),
             path: Default::default(),
+            target: None,
+
+            prev_time: Timestamp::default(),
+            turn_time: Timestamp::default(),
+
+            // Basic needs:
             till_assess: rng.random_range(0..MAX_ASSESS),
             till_hunger: rng.random_range(0..MAX_HUNGER),
             till_thirst: rng.random_range(0..MAX_THIRST),
@@ -216,6 +232,69 @@ fn select_target(scores: &[(Point, f64)], env: &mut AIEnv) -> Option<Point> {
     Some(*weighted(&values, env.rng))
 }
 
+fn get_explore_target(ctx: &mut Ctx) -> Option<Point> {
+    let Ctx { known, pos, dir, .. } = *ctx;
+    let inv_dir_l2 = safe_inv_l2(dir);
+
+    let score = |p: Point, distance: i32| -> f64 {
+        if distance == 0 { return 0.; }
+
+        let age = known.get(p).time_since_seen().seconds();
+        let age_scale = 1. / (1 << 24) as f64;
+
+        let delta = p - pos;
+        let inv_delta_l2 = safe_inv_l2(delta);
+        let cos = delta.dot(dir) as f64 * inv_delta_l2 * inv_dir_l2;
+        let unblocked_neighbors = dirs::ALL.iter().filter(
+                |&&x| !known.get(p + x).blocked()).count();
+
+        let bonus0 = age_scale * (age as f64 + 1. / 16.);
+        let bonus1 = unblocked_neighbors == dirs::ALL.len();
+        let bonus2 = unblocked_neighbors > 0;
+
+        let base = (if bonus0 > 1. { 1. } else { bonus0 }) *
+                   (if bonus1 {  8.0 } else { 1.0 }) *
+                   (if bonus2 { 64.0 } else { 1.0 });
+        base * (cos + 1.).pow(4) / (distance as f64).pow(2)
+    };
+
+    ensure_neighborhood(ctx);
+
+    let scores: Vec<_> = ctx.neighborhood.visited.iter().map(
+        |&(p, distance)| (p, score(p, distance))).collect();
+    select_target(&scores, ctx.env)
+}
+
+fn get_chase_target(ctx: &mut Ctx, age: Timedelta, bias: Point, center: Point) -> Option<Point> {
+    let Ctx { known, pos, dir, .. } = *ctx;
+    let inv_dir_l2 = safe_inv_l2(dir);
+    let inv_bias_l2 = safe_inv_l2(bias);
+
+    let is_search_candidate = |p: Point| {
+        let cell = known.get(p);
+        !cell.blocked() && cell.time_since_entity_visible() > age
+    };
+    if center != pos && is_search_candidate(center) { return Some(center); }
+
+    let score = |p: Point, distance: i32| -> f64 {
+        if distance == 0 || !is_search_candidate(p) { return 0.; }
+
+        let delta = p - pos;
+        let inv_delta_l2 = safe_inv_l2(delta);
+        let cos0 = delta.dot(dir) as f64 * inv_delta_l2 * inv_dir_l2;
+        let cos1 = delta.dot(bias) as f64 * inv_delta_l2 * inv_bias_l2;
+        let angle = ((cos0 + 1.) * (cos1 + 1.)).pow(4);
+
+        angle / (((p - center).len_l2_squared() + 1) as f64).pow(2)
+    };
+
+    ensure_neighborhood(ctx);
+
+    let scores: Vec<_> = ctx.neighborhood.visited.iter().map(
+        |&(p, distance)| (p, score(p, distance))).collect();
+    select_target(&scores, ctx.env)
+}
+
 //////////////////////////////////////////////////////////////////////////////
 
 // Ticking counters
@@ -223,6 +302,9 @@ fn select_target(scores: &[(Point, f64)], env: &mut AIEnv) -> Option<Point> {
 #[allow(non_snake_case)]
 fn TickBasicNeeds(ctx: &mut Ctx) -> Result {
     let (bb, entity) = (&mut *ctx.blackboard, ctx.entity);
+    bb.prev_time = bb.turn_time;
+    bb.turn_time = ctx.entity.known.time;
+
     if !entity.asleep {
         bb.till_assess = max(bb.till_assess - 1, 0);
         bb.till_hunger = max(bb.till_hunger - 1, 0);
@@ -271,37 +353,8 @@ fn Assess(ctx: &mut Ctx) -> Option<Action> {
 
 #[allow(non_snake_case)]
 fn Explore(ctx: &mut Ctx) -> Option<Action> {
-    let Ctx { known, pos, dir, .. } = *ctx;
-    let inv_dir_l2 = safe_inv_l2(dir);
-
-    ensure_neighborhood(ctx);
-
-    let score = |p: Point, distance: i32| -> f64 {
-        if distance == 0 { return 0.; }
-
-        let age = known.get(p).time_since_seen().seconds();
-        let age_scale = 1. / (1 << 24) as f64;
-
-        let delta = p - pos;
-        let inv_delta_l2 = safe_inv_l2(delta);
-        let cos = delta.dot(dir) as f64 * inv_delta_l2 * inv_dir_l2;
-        let unblocked_neighbors = dirs::ALL.iter().filter(
-                |&&x| !known.get(p + x).blocked()).count();
-
-        let bonus0 = age_scale * (age as f64 + 1. / 16.);
-        let bonus1 = unblocked_neighbors == dirs::ALL.len();
-        let bonus2 = unblocked_neighbors > 0;
-
-        let base = (if bonus0 > 1. { 1. } else { bonus0 }) *
-                   (if bonus1 {  8.0 } else { 1.0 }) *
-                   (if bonus2 { 64.0 } else { 1.0 });
-        base * (cos + 1.).pow(4) / (distance as f64).pow(2)
-    };
-
     let kind = PathKind::Explore;
-    let scores: Vec<_> = ctx.neighborhood.visited.iter().map(
-        |&(p, distance)| (p, score(p, distance))).collect();
-    let target = select_target(&scores, ctx.env)?;
+    let target = get_explore_target(ctx)?;
     if FindPath(ctx, target, kind) { FollowPath(ctx, kind) } else { None }
 }
 
@@ -310,7 +363,7 @@ fn Explore(ctx: &mut Ctx) -> Option<Action> {
 // Pathfinding
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum PathKind { Rest, Water, Berry, BerryTree, Explore, #[default] None }
+pub enum PathKind { Prey, Meat, Rest, Water, Berry, BerryTree, Explore, #[default] None }
 
 #[derive(Default)]
 struct CachedPath {
@@ -328,8 +381,8 @@ fn FindPath(ctx: &mut Ctx, target: Point, kind: PathKind) -> bool {
     let Some(path) = path else { return false };
 
     let skip = match kind {
-        PathKind::Water | PathKind::Berry | PathKind::BerryTree => 1,
-        PathKind::Rest | PathKind::Explore | PathKind::None => 0,
+        PathKind::Meat | PathKind::Water | PathKind::Berry | PathKind::BerryTree => 1,
+        PathKind::Prey | PathKind::Rest | PathKind::Explore | PathKind::None => 0,
     };
     ctx.blackboard.path = CachedPath { kind, path, skip, step: 0 };
     ctx.blackboard.path.path.insert(0, pos);
@@ -367,11 +420,17 @@ fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
     }
     let (look, step) = (target - pos, next - pos);
 
+    let mut turns = WANDER_TURNS;
+    if kind == PathKind::Prey && let Some(x) = &ctx.blackboard.target {
+        let age = ctx.known.time - x.time;
+        if age < MIN_SEARCH_TIME { turns = 1. };
+    }
+
     if path.step + 2 < path.path.len() {
         ctx.blackboard.path = path;
         ctx.blackboard.path.step += 1;
     }
-    Some(Action::Move(MoveAction { look, step, turns: WANDER_TURNS }))
+    Some(Action::Move(MoveAction { look, step, turns }))
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -573,12 +632,90 @@ fn FindNearbyBerryTree(ctx: &mut Ctx) -> Option<Action> {
 }
 
 #[allow(non_snake_case)]
-fn RestAtCurrentLocation(ctx: &mut Ctx) -> Option<Action> {
+fn RestHere(ctx: &mut Ctx) -> Option<Action> {
     if !CanRestAt(ctx, ctx.pos) { return None; }
 
     let gain = ctx.env.rng.gen_range(RESTED_GAIN);
     ctx.blackboard.till_weary_ = min(ctx.blackboard.till_weary_ + gain, MAX_WEARY_);
     Some(Action::Rest)
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+struct ChaseTarget {
+    bias: Point,
+    last: Point,
+    time: Timestamp,
+    steps: i32,
+}
+
+#[allow(non_snake_case)]
+fn HungryForMeat(ctx: &Ctx) -> bool {
+    ctx.entity.predator && ctx.blackboard.till_hunger < MAX_HUNGER / 2
+}
+
+#[allow(non_snake_case)]
+fn HasMeat(ctx: &Ctx, point: Point) -> bool {
+    ctx.known.get(point).cell().map(|x| x.items.contains(&Item::Corpse)).unwrap_or(false)
+}
+
+#[allow(non_snake_case)]
+fn EatMeatNearby(ctx: &mut Ctx) -> Option<Action> {
+    let Ctx { known, pos, .. } = *ctx;
+    let target = ChooseBestNeighbor(ctx, HasMeat)?;
+    if !known.get(target).visible() { return Some(Action::Look(target - pos)); }
+
+    ctx.blackboard.till_hunger = MAX_HUNGER;
+    Some(Action::Eat(EatAction { target, item: Some(Item::Corpse) }))
+}
+
+#[allow(non_snake_case)]
+fn SelectTargetPrey(ctx: &mut Ctx) -> bool {
+    let prev = ctx.blackboard.target.take();
+
+    let Ctx { known, pos, .. } = *ctx;
+    let mut targets: Vec<_> = ctx.known.entities.iter().filter_map(
+        |x| if x.delta < 0 { Some((x.pos, x.time)) } else { None }).collect();
+    let Some(x) = targets.first() else { return false };
+    if (known.time - x.1) >= MAX_SEARCH_TIME { return false; }
+
+    let target = *targets.select_nth_unstable_by_key(
+        0, |x| (known.time - x.1, (pos - x.0).len_l2_squared())).1;
+    let reset = target.1 > ctx.blackboard.prev_time;
+    if reset && ctx.blackboard.path.kind == PathKind::Prey {
+        ctx.blackboard.path = Default::default()
+    }
+
+    let (last, time) = target;
+    let (bias, steps) = if !reset && let Some(x) = prev && x.last == last {
+        (x.bias, x.steps + 1)
+    } else {
+        (last - pos, 0)
+    };
+    ctx.blackboard.target = Some(ChaseTarget { bias, last, time, steps });
+    true
+}
+
+#[allow(non_snake_case)]
+fn AttackPrey(ctx: &mut Ctx) -> Option<Action> {
+    let &ChaseTarget { last, time, .. } = ctx.blackboard.target.as_ref()?;
+    if time == ctx.known.time { AttackTarget(ctx, last) } else { None }
+}
+
+#[allow(non_snake_case)]
+fn SearchForPrey(ctx: &mut Ctx) -> Option<Action> {
+    let &ChaseTarget { bias, last, time, steps } = ctx.blackboard.target.as_ref()?;
+    let Ctx { known, pos, .. } = *ctx;
+    let age = known.time - time;
+
+    let center = if steps > bias.len_l1() { pos } else { last };
+    let target = get_chase_target(ctx, age, bias, center)?;
+
+    // TODO: CachedPath should handle this case for us...
+    if (target - pos).len_l1() == 1 { return Some(Action::Look(target - pos)); }
+
+    let kind = PathKind::Prey;
+    if FindPath(ctx, target, kind) { FollowPath(ctx, kind) } else { None }
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -659,11 +796,38 @@ fn GetRest() -> impl Bhv {
     const KIND: PathKind = PathKind::Rest;
     pri![
         "GetRest",
-        act!("RestAtCurrentLocation", RestAtCurrentLocation),
+        act!("RestHere", RestHere),
         path!(KIND, CanRestAt, act!("FollowPath", |x| FollowPath(x, KIND))),
     ]
     .on_enter(|x| x.blackboard.getting_rest_ = true)
     .on_exit(|x| x.blackboard.getting_rest_ = false)
+}
+
+#[allow(non_snake_case)]
+fn HuntForMeat() -> impl Bhv {
+    const KIND: PathKind = PathKind::Meat;
+    seq![
+        "HuntForMeat",
+        cond!("HungryForMeat", |x| HungryForMeat(x)),
+        pri![
+            "HuntForMeat",
+            pri![
+                "EatMeat",
+                act!("EatMeatNearby", EatMeatNearby),
+                path!(KIND, HasMeat, act!("FollowPath", |x| FollowPath(x, KIND))),
+            ],
+            seq![
+                "HuntForPrey",
+                cond!("SelectTargetPrey", SelectTargetPrey),
+                pri![
+                    "HuntDownTarget",
+                    act!("AttackPrey", AttackPrey),
+                    act!("Follow(Prey)", |x| FollowPath(x, PathKind::Prey)),
+                    act!("Search(Prey)", SearchForPrey),
+                ],
+            ],
+        ],
+    ]
 }
 
 #[allow(non_snake_case)]
@@ -681,6 +845,7 @@ fn Root() -> Box<dyn Bhv> {
     Box::new(pri![
         "Root",
         cb!("TickBasicNeeds", TickBasicNeeds),
+        HuntForMeat(),
         act!("Follow(LookAround)", FollowDirs),
         AddressBasicNeeds(),
         act!("Follow(Explore)", |x| FollowPath(x, PathKind::Explore)),
