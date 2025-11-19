@@ -10,6 +10,7 @@ mod knowledge;
 mod list;
 mod pathing;
 mod shadowcast;
+mod threats;
 mod ui;
 
 pub mod base;
