@@ -64,12 +64,16 @@ impl<S: Label, T: Bhv> Node<S, T> {
         Self { last: None, label, tree }
     }
 
-    pub fn on_enter<F: Fn(&mut Ctx) -> ()>(self, f: F) -> Node<S, OnEnter<F, T>> {
-        Node::new(self.label, OnEnter(f, self.tree))
-    }
-
     pub fn on_exit<F: Fn(&mut Ctx) -> ()>(self, f: F) -> Node<S, OnExit<F, T>> {
         Node::new(self.label, OnExit(f, self.tree))
+    }
+
+    pub fn on_tick<F: Fn(&mut Ctx) -> ()>(self, f: F) -> Node<S, OnTick<F, T>> {
+        Node::new(self.label, OnTick(f, self.tree))
+    }
+
+    pub fn post_tick<F: Fn(&mut Ctx) -> ()>(self, f: F) -> Node<S, PostTick<F, T>> {
+        Node::new(self.label, PostTick(f, self.tree))
     }
 }
 
@@ -107,15 +111,7 @@ impl<S: Label, T: Bhv> Bhv for Node<S, T> {
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Enter / Exit
-
-pub struct OnEnter<S, T>(S, T);
-
-impl<S: Fn(&mut Ctx) -> (), T: Bhv> Bhv for OnEnter<S, T> {
-    fn debug(&self, debug: &mut Debug) { self.1.debug(debug) }
-    fn reset(&mut self, ctx: &mut Ctx) { self.1.reset(ctx) }
-    fn tick(&mut self, ctx: &mut Ctx) -> Result { (self.0)(ctx); self.1.tick(ctx) }
-}
+// Exit / Tick
 
 pub struct OnExit<S, T>(S, T);
 
@@ -127,6 +123,22 @@ impl<S: Fn(&mut Ctx) -> (), T: Bhv> Bhv for OnExit<S, T> {
         if result == Result::Failed { (self.0)(ctx); }
         result
     }
+}
+
+pub struct OnTick<S, T>(S, T);
+
+impl<S: Fn(&mut Ctx) -> (), T: Bhv> Bhv for OnTick<S, T> {
+    fn debug(&self, debug: &mut Debug) { self.1.debug(debug) }
+    fn reset(&mut self, ctx: &mut Ctx) { self.1.reset(ctx) }
+    fn tick(&mut self, ctx: &mut Ctx) -> Result { (self.0)(ctx); self.1.tick(ctx) }
+}
+
+pub struct PostTick<S, T>(S, T);
+
+impl<S: Fn(&mut Ctx) -> (), T: Bhv> Bhv for PostTick<S, T> {
+    fn debug(&self, debug: &mut Debug) { self.1.debug(debug) }
+    fn reset(&mut self, ctx: &mut Ctx) { self.1.reset(ctx) }
+    fn tick(&mut self, ctx: &mut Ctx) -> Result { let x = self.1.tick(ctx); (self.0)(ctx); x }
 }
 
 //////////////////////////////////////////////////////////////////////////////
