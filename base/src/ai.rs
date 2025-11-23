@@ -760,21 +760,31 @@ fn CheckPathTarget<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) ->
 }
 
 #[allow(non_snake_case)]
-fn ChooseBestNeighbor<F: CellPredicate>(ctx: &Ctx, valid: F) -> Option<Point> {
-    let mut best = (std::f64::NEG_INFINITY, None);
+fn ChooseNeighbor<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> Option<Point> {
     let Ctx { pos, dir, .. } = *ctx;
+    let path = &ctx.blackboard.path;
+    if path.kind == kind && let Some(&x) = path.path.last() &&
+       (x - pos).len_l1() <= 1 && valid(ctx, x) && ctx.known.get(x).visible() {
+        return Some(x);
+    }
+
+    let mut best = (std::f64::NEG_INFINITY, None);
     for &x in [dirs::NONE].iter().chain(&dirs::ALL) {
         if !valid(ctx, pos + x) { continue; }
         let score = (dir.dot(x) as f64).pow(2) / max(x.len_l2_squared(), 1) as f64;
         if score > best.0 { best = (score, Some(pos + x)); }
     }
-    best.1
+
+    let result = best.1?;
+    let path = LOS(pos, result);
+    ctx.blackboard.path = CachedPath { kind, path, skip: 1, step: 0 };
+    Some(result)
 }
 
 #[allow(non_snake_case)]
 fn EatBerryNearby(ctx: &mut Ctx) -> Option<Action> {
     let Ctx { known, pos, .. } = *ctx;
-    let target = ChooseBestNeighbor(ctx, HasBerry)?;
+    let target = ChooseNeighbor(ctx, PathKind::Berry, HasBerry)?;
     if !known.get(target).visible() { return Some(Action::Look(target - pos)); }
 
     let gain = ctx.env.rng.gen_range(HUNGER_GAIN);
@@ -785,7 +795,7 @@ fn EatBerryNearby(ctx: &mut Ctx) -> Option<Action> {
 #[allow(non_snake_case)]
 fn DrinkWaterNearby(ctx: &mut Ctx) -> Option<Action> {
     let Ctx { known, pos, .. } = *ctx;
-    let target = ChooseBestNeighbor(ctx, HasWater)?;
+    let target = ChooseNeighbor(ctx, PathKind::Water, HasWater)?;
     if !known.get(target).visible() { return Some(Action::Look(target - pos)); }
 
     let gain = ctx.env.rng.gen_range(THIRST_GAIN);
@@ -796,11 +806,14 @@ fn DrinkWaterNearby(ctx: &mut Ctx) -> Option<Action> {
 #[allow(non_snake_case)]
 fn FindNearbyBerryTree(ctx: &mut Ctx) -> Option<Action> {
     let Ctx { known, pos, .. } = *ctx;
-    let target = ChooseBestNeighbor(ctx, HasBerryTree)?;
+    let (kind, valid) = (PathKind::BerryTree, HasBerryTree);
 
-    let path = LOS(pos, target);
-    ctx.blackboard.path = CachedPath { kind: PathKind::BerryTree, path, skip: 1, step: 0 };
+    if CheckPathTarget(ctx, kind, valid) {
+        let cur = ctx.blackboard.path.path.last().copied()?;
+        if (cur - pos).len_l1() > 1 && known.get(cur).visible() { return None; }
+    }
 
+    let target = ChooseNeighbor(ctx, kind, valid)?;
     if !known.get(target).visible() { Some(Action::Look(target - pos)) } else { None }
 }
 
@@ -837,7 +850,7 @@ fn HasMeat(ctx: &Ctx, point: Point) -> bool {
 #[allow(non_snake_case)]
 fn EatMeatNearby(ctx: &mut Ctx) -> Option<Action> {
     let Ctx { known, pos, .. } = *ctx;
-    let target = ChooseBestNeighbor(ctx, HasMeat)?;
+    let target = ChooseNeighbor(ctx, PathKind::Meat, HasMeat)?;
     if !known.get(target).visible() { return Some(Action::Look(target - pos)); }
 
     ctx.blackboard.till_hunger = MAX_HUNGER;
@@ -1035,10 +1048,6 @@ fn FleeFromThreats(ctx: &mut Ctx) -> Option<Action> {
 //  3. Augment the Survive subtree: Track, Fight-or-Flight, CallForHelp...
 //
 //  4. End ChaseTarget with an assess and then clear fight-or-flight state.
-//
-//  5. Nit: when we're following a path to water, if we end next to two water
-//     cells we may drink from a different cell than the path target. If the
-//     path target ends visible, always drink from it.
 
 #[allow(non_snake_case)]
 fn AttackOrFollowPath(kind: PathKind) -> impl Bhv {
