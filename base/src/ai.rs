@@ -12,7 +12,7 @@ use crate::bhv::{Bhv, Debug, Result};
 use crate::entity::{Entity, EID};
 use crate::game::{MOVE_VOLUME, Item, move_ready};
 use crate::game::{Action, AttackAction, CallForHelpAction, EatAction, MoveAction};
-use crate::knowledge::{CellKnowledge, Knowledge, EntityKnowledge, Timedelta, Timestamp};
+use crate::knowledge::{Knowledge, Sense, Timedelta, Timestamp};
 use crate::pathing::{AStar, BFS, DijkstraLength, DijkstraMap, Neighborhood, Status};
 use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
 use crate::threats::{FightOrFlight, ThreatState};
@@ -47,6 +47,9 @@ const RESTED_GAIN: RangeInclusive<i32> = 1..=2;
 const MIN_SEARCH_TIME: Timedelta = Timedelta::from_seconds(24.);
 const MAX_SEARCH_TIME: Timedelta = Timedelta::from_seconds(48.);
 
+const MAX_TRACKING_TIME: Timedelta = Timedelta::from_seconds(64.);
+const SCENT_AGE_PENALTY: Timedelta = Timedelta::from_seconds(1.);
+
 const FLIGHT_PATH_TURNS: i32 = 8;
 const MIN_FLIGHT_TURNS: i32 = 16;
 const MAX_FLIGHT_TURNS: i32 = 64;
@@ -79,6 +82,7 @@ struct Blackboard {
     threats: ThreatState,
     flight: Option<FlightState>,
     target: Option<ChaseTarget>,
+    options: Vec<Target>,
 
     prev_time: Timestamp,
     turn_time: Timestamp,
@@ -104,6 +108,7 @@ impl Blackboard {
             threats: Default::default(),
             flight: None,
             target: None,
+            options: vec![],
 
             prev_time: Timestamp::default(),
             turn_time: Timestamp::default(),
@@ -152,10 +157,15 @@ impl Blackboard {
 
         if let Some(x) = &self.target {
             slice.write_str("Target:").newline();
-            slice.write_str(&format!("  age: {:?}", self.turn_time - x.time)).newline();
             slice.write_str(&format!("  bias: {:?}", x.bias)).newline();
-            slice.write_str(&format!("  last: {:?}", x.last)).newline();
+            slice.write_str(&format!("  fresh: {}", x.fresh)).newline();
             slice.write_str(&format!("  steps: {}", x.steps)).newline();
+            slice.write_str(&format!(
+                    "  target.age: {:?}", self.turn_time - x.target.time)).newline();
+            slice.write_str(&format!(
+                    "  target.last: {:?}", x.target.last)).newline();
+            slice.write_str(&format!(
+                    "  target.sense: {:?}", x.target.sense)).newline();
             slice.newline();
         }
 
@@ -175,7 +185,6 @@ pub struct Ctx<'a, 'b> {
     dir: Point,
     // Computed by the executor during this turn.
     blackboard: &'a mut Blackboard,
-    observations: Vec<&'a CellKnowledge>,
     neighborhood: Neighborhood,
     sneakable: Neighborhood,
     ran_vision: bool,
@@ -599,8 +608,8 @@ fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
 
     let mut turns = WANDER_TURNS;
     if kind == PathKind::Prey && let Some(x) = &ctx.blackboard.target {
-        let age = ctx.known.time - x.time;
-        if age < MIN_SEARCH_TIME { turns = 1. };
+        let age = ctx.known.time - x.target.time;
+        if age < MIN_SEARCH_TIME && x.target.sense != Sense::Smell { turns = 1. };
     } else if kind == PathKind::Flee && !all_threats_asleep(ctx) {
         turns = 1.;
     }
@@ -860,54 +869,116 @@ fn RestHere(ctx: &mut Ctx) -> Option<Action> {
 
 // Hunting:
 
-struct ChaseTarget {
-    bias: Point,
+#[derive(Clone, Copy)]
+struct Target {
     last: Point,
     time: Timestamp,
+    sense: Sense,
+}
+
+struct ChaseTarget {
+    bias: Point,
+    fresh: bool,
     steps: i32,
+    target: Target,
 }
 
 #[allow(non_snake_case)]
-fn SelectTargetPrey(ctx: &mut Ctx) -> bool {
+fn ClearChaseState(ctx: &mut Ctx) {
+    let bb = &mut ctx.blackboard;
+    let chasing = bb.path.kind == PathKind::Prey;
+    if chasing { bb.path = Default::default(); }
+    bb.target = None;
+}
+
+#[allow(non_snake_case)]
+fn ClearTargets(ctx: &mut Ctx) {
+    ctx.blackboard.options.clear();
+}
+
+#[allow(non_snake_case)]
+fn ListTargetsBySight(ctx: &mut Ctx) {
+    for other in &ctx.known.entities {
+        if other.delta >= 0 { continue; }
+        if ctx.known.time - other.time >= MAX_SEARCH_TIME { continue; }
+        let target = Target { last: other.pos, time: other.time, sense: other.sense };
+        ctx.blackboard.options.push(target);
+    }
+}
+
+#[allow(non_snake_case)]
+fn ListTargetsByScent(ctx: &mut Ctx) {
+    if let Some(x) = &ctx.blackboard.target && x.target.sense == Sense::Smell &&
+       ctx.known.time - x.target.time < MAX_TRACKING_TIME {
+        ctx.blackboard.options.push(x.target);
+    }
+    for &scent in &ctx.known.scents {
+        if ctx.known.time - scent.time >= MAX_TRACKING_TIME { continue; }
+        let target = Target { last: scent.pos, time: scent.time, sense: Sense::Smell };
+        ctx.blackboard.options.push(target);
+    }
+}
+
+#[allow(non_snake_case)]
+fn SelectBestTarget(ctx: &mut Ctx) -> bool {
     let prev = ctx.blackboard.target.take();
 
-    let Ctx { known, pos, .. } = *ctx;
-    let mut targets: Vec<_> = ctx.known.entities.iter().filter_map(
-        |x| if x.delta < 0 { Some((x.pos, x.time)) } else { None }).collect();
-    let Some(x) = targets.first() else { return false };
-    if (known.time - x.1) >= MAX_SEARCH_TIME { return false; }
+    let options = &mut ctx.blackboard.options;
+    if options.is_empty() { return false; }
 
-    let target = *targets.select_nth_unstable_by_key(
-        0, |x| (known.time - x.1, (pos - x.0).len_l2_squared())).1;
-    let reset = target.1 > ctx.blackboard.prev_time;
+    let Ctx { known, pos, .. } = *ctx;
+    let score = |x: &Target| {
+        let age = known.time - x.time;
+        let age = if x.sense == Sense::Smell { age + SCENT_AGE_PENALTY } else { age };
+        (age, (pos - x.last).len_l2_squared())
+    };
+    let target = *options.select_nth_unstable_by_key(0, score).1;
+
+    let recent = target.time > ctx.blackboard.prev_time;
+    let change = if let Some(x) = &prev { x.target.last != target.last } else { true };
+    let fresh = change || (recent && target.sense != Sense::Smell);
+    let reset = change || recent;
+
     if reset && ctx.blackboard.path.kind == PathKind::Prey {
         ctx.blackboard.path = Default::default()
     }
 
-    let (last, time) = target;
-    let (bias, steps) = if !reset && let Some(x) = prev && x.last == last {
+    let (bias, steps) = if !reset && let Some(x) = prev {
         (x.bias, x.steps + 1)
     } else {
-        (last - pos, 0)
+        (target.last - pos, 0)
     };
-    ctx.blackboard.target = Some(ChaseTarget { bias, last, time, steps });
+    ctx.blackboard.target = Some(ChaseTarget { bias, fresh, steps, target });
     true
 }
 
 #[allow(non_snake_case)]
 fn AttackPrey(ctx: &mut Ctx) -> Option<Action> {
-    let &ChaseTarget { last, time, .. } = ctx.blackboard.target.as_ref()?;
-    if time == ctx.known.time { AttackTarget(ctx, last) } else { None }
+    let target = &ctx.blackboard.target.as_ref()?.target;
+    if target.sense == Sense::Smell { return None; }
+    if target.time != ctx.known.time { return None; }
+    AttackTarget(ctx, target.last)
+}
+
+#[allow(non_snake_case)]
+fn TrackPreyByScent(ctx: &mut Ctx) -> Option<Action> {
+    let state = ctx.blackboard.target.as_ref()?;
+    if !state.fresh || state.target.sense != Sense::Smell { return None; }
+    Some(Action::SniffAround)
 }
 
 #[allow(non_snake_case)]
 fn SearchForPrey(ctx: &mut Ctx) -> Option<Action> {
-    let &ChaseTarget { bias, last, time, steps } = ctx.blackboard.target.as_ref()?;
+    let &ChaseTarget { bias, steps, target, .. } = ctx.blackboard.target.as_ref()?;
     let Ctx { known, pos, .. } = *ctx;
-    let age = known.time - time;
+    let age = known.time - target.time;
 
-    let center = if steps > bias.len_l1() { pos } else { last };
-    let target = select_chase_target(ctx, age, bias, center)?;
+    let target = if target.sense == Sense::Smell {
+        select_chase_target(ctx, age, Point(0, 0), target.last)?
+    } else {
+        let center = if steps > bias.len_l1() { pos } else { target.last };
+        select_chase_target(ctx, age, bias, center)?
+    };
 
     // TODO: CachedPath should handle this case for us...
     if (target - pos).len_l1() == 1 { return Some(Action::Look(target - pos)); }
@@ -1055,7 +1126,7 @@ fn FleeFromThreats(ctx: &mut Ctx) -> Option<Action> {
 //
 //  2. Periodically re-plan a path to a need if there is a closer one?
 //
-//  3. Augment the Survive subtree: Track, Fight-or-Flight, CallForHelp...
+//  3. Augment the Survive subtree: Fight-or-Flight, CallForHelp...
 //
 //  4. End ChaseTarget with an assess and then clear fight-or-flight state.
 
@@ -1161,14 +1232,19 @@ fn HuntForMeat() -> impl Bhv {
             ],
             seq![
                 "HuntForPrey",
-                cond!("SelectTargetPrey", SelectTargetPrey),
+                cond!("SelectBestTarget", SelectBestTarget),
                 pri![
                     "HuntDownTarget",
                     act!("AttackPrey", AttackPrey),
+                    act!("TrackPreyByScent", TrackPreyByScent),
                     act!("Follow(Prey)", |x| FollowPath(x, PathKind::Prey)),
                     act!("Search(Prey)", SearchForPrey),
                 ],
-            ],
+            ]
+            .on_tick(ListTargetsBySight)
+            .on_tick(ListTargetsByScent)
+            .on_tick(ClearTargets)
+            .on_exit(ClearChaseState),
         ],
     ]
 }
@@ -1237,7 +1313,6 @@ impl AIState {
 
     pub fn plan(&mut self, entity: &Entity, env: &mut AIEnv) -> Action {
         let known = &*entity.known;
-        let observations = known.cells.iter().take_while(|x| x.visible).collect();
         let blackboard = &mut self.blackboard;
 
         let mut ctx = Ctx {
@@ -1247,7 +1322,6 @@ impl AIState {
             dir: entity.dir,
             action: None,
             blackboard,
-            observations,
             neighborhood: Default::default(),
             sneakable: Default::default(),
             ran_vision: false,
