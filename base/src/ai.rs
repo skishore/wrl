@@ -15,7 +15,7 @@ use crate::game::{Action, AttackAction, CallForHelpAction, EatAction, MoveAction
 use crate::knowledge::{Knowledge, Sense, Timedelta, Timestamp};
 use crate::pathing::{AStar, BFS, DijkstraLength, DijkstraMap, Neighborhood, Status};
 use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
-use crate::threats::{FightOrFlight, ThreatState};
+use crate::threats::{FightOrFlight, ThreatState, ThreatStatus};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -479,7 +479,7 @@ fn RunCombatAnalysis(ctx: &mut Ctx) -> Result {
 // Wandering:
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum DirsKind { Flight, Assess, #[default] None }
+pub enum DirsKind { Assess, Flight, Noises, #[default] None }
 
 #[derive(Default)]
 struct CachedDirs {
@@ -526,6 +526,31 @@ fn Explore(ctx: &mut Ctx) -> Option<Action> {
     let kind = PathKind::Explore;
     let target = select_explore_target(ctx)?;
     if FindPath(ctx, target, kind) { FollowPath(ctx, kind) } else { None }
+}
+
+#[allow(non_snake_case)]
+fn HeardUnknownNoise(ctx: &mut Ctx) -> bool {
+    let bb = &mut ctx.blackboard;
+    if bb.threats.unknown.is_empty() { return false; }
+
+    if bb.dirs.kind == DirsKind::Noises && bb.dirs.dirs.len() == 1 {
+        for threat in &mut bb.threats.threats {
+            threat.status = min(threat.status, ThreatStatus::Scanned);
+        }
+    }
+    true
+}
+
+#[allow(non_snake_case)]
+fn LookForNoises(ctx: &mut Ctx) -> Option<Action> {
+    let threats = &ctx.blackboard.threats;
+    let (pos, rng) = (ctx.pos, &mut ctx.env.rng);
+    let dirs: Vec<_> = threats.unknown.iter().map(|x| x.pos - pos).collect();
+
+    let kind = DirsKind::Noises;
+    let dirs = assess_directions(&dirs, ASSESS_TURNS_FLIGHT, rng);
+    ctx.blackboard.dirs = CachedDirs { kind, dirs, used: false };
+    FollowDirs(ctx, kind)
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -1229,6 +1254,19 @@ fn Wander() -> impl Bhv {
 }
 
 #[allow(non_snake_case)]
+fn InvestigateNoises() -> impl Bhv {
+    seq![
+        "InvestigateNoises",
+        cond!("HeardUnknownNoise", HeardUnknownNoise),
+        pri![
+            "LookForNoises",
+            act!("Follow(Noises)", |x| FollowDirs(x, DirsKind::Noises)),
+            act!("Search(Noises)", LookForNoises),
+        ],
+    ]
+}
+
+#[allow(non_snake_case)]
 fn HuntForMeat() -> impl Bhv {
     const KIND: PathKind = PathKind::Meat;
     seq![
@@ -1293,6 +1331,7 @@ fn Root() -> impl Bhv {
         cb!("RunCombatAnalysis", RunCombatAnalysis),
         EscapeFromThreats(),
         HuntForMeat(),
+        InvestigateNoises(),
         Wander(),
     ]
     .post_tick(CleanupDirs)
