@@ -525,7 +525,17 @@ fn Explore(ctx: &mut Ctx) -> Option<Action> {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum PathKind {
-    Hide, Flee, Prey, Meat, Rest, Water, Berry, BerryTree, Explore, #[default] None }
+    Hide,
+    Flee,
+    Prey,
+    Meat,
+    Rest,
+    Water,
+    Berry,
+    BerryTree,
+    Explore,
+    #[default] None,
+}
 
 #[derive(Default)]
 struct CachedPath {
@@ -693,6 +703,11 @@ fn PathToTarget<F: Fn(Point) -> bool>(
 // Basic needs:
 
 #[allow(non_snake_case)]
+fn HungryForMeat(ctx: &Ctx) -> bool {
+    ctx.entity.predator && ctx.blackboard.till_hunger < MAX_HUNGER / 2
+}
+
+#[allow(non_snake_case)]
 fn Hunger(x: &mut Ctx) -> i64 {
     if !x.blackboard.hunger { return -1; }
     if x.blackboard.finding_food_ { return 101; }
@@ -714,6 +729,11 @@ fn Weariness(x: &mut Ctx) -> i64 {
     if x.blackboard.getting_rest_ { return 101; }
     let (limit, value) = (MAX_WEARY_, x.blackboard.till_weary_);
     (100 * (limit - value) / limit) as i64
+}
+
+#[allow(non_snake_case)]
+fn HasMeat(ctx: &Ctx, point: Point) -> bool {
+    ctx.known.get(point).cell().map(|x| x.items.contains(&Item::Corpse)).unwrap_or(false)
 }
 
 #[allow(non_snake_case)]
@@ -782,6 +802,16 @@ fn ChooseNeighbor<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> 
 }
 
 #[allow(non_snake_case)]
+fn EatMeatNearby(ctx: &mut Ctx) -> Option<Action> {
+    let Ctx { known, pos, .. } = *ctx;
+    let target = ChooseNeighbor(ctx, PathKind::Meat, HasMeat)?;
+    if !known.get(target).visible() { return Some(Action::Look(target - pos)); }
+
+    ctx.blackboard.till_hunger = MAX_HUNGER;
+    Some(Action::Eat(EatAction { target, item: Some(Item::Corpse) }))
+}
+
+#[allow(non_snake_case)]
 fn EatBerryNearby(ctx: &mut Ctx) -> Option<Action> {
     let Ctx { known, pos, .. } = *ctx;
     let target = ChooseNeighbor(ctx, PathKind::Berry, HasBerry)?;
@@ -835,26 +865,6 @@ struct ChaseTarget {
     last: Point,
     time: Timestamp,
     steps: i32,
-}
-
-#[allow(non_snake_case)]
-fn HungryForMeat(ctx: &Ctx) -> bool {
-    ctx.entity.predator && ctx.blackboard.till_hunger < MAX_HUNGER / 2
-}
-
-#[allow(non_snake_case)]
-fn HasMeat(ctx: &Ctx, point: Point) -> bool {
-    ctx.known.get(point).cell().map(|x| x.items.contains(&Item::Corpse)).unwrap_or(false)
-}
-
-#[allow(non_snake_case)]
-fn EatMeatNearby(ctx: &mut Ctx) -> Option<Action> {
-    let Ctx { known, pos, .. } = *ctx;
-    let target = ChooseNeighbor(ctx, PathKind::Meat, HasMeat)?;
-    if !known.get(target).visible() { return Some(Action::Look(target - pos)); }
-
-    ctx.blackboard.till_hunger = MAX_HUNGER;
-    Some(Action::Eat(EatAction { target, item: Some(Item::Corpse) }))
 }
 
 #[allow(non_snake_case)]
