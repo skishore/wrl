@@ -907,6 +907,17 @@ fn ListTargetsBySight(ctx: &mut Ctx) {
 }
 
 #[allow(non_snake_case)]
+fn ListTargetsBySound(ctx: &mut Ctx) {
+    for other in &ctx.blackboard.threats.unknown {
+        if other.delta >= 0 { continue; }
+        if other.sense != Sense::Sound { continue; }
+        if ctx.known.time - other.time >= MAX_SEARCH_TIME { continue; }
+        let target = Target { last: other.pos, time: other.time, sense: other.sense };
+        ctx.blackboard.options.push(target);
+    }
+}
+
+#[allow(non_snake_case)]
 fn ListTargetsByScent(ctx: &mut Ctx) {
     if let Some(x) = &ctx.blackboard.target && x.target.sense == Sense::Smell &&
        ctx.known.time - x.target.time < MAX_TRACKING_TIME {
@@ -1242,6 +1253,7 @@ fn HuntForMeat() -> impl Bhv {
                 ],
             ]
             .on_tick(ListTargetsBySight)
+            .on_tick(ListTargetsBySound)
             .on_tick(ListTargetsByScent)
             .on_tick(ClearTargets)
             .on_exit(ClearChaseState),
