@@ -1007,8 +1007,6 @@ fn SearchForPrey(ctx: &mut Ctx) -> Option<Action> {
         let center = if steps > bias.len_l1() { pos } else { target.last };
         select_chase_target(ctx, age, bias, center)?
     };
-
-    // TODO: CachedPath should handle this case for us...
     if (target - pos).len_l1() == 1 { return Some(Action::Look(target - pos)); }
 
     let kind = PathKind::Prey;
@@ -1157,6 +1155,11 @@ fn FleeFromThreats(ctx: &mut Ctx) -> Option<Action> {
 //  3. Augment the Survive subtree: Fight-or-Flight, CallForHelp...
 //
 //  4. End ChaseTarget with an assess and then clear fight-or-flight state.
+//
+//  5. Update CachedPath to do "look at the target for a path w/ skip = 1",
+//     then get rid of the Look actions for basic needs and `SearchForPrey`.
+//
+//  6. Drop the "bias towards dir" term in `select_chase_target`.
 
 #[allow(non_snake_case)]
 fn AttackOrFollowPath(kind: PathKind) -> impl Bhv {
