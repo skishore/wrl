@@ -1169,7 +1169,8 @@ impl UI {
         slice.newline();
         let (hp, pp) = (entity.hp, entity.pp);
         let (hp_color, pp_color) = (Self::hp_color(hp), 0x54a8fc.into());
-        slice.set_fg(fg).write_str(&prefix).write_str(entity.species.name).newline();
+        let name = if entity.player { "skishore" } else { entity.species.name };
+        slice.set_fg(fg).write_str(&prefix).write_str(name).newline();
         status_bar_line("HP: ", hp, hp_color, slice);
         status_bar_line("PP: ", pp, pp_color, slice);
         slice.newline();
