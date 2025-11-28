@@ -396,17 +396,14 @@ fn select_flight_target(ctx: &mut Ctx, hiding: bool) -> Option<Point> {
     let Ctx { known, pos, .. } = *ctx;
 
     let threats = &ctx.blackboard.threats.hostile;
-    let threat_inv_l2s: Vec<_> = threats.iter().map(
-        |x| (x.pos, safe_inv_l2(pos - x.pos))).collect();
     let scale = 1. / DijkstraLength(Point(1, 0)) as f64;
 
     let score = |p: Point, source_distance: i32| -> f64 {
-        let mut inv_l2 = 0.;
         let mut threat = Point::default();
         let mut threat_distance = std::i32::MAX;
-        for &(x, y) in &threat_inv_l2s {
-            let z = DijkstraLength(x - p);
-            if z < threat_distance { (threat, inv_l2, threat_distance) = (x, y, z); }
+        for x in threats {
+            let z = DijkstraLength(p - x.pos);
+            if z < threat_distance { (threat, threat_distance) = (x.pos, z); }
         }
 
         let blocked = {
@@ -416,19 +413,14 @@ fn select_flight_target(ctx: &mut Ctx, hiding: bool) -> Option<Point> {
         let frontier = dirs::ALL.iter().any(|&x| known.get(p + x).unknown());
         let hidden = !hiding && is_hiding_place(ctx, p);
 
-        let delta = p - pos;
-        let inv_delta_l2 = safe_inv_l2(delta);
-        let cos = delta.dot(pos - threat) as f64 * inv_delta_l2 * inv_l2;
-
         // WARNING: This heuristic can cause a piece to be "checkmated" in a
         // corner, if the Dijkstra search below isn't wide enough for us to
         // find a cell which is further from the threat than the corner cell.
-        let base = 1.5 * scale * (threat_distance as f64) +
-                   -1. * scale * (source_distance as f64) +
-                   16. * if blocked { 1. } else { 0. } +
-                   16. * if frontier { 1. } else { 0. } +
-                   16. * if hidden { 1. } else { 0. };
-        (cos + 1.).pow(0) * base.pow(1)
+        1.5 * scale * (threat_distance as f64) +
+        -1. * scale * (source_distance as f64) +
+        16. * if blocked { 1. } else { 0. } +
+        16. * if frontier { 1. } else { 0. } +
+        16. * if hidden { 1. } else { 0. }
     };
 
     let min_score = score(pos, 0);
