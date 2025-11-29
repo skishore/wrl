@@ -9,13 +9,13 @@ use rand_distr::num_traits::Pow;
 use crate::{act, cb, cond, pri, run, seq, util};
 use crate::base::{LOS, Point, RNG, Slice, dirs, sample, weighted};
 use crate::bhv::{Bhv, Debug, Result};
-use crate::entity::{Entity, EID};
+use crate::entity::Entity;
 use crate::game::{MOVE_VOLUME, Item, move_ready};
 use crate::game::{Action, AttackAction, CallForHelpAction, EatAction, MoveAction};
 use crate::knowledge::{Knowledge, Sense, Timedelta, Timestamp};
 use crate::pathing::{AStar, BFS, DijkstraLength, DijkstraMap, Neighborhood, Status};
 use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
-use crate::threats::{FightOrFlight, ThreatState, ThreatStatus};
+use crate::threats::{CALL_FOR_HELP_LIMIT, FightOrFlight, ThreatState, ThreatStatus};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -92,16 +92,20 @@ struct Blackboard {
     till_hunger: i32,
     till_thirst: i32,
     till_weary_: i32,
+
+    chasing_enemy: bool,
+    chasing_prey_: bool,
     finding_food_: bool,
     finding_water: bool,
     getting_rest_: bool,
+
     hunger: bool,
     thirst: bool,
     weary_: bool,
 }
 
 impl Blackboard {
-    fn new(predator: bool, rng: &mut RNG) -> Self {
+    fn new(_predator: bool, rng: &mut RNG) -> Self {
         Self {
             dirs: Default::default(),
             path: Default::default(),
@@ -118,9 +122,13 @@ impl Blackboard {
             till_hunger: rng.random_range(0..MAX_HUNGER),
             till_thirst: rng.random_range(0..MAX_THIRST),
             till_weary_: rng.random_range(0..MAX_WEARY_),
+
+            chasing_enemy: false,
+            chasing_prey_: false,
             finding_food_: false,
             finding_water: false,
             getting_rest_: false,
+
             hunger: false,
             thirst: false,
             weary_: false,
@@ -551,9 +559,9 @@ fn LookForNoises(ctx: &mut Ctx) -> Option<Action> {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum PathKind {
+    Enemy,
     Hide,
     Flee,
-    Prey,
     Meat,
     Rest,
     Water,
@@ -578,10 +586,10 @@ fn FindPath(ctx: &mut Ctx, target: Point, kind: PathKind) -> bool {
     let path = AStar(pos, target, ASTAR_LIMIT_WANDER, check);
     let Some(path) = path else { return false };
 
-    type PK = PathKind;
+    type K = PathKind;
     let skip = match kind {
-        PK::Meat | PK::Water | PK::Berry | PK::BerryTree => 1,
-        PK::Hide | PK::Flee | PK::Prey | PK::Rest | PK::Explore | PK::None => 0,
+        K::Meat | K::Water | K::Berry | K::BerryTree => 1,
+        K::Enemy | K::Hide | K::Flee | K::Rest | K::Explore | K::None => 0,
     };
     ctx.blackboard.path = CachedPath { kind, path, skip, step: 0 };
     ctx.blackboard.path.path.insert(0, pos);
@@ -624,7 +632,7 @@ fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
     let (look, step) = (target - pos, next - pos);
 
     let mut turns = WANDER_TURNS;
-    if kind == PathKind::Prey && let Some(x) = &ctx.blackboard.target {
+    if kind == PathKind::Enemy && let Some(x) = &ctx.blackboard.target {
         let age = ctx.known.time - x.target.time;
         if age < MIN_SEARCH_TIME && x.target.sense != Sense::Smell { turns = 1. };
     } else if kind == PathKind::Flee && !all_threats_asleep(ctx) {
@@ -901,9 +909,11 @@ struct ChaseTarget {
 }
 
 #[allow(non_snake_case)]
-fn ClearChaseState(ctx: &mut Ctx) {
+fn CleanupChaseState(ctx: &mut Ctx) {
     let bb = &mut ctx.blackboard;
-    let chasing = bb.path.kind == PathKind::Prey;
+    if bb.chasing_enemy || bb.chasing_prey_ { return; }
+
+    let chasing = bb.path.kind == PathKind::Enemy;
     if chasing { bb.path = Default::default(); }
     bb.target = None;
 }
@@ -914,7 +924,25 @@ fn ClearTargets(ctx: &mut Ctx) {
 }
 
 #[allow(non_snake_case)]
-fn ListTargetsBySight(ctx: &mut Ctx) -> bool {
+fn MarkSafeIfLostView(ctx: &mut Ctx) -> bool {
+    if !ctx.blackboard.options.is_empty() { return false; }
+    ctx.blackboard.threats.state = FightOrFlight::Safe;
+    true
+}
+
+#[allow(non_snake_case)]
+fn ListThreatsBySight(ctx: &mut Ctx) -> bool {
+    let initial = ctx.blackboard.options.len();
+    for other in &ctx.blackboard.threats.hostile {
+        if ctx.known.time - other.time >= MAX_SEARCH_TIME { continue; }
+        let target = Target { last: other.pos, time: other.time, sense: other.sense };
+        ctx.blackboard.options.push(target);
+    }
+    ctx.blackboard.options.len() > initial
+}
+
+#[allow(non_snake_case)]
+fn ListPreyBySight(ctx: &mut Ctx) -> bool {
     let initial = ctx.blackboard.options.len();
     for other in &ctx.known.entities {
         if other.delta >= 0 { continue; }
@@ -926,7 +954,7 @@ fn ListTargetsBySight(ctx: &mut Ctx) -> bool {
 }
 
 #[allow(non_snake_case)]
-fn ListTargetsBySound(ctx: &mut Ctx) -> bool {
+fn ListPreyBySound(ctx: &mut Ctx) -> bool {
     let initial = ctx.blackboard.options.len();
     for other in &ctx.blackboard.threats.unknown {
         if other.delta >= 0 { continue; }
@@ -939,7 +967,7 @@ fn ListTargetsBySound(ctx: &mut Ctx) -> bool {
 }
 
 #[allow(non_snake_case)]
-fn ListTargetsByScent(ctx: &mut Ctx) -> bool {
+fn ListPreyByScent(ctx: &mut Ctx) -> bool {
     let initial = ctx.blackboard.options.len();
     if let Some(x) = &ctx.blackboard.target && x.target.sense == Sense::Smell &&
        ctx.known.time - x.target.time < MAX_TRACKING_TIME {
@@ -973,7 +1001,7 @@ fn SelectBestTarget(ctx: &mut Ctx) -> bool {
     let fresh = change || (recent && target.sense != Sense::Smell);
     let reset = change || recent;
 
-    if reset && ctx.blackboard.path.kind == PathKind::Prey {
+    if reset && ctx.blackboard.path.kind == PathKind::Enemy {
         ctx.blackboard.path = Default::default()
     }
 
@@ -987,7 +1015,7 @@ fn SelectBestTarget(ctx: &mut Ctx) -> bool {
 }
 
 #[allow(non_snake_case)]
-fn AttackPrey(ctx: &mut Ctx) -> Option<Action> {
+fn AttackEnemy(ctx: &mut Ctx) -> Option<Action> {
     let state = ctx.blackboard.target.as_ref()?;
     if state.target.sense == Sense::Smell { return None; }
     if state.target.time != ctx.known.time { return None; }
@@ -995,14 +1023,14 @@ fn AttackPrey(ctx: &mut Ctx) -> Option<Action> {
 }
 
 #[allow(non_snake_case)]
-fn TrackPreyByScent(ctx: &mut Ctx) -> Option<Action> {
+fn TrackEnemyByScent(ctx: &mut Ctx) -> Option<Action> {
     let state = ctx.blackboard.target.as_ref()?;
     if !state.fresh || state.target.sense != Sense::Smell { return None; }
     Some(Action::SniffAround)
 }
 
 #[allow(non_snake_case)]
-fn SearchForPrey(ctx: &mut Ctx) -> Option<Action> {
+fn SearchForEnemy(ctx: &mut Ctx) -> Option<Action> {
     let &ChaseTarget { bias, steps, target, .. } = ctx.blackboard.target.as_ref()?;
     let Ctx { known, pos, .. } = *ctx;
     let age = known.time - target.time;
@@ -1015,7 +1043,7 @@ fn SearchForPrey(ctx: &mut Ctx) -> Option<Action> {
     };
     if (target - pos).len_l1() == 1 { return Some(Action::Look(target - pos)); }
 
-    let kind = PathKind::Prey;
+    let kind = PathKind::Enemy;
     if FindPath(ctx, target, kind) { FollowPath(ctx, kind) } else { None }
 }
 
@@ -1150,6 +1178,48 @@ fn FleeFromThreats(ctx: &mut Ctx) -> Option<Action> {
 
 //////////////////////////////////////////////////////////////////////////////
 
+// Fight-or-flight:
+
+#[allow(non_snake_case)]
+fn CallStrength(ctx: &mut Ctx) -> i64 {
+    if ctx.blackboard.threats.call_for_help { 2 } else { -1 }
+}
+
+#[allow(non_snake_case)]
+fn FightStrength(ctx: &mut Ctx) -> i64 {
+    match ctx.blackboard.threats.state {
+        FightOrFlight::Safe   => -1,
+        FightOrFlight::Fight  =>  1,
+        FightOrFlight::Flight =>  0,
+    }
+}
+
+#[allow(non_snake_case)]
+fn FlightStrength(ctx: &mut Ctx) -> i64 {
+    match ctx.blackboard.threats.state {
+        FightOrFlight::Safe   => -1,
+        FightOrFlight::Fight  =>  0,
+        FightOrFlight::Flight =>  1,
+    }
+}
+
+#[allow(non_snake_case)]
+fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
+    let time = ctx.known.time;
+    let threats = &mut ctx.blackboard.threats;
+
+    for x in &mut threats.threats {
+        if time - x.time > CALL_FOR_HELP_LIMIT { break; }
+        if x.status == ThreatStatus::Friendly { x.combat = time; }
+    }
+    threats.called = time;
+
+    let look = threats.hostile.first().map(|x| x.pos - ctx.pos).unwrap_or(ctx.dir);
+    Some(Action::CallForHelp(CallForHelpAction { look }))
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 // Behavior tree configuration
 
 // TODO list:
@@ -1158,14 +1228,20 @@ fn FleeFromThreats(ctx: &mut Ctx) -> Option<Action> {
 //
 //  2. Periodically re-plan a path to a need if there is a closer one?
 //
-//  3. Augment the Survive subtree: Fight-or-Flight, CallForHelp...
+//  3. Add an assess before "MarkSafeIfLostView".
 //
-//  4. End ChaseTarget with an assess and then clear fight-or-flight state.
-//
-//  5. Update CachedPath to do "look at the target for a path w/ skip = 1",
+//  4. Update CachedPath to do "look at the target for a path w/ skip = 1",
 //     then get rid of the Look actions for basic needs and `SearchForPrey`.
 //
-//  6. Drop the "bias towards dir" term in `select_chase_target`.
+//  5. Drop the "bias towards dir" term in `select_chase_target`.
+//
+//  6. Add a "RespondToCalls" subtree to make call-for-help more effective.
+//
+//  7. Make the our-team-strength logic quadratic in team size.
+//
+//  8. Add "growl" / "intimidate" subtrees.
+//
+//  9. Drop "unknown" targets earlier if we're chasing down enemies.
 
 #[allow(non_snake_case)]
 fn AttackOrFollowPath(kind: PathKind) -> impl Bhv {
@@ -1268,6 +1344,17 @@ fn InvestigateNoises() -> impl Bhv {
 }
 
 #[allow(non_snake_case)]
+fn HuntSelectedTarget() -> impl Bhv {
+    pri![
+        "HuntSelectedTarget",
+        act!("AttackEnemy", AttackEnemy),
+        act!("TrackPreyByScent", TrackEnemyByScent),
+        act!("Follow(Prey)", |x| FollowPath(x, PathKind::Enemy)),
+        act!("Search(Prey)", SearchForEnemy),
+    ]
+}
+
+#[allow(non_snake_case)]
 fn HuntForMeat() -> impl Bhv {
     const KIND: PathKind = PathKind::Meat;
     seq![
@@ -1283,24 +1370,36 @@ fn HuntForMeat() -> impl Bhv {
             seq![
                 "HuntForPrey",
                 run![
-                    "SelectTarget",
-                    cond!("ListTargetsBySight", ListTargetsBySight),
-                    cond!("ListTargetsBySound", ListTargetsBySound),
-                    cond!("ListTargetsByScent", ListTargetsByScent),
+                    "SelectPreyTarget",
+                    cond!("ListPreyBySight", ListPreyBySight),
+                    cond!("ListPreyBySound", ListPreyBySound),
+                    cond!("ListPreyByScent", ListPreyByScent),
                     cond!("SelectBestTarget", SelectBestTarget),
                 ],
-                pri![
-                    "HuntDownTarget",
-                    act!("AttackPrey", AttackPrey),
-                    act!("TrackPreyByScent", TrackPreyByScent),
-                    act!("Follow(Prey)", |x| FollowPath(x, PathKind::Prey)),
-                    act!("Search(Prey)", SearchForPrey),
-                ],
+                HuntSelectedTarget(),
             ]
             .on_tick(ClearTargets)
-            .on_exit(ClearChaseState),
+            .on_tick(|x| x.blackboard.chasing_prey_ = true)
+            .on_exit(|x| x.blackboard.chasing_prey_ = false)
         ],
     ]
+}
+
+#[allow(non_snake_case)]
+fn FightAgainstThreats() -> impl Bhv {
+    seq![
+        "FightAgainstThreats",
+        run![
+            "SelectThreatTarget",
+            cond!("ListThreatsBySight", ListThreatsBySight),
+            cond!("MarkSafeIfLostView", MarkSafeIfLostView),
+            cond!("SelectBestTarget", SelectBestTarget),
+        ],
+        HuntSelectedTarget(),
+    ]
+    .on_tick(ClearTargets)
+    .on_tick(|x| x.blackboard.chasing_enemy = true)
+    .on_exit(|x| x.blackboard.chasing_enemy = false)
 }
 
 #[allow(non_snake_case)]
@@ -1328,16 +1427,27 @@ fn EscapeFromThreats() -> impl Bhv {
 }
 
 #[allow(non_snake_case)]
+fn FightOrFlight() -> impl Bhv {
+    util![
+        "FightOrFlight",
+        (CallStrength, act!("CallForHelp", CallForHelp)),
+        (FightStrength, FightAgainstThreats()),
+        (FlightStrength, EscapeFromThreats()),
+    ]
+}
+
+#[allow(non_snake_case)]
 fn Root() -> impl Bhv {
     pri![
         "Root",
         cb!("TickBasicNeeds", TickBasicNeeds),
         cb!("RunCombatAnalysis", RunCombatAnalysis),
-        EscapeFromThreats(),
+        FightOrFlight(),
         HuntForMeat(),
         InvestigateNoises(),
         Wander(),
     ]
+    .post_tick(CleanupChaseState)
     .post_tick(CleanupDirs)
 }
 
