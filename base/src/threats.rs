@@ -55,7 +55,6 @@ pub struct ThreatState {
     pub unknown: Vec<Threat>,
 
     // Fight-or-flight.
-    pub reset: bool,
     pub state: FightOrFlight,
 
     // Calling for help.
@@ -162,7 +161,6 @@ impl Threat {
 impl ThreatState {
     pub fn debug(&self, slice: &mut Slice, time: Timestamp) {
         slice.write_str("ThreatState:").newline();
-        slice.write_str(&format!("  reset: {}", self.reset)).newline();
         slice.write_str(&format!("  state: {:?}", self.state)).newline();
         slice.write_str(&format!("  call_for_help: {}", self.call_for_help)).newline();
         slice.write_str(&format!("  last_call: {:?}", time - self.last_call)).newline();
@@ -186,13 +184,13 @@ impl ThreatState {
 
         self.hostile.clear();
         self.unknown.clear();
-        self.reset = false;
 
         let was_active = self.state != FightOrFlight::Safe;
         let mut active = was_active;
         let mut hidden_hostile = 0;
         let mut seen_hostile = 0;
 
+        // List known enemies ("hostile") and potential enemies ("unknown").
         for x in &self.threats {
             if me.known.time - x.time > ACTIVE_THREAT_TIME { break; }
 
@@ -202,15 +200,20 @@ impl ThreatState {
             if x.status == ThreatStatus::Hostile && !x.seen { hidden_hostile += 1; }
             if x.status == ThreatStatus::Hostile && x.seen { seen_hostile += 1; }
         }
-        if !self.hostile.is_empty() {
-            self.hostile.extend_from_slice(&self.unknown);
-            self.hostile.sort_by_key(|x| me.known.time - x.time);
-        }
+
+        // Start fight-or-flight if we have an active known enemy. Stop when
+        // we no longer have any known enemies. We also stop it with known
+        // enemies if we escape from them (see: UpdateFlightState).
         if let Some(x) = self.hostile.first() && x.time > prev_time {
             active = true;
-            self.reset = true;
         } else if self.hostile.is_empty() {
             active = false;
+        }
+
+        // While active, also attack / flee from potential enemies.
+        if active && !self.hostile.is_empty() {
+            self.hostile.extend_from_slice(&self.unknown);
+            self.hostile.sort_by_key(|x| me.known.time - x.time);
         }
 
         let strength = |x: &Threat| { 1.5f64.powi(x.delta.signum()) * x.hp };
