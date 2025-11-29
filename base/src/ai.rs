@@ -6,7 +6,7 @@ use rand::Rng;
 use rand_distr::{Distribution, Normal};
 use rand_distr::num_traits::Pow;
 
-use crate::{act, cb, cond, pri, seq, util};
+use crate::{act, cb, cond, pri, run, seq, util};
 use crate::base::{LOS, Point, RNG, Slice, dirs, sample, weighted};
 use crate::bhv::{Bhv, Debug, Result};
 use crate::entity::{Entity, EID};
@@ -914,17 +914,20 @@ fn ClearTargets(ctx: &mut Ctx) {
 }
 
 #[allow(non_snake_case)]
-fn ListTargetsBySight(ctx: &mut Ctx) {
+fn ListTargetsBySight(ctx: &mut Ctx) -> bool {
+    let initial = ctx.blackboard.options.len();
     for other in &ctx.known.entities {
         if other.delta >= 0 { continue; }
         if ctx.known.time - other.time >= MAX_SEARCH_TIME { continue; }
         let target = Target { last: other.pos, time: other.time, sense: other.sense };
         ctx.blackboard.options.push(target);
     }
+    ctx.blackboard.options.len() > initial
 }
 
 #[allow(non_snake_case)]
-fn ListTargetsBySound(ctx: &mut Ctx) {
+fn ListTargetsBySound(ctx: &mut Ctx) -> bool {
+    let initial = ctx.blackboard.options.len();
     for other in &ctx.blackboard.threats.unknown {
         if other.delta >= 0 { continue; }
         if other.sense != Sense::Sound { continue; }
@@ -932,10 +935,12 @@ fn ListTargetsBySound(ctx: &mut Ctx) {
         let target = Target { last: other.pos, time: other.time, sense: other.sense };
         ctx.blackboard.options.push(target);
     }
+    ctx.blackboard.options.len() > initial
 }
 
 #[allow(non_snake_case)]
-fn ListTargetsByScent(ctx: &mut Ctx) {
+fn ListTargetsByScent(ctx: &mut Ctx) -> bool {
+    let initial = ctx.blackboard.options.len();
     if let Some(x) = &ctx.blackboard.target && x.target.sense == Sense::Smell &&
        ctx.known.time - x.target.time < MAX_TRACKING_TIME {
         ctx.blackboard.options.push(x.target);
@@ -945,6 +950,7 @@ fn ListTargetsByScent(ctx: &mut Ctx) {
         let target = Target { last: scent.pos, time: scent.time, sense: Sense::Smell };
         ctx.blackboard.options.push(target);
     }
+    ctx.blackboard.options.len() > initial
 }
 
 #[allow(non_snake_case)]
@@ -1276,7 +1282,13 @@ fn HuntForMeat() -> impl Bhv {
             ],
             seq![
                 "HuntForPrey",
-                cond!("SelectBestTarget", SelectBestTarget),
+                run![
+                    "SelectTarget",
+                    cond!("ListTargetsBySight", ListTargetsBySight),
+                    cond!("ListTargetsBySound", ListTargetsBySound),
+                    cond!("ListTargetsByScent", ListTargetsByScent),
+                    cond!("SelectBestTarget", SelectBestTarget),
+                ],
                 pri![
                     "HuntDownTarget",
                     act!("AttackPrey", AttackPrey),
@@ -1285,9 +1297,6 @@ fn HuntForMeat() -> impl Bhv {
                     act!("Search(Prey)", SearchForPrey),
                 ],
             ]
-            .on_tick(ListTargetsBySight)
-            .on_tick(ListTargetsBySound)
-            .on_tick(ListTargetsByScent)
             .on_tick(ClearTargets)
             .on_exit(ClearChaseState),
         ],
