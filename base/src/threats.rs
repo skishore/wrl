@@ -8,10 +8,10 @@ use crate::list::{Handle, List};
 
 //////////////////////////////////////////////////////////////////////////////
 
-const ACTIVE_THREAT_TIME: Timedelta = Timedelta::from_seconds(96.);
+pub const ACTIVE_THREAT_TIME: Timedelta = Timedelta::from_seconds(96.);
 
-const CALL_FOR_HELP_LIMIT: Timedelta = Timedelta::from_seconds(4.);
-const CALL_FOR_HELP_RETRY: Timedelta = Timedelta::from_seconds(24.);
+pub const CALL_FOR_HELP_LIMIT: Timedelta = Timedelta::from_seconds(4.);
+pub const CALL_FOR_HELP_RETRY: Timedelta = Timedelta::from_seconds(24.);
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -58,8 +58,11 @@ pub struct ThreatState {
     pub state: FightOrFlight,
 
     // Calling for help.
-    pub last_call: Timestamp,
+    pub called: Timestamp,
     pub call_for_help: bool,
+
+    // Debug:
+    debug: Vec<(&'static str, f64)>,
 }
 
 impl Threat {
@@ -162,17 +165,18 @@ impl ThreatState {
     pub fn debug(&self, slice: &mut Slice, time: Timestamp) {
         slice.write_str("ThreatState:").newline();
         slice.write_str(&format!("  state: {:?}", self.state)).newline();
+        slice.write_str(&format!("  called: {:?}", time - self.called)).newline();
         slice.write_str(&format!("  call_for_help: {}", self.call_for_help)).newline();
-        slice.write_str(&format!("  last_call: {:?}", time - self.last_call)).newline();
 
-        //slice.newline();
-        //for x in &self.threats { x.debug(slice, time) }
+        for (field, value) in &self.debug {
+            slice.write_str(&format!("  {}: {}", field, value)).newline();
+        }
     }
 
-    pub fn update(&mut self, me: &Entity, prev_time: Timestamp) {
+    pub fn update(&mut self, me: &Entity, prev_time: Timestamp, debug: bool) {
         for event in &me.known.events {
             // TODO(shaunak): Maybe only if it's a friendly call?
-            if let EventData::CallForHelp(_) = event.data { self.last_call = event.time; }
+            if let EventData::CallForHelp(_) = event.data { self.called = event.time; }
             let Some(threat) = self.get_by_event(me, event) else { continue };
             threat.update_for_event(me, event);
         }
@@ -255,9 +259,18 @@ impl ThreatState {
 
         self.call_for_help = false;
         if self.state == FightOrFlight::Flight && q > 0.6 &&
-           (me.known.time - self.last_call) > CALL_FOR_HELP_RETRY {
+           (me.known.time - self.called) > CALL_FOR_HELP_RETRY {
             self.state = FightOrFlight::Fight;
             self.call_for_help = true;
+        }
+
+        self.debug.clear();
+        if debug {
+            self.debug.push(("team_strength", team_strength));
+            self.debug.push(("call_strength", call_strength));
+            self.debug.push(("foes_strength", foes_strength));
+            self.debug.push(("win_chance", p));
+            self.debug.push(("win_by_call", q));
         }
 
         debug_assert!(self.check_invariants());
