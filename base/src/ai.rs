@@ -1060,10 +1060,10 @@ fn UpdateFlightState(ctx: &mut Ctx) -> bool {
     let prev = bb.flight.take();
 
     let threats = &bb.threats;
-    let reset = threats.reset;
-    if threats.hostile.is_empty() { return false; }
-    if prev.is_none() && !threats.reset { return false; }
+    if threats.state == FightOrFlight::Safe { return false; }
+    let Some(threat) = threats.hostile.first() else { return false };
 
+    let reset = threat.time > bb.prev_time;
     let fleeing = bb.path.kind == PathKind::Hide || bb.path.kind == PathKind::Flee;
     let looking = bb.dirs.kind == DirsKind::Flight;
     let turn = bb.path.step as i32;
