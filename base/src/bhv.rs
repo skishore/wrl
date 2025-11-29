@@ -275,18 +275,26 @@ impl Bhv for Utility {
 
 // Composite
 
-trait Policy { const OKAY: Result; }
+trait Policy {
+    fn okay(result: Result) -> bool;
+}
 
 pub struct PriPolicy {}
 
 impl Policy for PriPolicy {
-    const OKAY: Result = Result::Failed;
+    fn okay(result: Result) -> bool { result == Result::Failed }
+}
+
+pub struct RunPolicy {}
+
+impl Policy for RunPolicy {
+    fn okay(_result: Result) -> bool { true }
 }
 
 pub struct SeqPolicy {}
 
 impl Policy for SeqPolicy {
-    const OKAY: Result = Result::Success;
+    fn okay(result: Result) -> bool { result == Result::Success }
 }
 
 pub struct Composite<S, T, U> {
@@ -314,7 +322,7 @@ impl<S: Policy, T: Bhv, U: Bhv> Bhv for Composite<S, T, U> {
 
     fn tick(&mut self, ctx: &mut Ctx) -> Result {
         let result = self.lhs.tick(ctx);
-        if result == S::OKAY { return self.rhs.tick(ctx); }
+        if S::okay(result) { return self.rhs.tick(ctx); }
         self.rhs.reset(ctx);
         result
     }
@@ -359,6 +367,17 @@ macro_rules! pri {
         crate::bhv::Node::new($name, tree)
     }};
     ($name:literal $(,$xs:expr)+ $(,)?) => { pri![@go concat!("? ", $name) $(,$xs)+] };
+}
+
+#[macro_export]
+macro_rules! run {
+    (@go $name:expr, $x:expr) => { $x };
+    (@go $name:expr, $x:expr $(,$xs:expr)+) => {{
+        let policy = crate::bhv::RunPolicy {};
+        let tree = crate::bhv::Composite::new(policy, $x, run![@go () $(,$xs)+]);
+        crate::bhv::Node::new($name, tree)
+    }};
+    ($name:literal $(,$xs:expr)+ $(,)?) => { run![@go concat!("* ", $name) $(,$xs)+] };
 }
 
 #[macro_export]
