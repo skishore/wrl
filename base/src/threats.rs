@@ -3,7 +3,9 @@ use std::fmt::Debug;
 
 use crate::base::{HashMap, Point, Slice};
 use crate::entity::{Entity, EID};
-use crate::knowledge::{EntityKnowledge, Event, EventData, Sense, Timedelta, Timestamp, UID};
+use crate::knowledge::{AttackEvent, CallForHelpEvent, Event, EventData};
+use crate::knowledge::{EntityKnowledge, Sense, Timedelta, Timestamp, UID};
+use crate::game::CALL_VOLUME;
 use crate::list::{Handle, List};
 
 //////////////////////////////////////////////////////////////////////////////
@@ -20,7 +22,7 @@ pub const CALL_FOR_HELP_RETRY: Timedelta = Timedelta::from_seconds(24.);
 pub type ThreatHandle = Handle<Threat>;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
-pub enum TID { EID(EID), UID(UID) }
+pub enum TID { CID, EID(EID), UID(UID) }
 
 #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ThreatStatus { Hostile, Friendly, Neutral, Scanned, Unknown }
@@ -105,8 +107,9 @@ impl Threat {
                 if attacked { self.update_status(ThreatStatus::Hostile); }
                 self.combat = event.time;
             },
-            EventData::CallForHelp(_) => {
-                if !me.predator { self.update_status(ThreatStatus::Friendly); }
+            EventData::CallForHelp(x) => {
+                let for_us = ThreatState::call_for_us(me, x);
+                if for_us { self.update_status(ThreatStatus::Friendly); }
                 self.combat = event.time;
             },
             EventData::Forget(_) => {},
@@ -147,17 +150,31 @@ impl ThreatState {
         slice.write_str(&format!("  call_for_help: {}", self.call_for_help)).newline();
     }
 
+    pub fn on_call_for_help(&mut self, point: Point, time: Timestamp) {
+        for threat in &mut self.threats {
+            if threat.status != ThreatStatus::Friendly { continue; }
+            if (threat.pos - point).len_nethack() > CALL_VOLUME { continue; }
+            threat.combat = time;
+        }
+        self.called = time;
+    }
+
     pub fn update(&mut self, me: &Entity, prev_time: Timestamp) {
         for event in &me.known.events {
-            // TODO(shaunak): Maybe only if it's a friendly call?
-            if let EventData::CallForHelp(_) = event.data { self.called = event.time; }
             let Some(threat) = self.get_by_event(me, event) else { continue };
             threat.update_for_event(me, event);
+            if threat.status == ThreatStatus::Hostile { self.forget_tid(TID::CID); }
+
+            if let EventData::CallForHelp(x) = &event.data && Self::call_for_us(me, x) {
+                self.on_call_for_help(event.point, event.time);
+                self.guess_threat_location(me, event);
+            }
         }
         for other in &me.known.entities {
             if !other.visible { break; }
             let Some(threat) = self.get_by_entity(me, other.eid) else { continue };
             threat.update_for_sighting(me, other);
+            if threat.status == ThreatStatus::Hostile { self.forget_tid(TID::CID); }
         }
 
         self.hostile.clear();
@@ -214,8 +231,9 @@ impl ThreatState {
                 let decay = if ratio > 1. { 0. } else { 1. - ratio };
                 team_strength += base * decay;
 
-                let can_call = me.known.time - x.time <= CALL_FOR_HELP_LIMIT;
-                call_strength += if can_call { base } else { base * decay };
+                let nearby = (me.pos - x.pos).len_nethack() <= CALL_VOLUME;
+                let recent = me.known.time - x.time <= CALL_FOR_HELP_LIMIT;
+                call_strength += if nearby && recent { base } else { base * decay };
             }
         }
 
@@ -241,6 +259,11 @@ impl ThreatState {
         debug_assert!(self.check_invariants());
     }
 
+    fn forget_tid(&mut self, tid: TID) {
+        let Some(handle) = self.threat_index.remove(&tid) else { return };
+        self.threats.remove(handle);
+    }
+
     fn get_by_entity(&mut self, me: &Entity, eid: EID) -> Option<&mut Threat> {
         let handle = self.get_by_tid(me, TID::EID(eid))?;
         Some(&mut self.threats[handle])
@@ -250,7 +273,7 @@ impl ThreatState {
         let tid = event.eid.map(|x| TID::EID(x)).or(event.uid.map(|x| TID::UID(x)))?;
 
         if let EventData::Forget(_) = &event.data {
-            if let Some(x) = self.threat_index.remove(&tid) { self.threats.remove(x); }
+            self.forget_tid(tid);
             return None;
         }
 
@@ -278,6 +301,21 @@ impl ThreatState {
     fn known_good(&self, me: &Entity, tid: TID) -> bool {
         let TID::EID(x) = tid else { return false };
         x == me.eid || me.known.entity(x).map(|x| x.friend).unwrap_or(false)
+    }
+
+    fn call_for_us(me: &Entity, _: &CallForHelpEvent) -> bool {
+        // TODO(shaunak): Implement a better "this call is for us" check.
+        !me.predator
+    }
+
+    fn guess_threat_location(&mut self, me: &Entity, event: &Event) {
+        let Some(handle) = self.get_by_tid(me, TID::CID) else { return };
+
+        let mut attack = event.clone();
+        attack.data = EventData::Attack(AttackEvent { target: Some(me.eid) });
+        let threat = &mut self.threats[handle];
+        threat.update_for_event(me, &attack);
+        threat.hp = 0.;
     }
 
     fn check_invariants(&self) -> bool {

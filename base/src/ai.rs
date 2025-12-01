@@ -15,7 +15,7 @@ use crate::game::{Action, AttackAction, CallForHelpAction, EatAction, MoveAction
 use crate::knowledge::{Knowledge, Sense, Timedelta, Timestamp};
 use crate::pathing::{AStar, BFS, DijkstraLength, DijkstraMap, Neighborhood, Status};
 use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
-use crate::threats::{CALL_FOR_HELP_LIMIT, FightOrFlight, ThreatState, ThreatStatus};
+use crate::threats::{FightOrFlight, ThreatState, ThreatStatus};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -1205,14 +1205,8 @@ fn FlightStrength(ctx: &mut Ctx) -> i64 {
 
 #[allow(non_snake_case)]
 fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
-    let time = ctx.known.time;
     let threats = &mut ctx.blackboard.threats;
-
-    for x in &mut threats.threats {
-        if time - x.time > CALL_FOR_HELP_LIMIT { break; }
-        if x.status == ThreatStatus::Friendly { x.combat = time; }
-    }
-    threats.called = time;
+    threats.on_call_for_help(ctx.pos, ctx.known.time);
 
     let look = threats.hostile.first().map(|x| x.pos - ctx.pos).unwrap_or(ctx.dir);
     Some(Action::CallForHelp(CallForHelpAction { look }))
@@ -1235,7 +1229,9 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
 //
 //  5. Drop the "bias towards dir" term in `select_chase_target`.
 //
-//  6. Add a "RespondToCalls" subtree to make call-for-help more effective.
+//  6. Fix bug in `select_chase_target`: if the target hasn't moved from where
+//     we last saw it, then we may not choose that cell because of the check
+//     on time_since_entity_visible() > age.
 //
 //  7. Make the our-team-strength logic quadratic in team size.
 //
