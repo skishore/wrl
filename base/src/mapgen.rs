@@ -377,10 +377,9 @@ impl PartialEq for DijkstraNode {
 
 impl std::cmp::Ord for DijkstraNode {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        let sd = f64_to_monotonic_u64(self.distance);
-        let od = f64_to_monotonic_u64(other.distance);
         let (sp, op) = (self.point, other.point);
-        od.cmp(&sd).then_with(|| (sp.0, sp.1).cmp(&(op.0, op.1)))
+        let (sd, od) = (self.distance, other.distance);
+        od.total_cmp(&sd).then((sp.0, sp.1).cmp(&(op.0, op.1)))
     }
 }
 
@@ -388,12 +387,6 @@ impl std::cmp::PartialOrd for DijkstraNode {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
-}
-
-fn f64_to_monotonic_u64(x: f64) -> u64 {
-    let bits = x.to_bits();
-    let sign = 1u64 << 63;
-    if bits & sign == 0 { bits | sign } else { !bits }
 }
 
 fn dijkstra<F: Fn(Point) -> Vec<Point>, G: Fn(Point) -> f64, H: Fn(Point) -> bool>
@@ -653,7 +646,7 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
 
         let target = (grassiness * values.len() as f64).round() as usize;
         let mut values: Vec<_> = values.into_iter().collect();
-        values.sort_by_key(|&x| (f64_to_monotonic_u64(x.1), x.0.0, x.0.1));
+        values.sort_by(|a, b| a.1.total_cmp(&b.1).then((a.0.0, a.0.1).cmp(&(b.0.0, b.0.1))));
 
         let grass = if rng.random::<f64>() < weediness { ',' } else { '"' };
 
