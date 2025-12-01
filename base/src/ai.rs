@@ -535,7 +535,7 @@ fn HeardUnknownNoise(ctx: &mut Ctx) -> bool {
 
     if bb.dirs.kind == DirsKind::Noises && bb.dirs.dirs.len() == 1 {
         for threat in &mut bb.threats.threats {
-            threat.status = min(threat.status, ThreatStatus::Scanned);
+            threat.update_status(ThreatStatus::Scanned);
         }
     }
     true
