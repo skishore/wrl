@@ -131,7 +131,7 @@ impl Blackboard {
 
             hunger: false,
             thirst: false,
-            weary_: false,
+            weary_: rng.gen_bool(0.5),
         }
     }
 
