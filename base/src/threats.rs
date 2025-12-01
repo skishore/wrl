@@ -83,16 +83,32 @@ impl Threat {
         }
     }
 
+    // Status-related helpers:
+
+    pub fn friendly(&self) -> bool {
+        self.status == ThreatStatus::Friendly
+    }
+
+    pub fn hostile(&self) -> bool {
+        self.status == ThreatStatus::Hostile
+    }
+
+    pub fn unknown(&self) -> bool {
+        self.status == ThreatStatus::Unknown
+    }
+
+    pub fn update_status(&mut self, status: ThreatStatus) {
+        self.status = min(self.status, status);
+    }
+
+    // State updates:
+
     fn merge_from(&mut self, other: &Threat) {
         // No need to update any fields that we unconditionally update in
         // update_for_event, since we merge right before processing an event.
         self.sense = other.sense;
         self.seen |= other.seen;
         self.update_status(other.status);
-    }
-
-    fn update_status(&mut self, status: ThreatStatus) {
-        self.status = min(self.status, status);
     }
 
     fn update_for_event(&mut self, me: &Entity, event: &Event) {
@@ -163,7 +179,7 @@ impl ThreatState {
         for event in &me.known.events {
             let Some(threat) = self.get_by_event(me, event) else { continue };
             threat.update_for_event(me, event);
-            if threat.status == ThreatStatus::Hostile { self.forget_tid(TID::CID); }
+            if threat.hostile() { self.forget_tid(TID::CID); }
 
             if let EventData::CallForHelp(x) = &event.data && Self::call_for_us(me, x) {
                 self.on_call_for_help(event.point, event.time);
@@ -174,7 +190,7 @@ impl ThreatState {
             if !other.visible { break; }
             let Some(threat) = self.get_by_entity(me, other.eid) else { continue };
             threat.update_for_sighting(me, other);
-            if threat.status == ThreatStatus::Hostile { self.forget_tid(TID::CID); }
+            if threat.hostile() { self.forget_tid(TID::CID); }
         }
 
         self.hostile.clear();
@@ -189,11 +205,11 @@ impl ThreatState {
         for x in &self.threats {
             if me.known.time - x.time > ACTIVE_THREAT_TIME { break; }
 
-            if x.status == ThreatStatus::Hostile { self.hostile.push(x.clone()); }
-            if x.status == ThreatStatus::Unknown { self.unknown.push(x.clone()); }
+            if x.hostile() { self.hostile.push(x.clone()); }
+            if x.unknown() { self.unknown.push(x.clone()); }
 
-            if x.status == ThreatStatus::Hostile && !x.seen { hidden_hostile += 1; }
-            if x.status == ThreatStatus::Hostile && x.seen { seen_hostile += 1; }
+            if x.hostile() && !x.seen { hidden_hostile += 1; }
+            if x.hostile() && x.seen { seen_hostile += 1; }
         }
 
         // Start fight-or-flight if we have an active known enemy. Stop when
@@ -220,11 +236,11 @@ impl ThreatState {
         for x in &self.threats {
             if me.known.time - x.time > ACTIVE_THREAT_TIME { break; }
 
-            if x.status == ThreatStatus::Hostile {
+            if x.hostile() {
                 if !x.seen && hidden_count == 0 { continue; }
                 if !x.seen { hidden_count -= 1; }
                 foes_strength += strength(x);
-            } else if x.status == ThreatStatus::Friendly {
+            } else if x.friendly() {
                 let base = strength(x);
                 let delay = me.known.time - x.combat;
                 let ratio = delay.nsec() as f64 / ACTIVE_THREAT_TIME.nsec() as f64;
