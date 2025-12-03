@@ -298,13 +298,6 @@ pub fn AStar<F: Fn(Point) -> Status>(
 
 // Dijkstra
 
-// Dijkstra search for a point satisfying an arbitrary predicate.
-#[allow(non_snake_case)]
-pub fn DijkstraSearch<F: Fn(Point) -> bool, G: Fn(Point) -> Status>(
-        source: Point, target: F, limit: i32, check: G) -> Option<Vec<Point>> {
-    Dijkstra(source, target, limit, check, |_| { 0 })
-}
-
 // TODO: This search algorithm is non-isotropic. It prefers to move northwest.
 // Fix it by sampling all nodes at `score` matching `target`.
 //
@@ -359,7 +352,7 @@ fn CachedDijkstra<F: Fn(Point) -> bool, G: Fn(Point) -> Status, H: Fn(Point) -> 
             let status = if target(next) { Status::Free } else { check(next) };
             if status == Status::Blocked { continue; }
 
-            let occupied = status != Status::Free;
+            let occupied = status == Status::Occupied;
             let diagonal = dir.0 != 0 && dir.1 != 0;
             let distance = prev_distance + ASTAR_UNIT_COST +
                            if diagonal { ASTAR_DIAGONAL_PENALTY } else { 0 } +
@@ -620,7 +613,7 @@ mod tests {
         b.iter(|| {
             let done = |_: Point| { false };
             let check = |p: Point| { map.get(&p).copied().unwrap_or(Status::Free) };
-            DijkstraSearch(Point::default(), done, DIJKSTRA_CELLS, check);
+            Dijkstra(Point::default(), done, DIJKSTRA_CELLS, check, |_| 0);
         });
     }
 
