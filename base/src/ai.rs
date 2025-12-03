@@ -604,6 +604,8 @@ fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
     let path = std::mem::take(&mut ctx.blackboard.path);
     if path.path.is_empty() { return None; }
 
+    // Check if every cell on the path is free. Other than the cell that we'll
+    // move to next, we allow entities to temporarily move onto the path.
     let (i, j) = (path.step, path.step + 1);
     let valid = (||{
         let Some(&prev) = path.path.get(i) else { return false };
@@ -619,18 +621,22 @@ fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
     })();
     if !valid { return None; }
 
+    // When sneaking, also check that all cells are valid hiding places.
     let seen = kind == PathKind::Hide && path.path.iter().skip(i).any(
         |&x| !is_hiding_place(ctx, x));
     if seen { return None; }
 
+    // The path is good! Follow it. Look ahead as far as possible on the path.
     let next = path.path[j];
     let mut target = next;
     for &point in path.path.iter().skip(j).take(8) {
         let los = LOS(pos, point);
-        if los.iter().all(|&x| !known.get(x).blocked()) { target = point; }
+        if los.iter().all(|&x| known.get(x).unblocked()) { target = point; }
     }
     let (look, step) = (target - pos, next - pos);
 
+    // Determine how fast to move on the path. Only move quickly (and noisily)
+    // when fleeing from an enemy or chasing one down.
     let mut turns = WANDER_TURNS;
     if kind == PathKind::Enemy && let Some(x) = &ctx.blackboard.target {
         let age = ctx.known.time - x.target.time;
@@ -639,6 +645,7 @@ fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
         turns = 1.;
     }
 
+    // Clear the path if this move takes us to the end.
     if path.step + 2 < path.path.len() {
         ctx.blackboard.path = path;
         ctx.blackboard.path.step += 1;
