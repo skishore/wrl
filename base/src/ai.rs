@@ -35,9 +35,9 @@ const ASSESS_TURNS_EXPLORE: i32 = 8;
 const ASSESS_TURNS_FLIGHT: i32 = 1;
 
 const MAX_ASSESS: i32 = 32;
-const MAX_HUNGER: i32 = 512;
-const MAX_THIRST: i32 = 128;
-const MAX_WEARY_: i32 = 2048;
+const MAX_HUNGER: i32 = 1024;
+const MAX_THIRST: i32 = 256;
+const MAX_WEARY_: i32 = 4096;
 
 const ASSESS_GAIN: RangeInclusive<i32> = (MAX_ASSESS / 2)..=MAX_ASSESS;
 const HUNGER_GAIN: RangeInclusive<i32> = (MAX_HUNGER / 4)..=(MAX_HUNGER / 2);
