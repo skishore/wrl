@@ -371,8 +371,7 @@ fn select_explore_target(ctx: &mut Ctx) -> Option<Point> {
 
 fn select_chase_target(
         ctx: &mut Ctx, age: Timedelta, bias: Point, center: Point) -> Option<Point> {
-    let Ctx { known, pos, dir, .. } = *ctx;
-    let inv_dir_l2 = safe_inv_l2(dir);
+    let Ctx { known, pos, .. } = *ctx;
     let inv_bias_l2 = safe_inv_l2(bias);
 
     let is_search_candidate = |p: Point| {
@@ -386,9 +385,8 @@ fn select_chase_target(
 
         let delta = p - pos;
         let inv_delta_l2 = safe_inv_l2(delta);
-        let cos0 = delta.dot(dir) as f64 * inv_delta_l2 * inv_dir_l2;
-        let cos1 = delta.dot(bias) as f64 * inv_delta_l2 * inv_bias_l2;
-        let angle = ((cos0 + 1.) * (cos1 + 1.)).pow(4);
+        let cos = delta.dot(bias) as f64 * inv_delta_l2 * inv_bias_l2;
+        let angle = (cos + 1.).pow(4);
 
         angle / (((p - center).len_l2_squared() + 1) as f64).pow(2)
     };
@@ -1225,26 +1223,24 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
 
 // TODO list:
 //
-//  1. Last-seen cache for cells satisfying a need, to skip repeated searches.
+//  - Last-seen cache for cells satisfying a need, to skip repeated searches.
 //
-//  2. Periodically re-plan a path to a need if there is a closer one?
+//  - Periodically re-plan a path to a need if there is a closer one?
 //
-//  3. Add an assess before "MarkSafeIfLostView".
+//  - Add an assess before "MarkSafeIfLostView".
 //
-//  4. Update CachedPath to do "look at the target for a path w/ skip = 1",
-//     then get rid of the Look actions for basic needs and `SearchForPrey`.
+//  - Update CachedPath to do "look at the target for a path w/ skip = 1",
+//    then get rid of the Look actions for basic needs and `SearchForPrey`.
 //
-//  5. Drop the "bias towards dir" term in `select_chase_target`.
+//  - Fix bug in `select_chase_target`: if the target hasn't moved from where
+//    we last saw it, then we may not choose that cell because of the check
+//    on time_since_entity_visible() > age.
 //
-//  6. Fix bug in `select_chase_target`: if the target hasn't moved from where
-//     we last saw it, then we may not choose that cell because of the check
-//     on time_since_entity_visible() > age.
+//  - Make the our-team-strength logic quadratic in team size.
 //
-//  7. Make the our-team-strength logic quadratic in team size.
+//  - Add "growl" / "intimidate" subtrees.
 //
-//  8. Add "growl" / "intimidate" subtrees.
-//
-//  9. Drop "unknown" targets earlier if we're chasing down enemies.
+//  - Drop "unknown" targets earlier if we're chasing down enemies.
 
 #[allow(non_snake_case)]
 fn AttackOrFollowPath(kind: PathKind) -> impl Bhv {
