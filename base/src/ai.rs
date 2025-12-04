@@ -472,6 +472,12 @@ fn RunCombatAnalysis(ctx: &mut Ctx) -> Result {
     Result::Failed
 }
 
+#[allow(non_snake_case)]
+fn ForceThreatState(ctx: &mut Ctx, state: FightOrFlight) {
+    let threats = &mut ctx.blackboard.threats;
+    if threats.state != FightOrFlight::Safe { threats.state = state; }
+}
+
 //////////////////////////////////////////////////////////////////////////////
 
 // Wandering:
@@ -1092,6 +1098,8 @@ fn UpdateFlightState(ctx: &mut Ctx) -> bool {
     let bb = &mut ctx.blackboard;
     let prev = bb.flight.take();
 
+    // State may be Safe even if we're aware of hostiles, if we tried to hunt
+    // them down and lost sight for long enough. See: MarkSafeIfLostView.
     let threats = &bb.threats;
     if threats.state == FightOrFlight::Safe { return false; }
     let Some(threat) = threats.hostile.first() else { return false };
@@ -1150,23 +1158,26 @@ fn LookForThreats(ctx: &mut Ctx) -> Option<Action> {
 }
 
 #[allow(non_snake_case)]
-fn HideFromThreats(ctx: &mut Ctx) -> Option<Action> {
+fn HideFromThreats(ctx: &mut Ctx) -> Result {
     let pos = ctx.pos;
-    if all_threats_asleep(ctx) || !is_hiding_place(ctx, pos) { return None; }
-
     let okay = get_sneak_check(ctx);
     ctx.sneakable = DijkstraMap(pos, okay, HIDING_CELLS, HIDING_LIMIT);
-    let target = select_flight_target(ctx, true)?;
+    let target = select_flight_target(ctx, true);
+    let Some(target) = target else { return Result::Failed };
 
-    if target == pos { return LookForThreats(ctx); }
+    if target == pos { return Result::Success; }
 
     let kind = PathKind::Hide;
     let okay = get_sneak_check(ctx);
-    let path = AStar(pos, target, ASTAR_LIMIT_WANDER, okay)?;
+    let path = AStar(pos, target, ASTAR_LIMIT_WANDER, okay);
+    let Some(path) = path else { return Result::Failed };
 
     ctx.blackboard.path = CachedPath { kind, path, skip: 0, step: 0 };
     ctx.blackboard.path.path.insert(0, pos);
-    FollowPath(ctx, kind)
+    let Some(action) = FollowPath(ctx, kind) else { return Result::Failed };
+
+    ctx.action = Some(action);
+    Result::Running
 }
 
 #[allow(non_snake_case)]
@@ -1175,7 +1186,7 @@ fn FleeFromThreats(ctx: &mut Ctx) -> Option<Action> {
     ensure_neighborhood(ctx);
     let target = select_flight_target(ctx, false)?;
 
-    if target == pos { return LookForThreats(ctx); }
+    if target == pos { return None; }
 
     let kind = PathKind::Flee;
     if FindPath(ctx, target, kind) { FollowPath(ctx, kind) } else { None }
@@ -1397,6 +1408,7 @@ fn FightAgainstThreats() -> impl Bhv {
         HuntSelectedTarget(),
     ]
     .on_tick(ClearTargets)
+    .on_tick(|x| ForceThreatState(x, FightOrFlight::Fight))
     .on_tick(|x| x.blackboard.chasing_enemy = true)
     .on_exit(|x| x.blackboard.chasing_enemy = false)
 }
@@ -1417,11 +1429,17 @@ fn EscapeFromThreats() -> impl Bhv {
             act!("Follow(Hide)", |x| FollowPath(x, PathKind::Hide)),
             act!("Follow(Flee)", |x| FollowPath(x, PathKind::Flee)),
             cb!("ClearFlightPath", ClearFlightPath),
-            act!("HideFromThreats", HideFromThreats),
+            seq![
+                "TryHiding",
+                cond!("AnyThreatsAwake", |x| !all_threats_asleep(x)),
+                cond!("CurrentlyHidden", |x| is_hiding_place(x, x.pos)),
+                cb!("HideFromThreats", HideFromThreats),
+                act!("LookForThreats", LookForThreats),
+            ],
             act!("FleeFromThreats", FleeFromThreats),
-            act!("LookForThreats", LookForThreats),
         ],
     ]
+    .on_tick(|x| ForceThreatState(x, FightOrFlight::Flight))
     .on_exit(ClearFlightState)
 }
 
