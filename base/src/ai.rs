@@ -10,7 +10,7 @@ use crate::{act, cb, cond, pri, run, seq, util};
 use crate::base::{LOS, Point, RNG, Slice, dirs, sample, weighted};
 use crate::bhv::{Bhv, Debug, Result};
 use crate::entity::Entity;
-use crate::game::{MOVE_VOLUME, Item, move_ready};
+use crate::game::{FOV_RADIUS_NPC, MOVE_VOLUME, Item, move_ready};
 use crate::game::{Action, AttackAction, CallForHelpAction, EatAction, MoveAction};
 use crate::knowledge::{Knowledge, Sense, Timedelta, Timestamp};
 use crate::pathing::{AStar, BFS, DijkstraLength, DijkstraMap, Neighborhood, Status};
@@ -401,10 +401,11 @@ fn select_chase_target(
 fn select_flight_target(ctx: &mut Ctx, hiding: bool) -> Option<Point> {
     let Ctx { known, pos, .. } = *ctx;
 
-    let threats = &ctx.blackboard.threats.hostile;
+    let min_distance = DijkstraLength(Point(FOV_RADIUS_NPC, 0));
     let scale = 1. / DijkstraLength(Point(1, 0)) as f64;
+    let threats = &ctx.blackboard.threats.hostile;
 
-    let score = |p: Point, source_distance: i32| -> f64 {
+    let score = |p: Point, source_distance: i32| -> (f64, bool) {
         let mut threat = Point::default();
         let mut threat_distance = std::i32::MAX;
         for x in threats {
@@ -417,23 +418,25 @@ fn select_flight_target(ctx: &mut Ctx, hiding: bool) -> Option<Point> {
             (1..los.len() - 1).any(|i| known.get(los[i]).blocked())
         };
         let frontier = dirs::ALL.iter().any(|&x| known.get(p + x).unknown());
-        let hidden = !hiding && is_hiding_place(ctx, p);
+        let hidden = hiding || is_hiding_place(ctx, p);
 
-        // WARNING: This heuristic can cause a piece to be "checkmated" in a
-        // corner, if the Dijkstra search below isn't wide enough for us to
-        // find a cell which is further from the threat than the corner cell.
-        1.5 * scale * (threat_distance as f64) +
-        -1. * scale * (source_distance as f64) +
-        16. * if blocked { 1. } else { 0. } +
-        16. * if frontier { 1. } else { 0. } +
-        16. * if hidden { 1. } else { 0. }
+        // This heuristic can cause a piece to be "checkmated" in a corner,
+        // if we don't find a cell that's far enough away. But that's okay -
+        // in that case, we'll switch to fighting back.
+        let score = 1.5 * scale * (threat_distance as f64) +
+                    -1. * scale * (source_distance as f64) +
+                    16. * if blocked { 1. } else { 0. } +
+                    16. * if frontier { 1. } else { 0. } +
+                    16. * if hidden { 1. } else { 0. };
+        let valid = hidden || blocked || threat_distance > min_distance;
+        (score, valid)
     };
 
-    let min_score = score(pos, 0);
+    let min_score = score(pos, 0).0;
     let map = if hiding { &ctx.sneakable.visited } else { &ctx.neighborhood.visited };
     let scores: Vec<_> = map.iter().filter_map(|&(p, distance)| {
-        let delta = score(p, distance) - min_score;
-        if delta >= 0. { Some((p, delta)) } else { None }
+        let (score, valid) = score(p, distance);
+        if valid && score >= min_score { Some((p, score)) } else { None }
     }).collect();
     select_target_softmax(&scores, ctx.env, 0.1)
 }
