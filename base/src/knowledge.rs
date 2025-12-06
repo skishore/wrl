@@ -133,7 +133,7 @@ pub struct UID(NonZeroU64);
 pub enum Sense { Sight, Sound, Smell }
 
 #[derive(Clone, Debug)]
-pub struct AttackEvent { pub target: Option<EID> }
+pub struct AttackEvent { pub combat: bool, pub target: Option<EID> }
 
 #[derive(Clone, Debug, Default)]
 pub struct CallForHelpEvent {}
