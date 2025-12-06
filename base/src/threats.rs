@@ -121,7 +121,7 @@ impl Threat {
             EventData::Attack(x) => {
                 let attacked = x.target == Some(me.eid);
                 if attacked { self.update_status(ThreatStatus::Hostile); }
-                self.combat = event.time;
+                if x.combat { self.combat = event.time; }
             },
             EventData::CallForHelp(x) => {
                 let for_us = ThreatState::call_for_us(me, x);
@@ -328,7 +328,9 @@ impl ThreatState {
         let Some(handle) = self.get_by_tid(me, TID::CID) else { return };
 
         let mut attack = event.clone();
-        attack.data = EventData::Attack(AttackEvent { target: Some(me.eid) });
+        let data = AttackEvent { combat: true, target: Some(me.eid) };
+        attack.data = EventData::Attack(data);
+
         let threat = &mut self.threats[handle];
         threat.update_for_event(me, &attack);
         threat.hp = 0.;

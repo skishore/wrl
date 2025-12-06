@@ -848,12 +848,13 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let sightings = combine_views(&state.board, &saw_source, &saw_target);
 
             // Deliver the AttackEvent to each entity in the list.
-            let data = EventData::Attack(AttackEvent { target: None });
+            let combat = tid.is_some();
+            let data = EventData::Attack(AttackEvent { combat, target: None });
             let mut event = state.board.create_event(eid, data, source);
             let mut logged = false;
             for Sighting { eid: oid, source_seen, target_seen } in sightings {
                 let target = if target_seen { tid } else { None };
-                event.data = EventData::Attack(AttackEvent { target });
+                event.data = EventData::Attack(AttackEvent { combat, target });
                 event.sense = if source_seen { Sense::Sight } else { Sense::Sound };
                 state.board.observe_event(oid, &event, &mut state.env);
                 if oid != state.player { continue; }
