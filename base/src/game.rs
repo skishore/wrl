@@ -283,22 +283,17 @@ impl Board {
     }
 
     fn advance_effect(&mut self, pov: EID, env: &mut UpdateEnv) -> bool {
-        let mut visible = self.pov_sees_effect(pov, env);
+        let mut visible = self._pov_sees_effect(pov, env);
         while self._advance_one_frame(env) {
-            visible = visible || self.pov_sees_effect(pov, env);
+            visible = visible || self._pov_sees_effect(pov, env);
             if visible { return true; }
         }
         false
     }
 
-    fn pov_sees_effect(&self, pov: EID, env: &UpdateEnv) -> bool {
-        if env.ui.full { return true; }
-
-        let Some(frame) = self._effect.frames.get(0) else { return false };
-        let Some(entity) = self.entities.get(pov) else { return false };
-
-        let known = &entity.known;
-        frame.iter().any(|y| known.get(y.point).visible())
+    fn start_effect(&mut self, pov: EID, env: &mut UpdateEnv) {
+        if self.get_frame().is_none() { return; }
+        if !self._pov_sees_effect(pov, env) { self.advance_effect(pov, env); }
     }
 
     fn _advance_one_frame(&mut self, env: &mut UpdateEnv) -> bool {
@@ -328,13 +323,23 @@ impl Board {
         true
     }
 
+    fn _pov_sees_effect(&self, pov: EID, env: &UpdateEnv) -> bool {
+        if env.ui.full { return true; }
+
+        let Some(frame) = self._effect.frames.get(0) else { return false };
+        let Some(entity) = self.entities.get(pov) else { return false };
+
+        let known = &entity.known;
+        frame.iter().any(|y| known.get(y.point).visible())
+    }
+
     // Getters
 
     pub fn get_cell(&self, p: Point) -> &Cell { self.map.entry_ref(p) }
 
     pub fn get_entity(&self, eid: EID) -> Option<&Entity> { self.entities.get(eid) }
 
-    pub fn get_frame(&self) -> Option<&Frame> { self._effect.frames.iter().next() }
+    pub fn get_frame(&self) -> Option<&Frame> { self._effect.frames.first() }
 
     pub fn get_light(&self) -> &Light { &self.light }
 
@@ -1067,9 +1072,7 @@ fn update_state(state: &mut State) {
 
     // Skip the prefix of Effect frames that the POV entity can't see.
     let pov = state.get_pov_entity().eid;
-    if state.board.get_frame().is_some() && !state.board.pov_sees_effect(pov, &state.env) {
-        state.board.advance_effect(pov, &mut state.env);
-    }
+    state.board.start_effect(pov, &mut state.env);
 
     if update { update_pov_entities(state); }
 }
