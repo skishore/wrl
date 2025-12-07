@@ -569,8 +569,8 @@ mod tests {
         assert!(list.check_invariants());
         let forwards: Vec<_> = list.iter().map(|x| x.clone()).collect();
         let backward: Vec<_> = list.iter().rev().map(|x| x.clone()).collect();
-        assert!(list.back() == backward.iter().next());
-        assert!(list.front() == forwards.iter().next());
+        assert!(list.back() == forwards.last());
+        assert!(list.front() == forwards.first());
         assert!(forwards == backward.into_iter().rev().collect::<Vec<_>>());
         forwards
     }

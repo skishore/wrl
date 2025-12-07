@@ -352,8 +352,7 @@ fn process_ui_input(ui: &mut UI, entity: &Entity, input: Input) -> bool {
         let known = &*entity.known;
         let focus = ui.focus.and_then(|x| known.entity(x));
         if let Some(target) = focus && can_target(target) { return target.pos; }
-        let rival = rivals(entity).into_iter().next();
-        if let Some(rival) = rival { return rival.pos; }
+        if let Some(rival) = rivals(entity).first() { return rival.pos; }
         source
     };
 
