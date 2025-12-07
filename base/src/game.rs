@@ -283,15 +283,17 @@ impl Board {
     }
 
     fn advance_effect(&mut self, pov: EID, env: &mut UpdateEnv) -> bool {
-        let mut visible = self.pov_sees_effect(pov);
+        let mut visible = self.pov_sees_effect(pov, env);
         while self._advance_one_frame(env) {
-            visible = visible || self.pov_sees_effect(pov);
+            visible = visible || self.pov_sees_effect(pov, env);
             if visible { return true; }
         }
         false
     }
 
-    fn pov_sees_effect(&self, pov: EID) -> bool {
+    fn pov_sees_effect(&self, pov: EID, env: &UpdateEnv) -> bool {
+        if env.ui.full { return true; }
+
         let Some(frame) = self._effect.frames.get(0) else { return false };
         let Some(entity) = self.entities.get(pov) else { return false };
 
@@ -966,7 +968,7 @@ fn process_input(state: &mut State, input: Input) {
         return;
     }
 
-    if let Input::Click(pos) = input {
+    if state.ui.full && let Input::Click(pos) = input {
         let pov = state.get_pov_entity();
         let Some(pos) = state.ui.get_map_cell(pov, pos) else { return };
         let Some(eid) = state.board.get_cell(pos).eid else { return };
@@ -1065,7 +1067,7 @@ fn update_state(state: &mut State) {
 
     // Skip the prefix of Effect frames that the POV entity can't see.
     let pov = state.get_pov_entity().eid;
-    if state.board.get_frame().is_some() && !state.board.pov_sees_effect(pov) {
+    if state.board.get_frame().is_some() && !state.board.pov_sees_effect(pov, &state.env) {
         state.board.advance_effect(pov, &mut state.env);
     }
 
