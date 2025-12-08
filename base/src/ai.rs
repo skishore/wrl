@@ -1184,15 +1184,20 @@ fn HideFromThreats(ctx: &mut Ctx) -> Result {
 }
 
 #[allow(non_snake_case)]
-fn FleeFromThreats(ctx: &mut Ctx) -> Option<Action> {
+fn FleeFromThreats(ctx: &mut Ctx) -> Result {
     let pos = ctx.pos;
     ensure_neighborhood(ctx);
-    let target = select_flight_target(ctx, false)?;
+    let target = select_flight_target(ctx, false);
+    let Some(target) = target else { return Result::Failed };
 
-    if target == pos { return None; }
+    if target == pos { return Result::Success; }
 
     let kind = PathKind::Flee;
-    if FindPath(ctx, target, kind) { FollowPath(ctx, kind) } else { None }
+    if !FindPath(ctx, target, kind) { return Result::Failed; }
+    let Some(action) = FollowPath(ctx, kind) else { return Result::Failed };
+
+    ctx.action = Some(action);
+    Result::Running
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -1439,7 +1444,11 @@ fn EscapeFromThreats() -> impl Bhv {
                 cb!("HideFromThreats", HideFromThreats),
                 act!("LookForThreats", LookForThreats),
             ],
-            act!("FleeFromThreats", FleeFromThreats),
+            seq![
+                "TryFleeing",
+                cb!("FleeFromThreats", FleeFromThreats),
+                act!("LookForThreats", LookForThreats),
+            ],
         ],
     ]
     .on_tick(|x| ForceThreatState(x, FightOrFlight::Flight))
