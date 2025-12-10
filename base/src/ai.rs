@@ -948,7 +948,7 @@ fn MarkSafeIfLostView(ctx: &mut Ctx) -> bool {
 fn ListThreatsBySight(ctx: &mut Ctx) -> bool {
     let initial = ctx.blackboard.options.len();
     for other in &ctx.blackboard.threats.hostile {
-        if ctx.known.time - other.time >= MAX_SEARCH_TIME { continue; }
+        if ctx.known.time - other.time >= MIN_SEARCH_TIME { continue; }
         let target = Target { last: other.pos, time: other.time, sense: other.sense };
         ctx.blackboard.options.push(target);
     }
