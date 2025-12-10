@@ -997,8 +997,6 @@ fn ListPreyByScent(ctx: &mut Ctx) -> bool {
 
 #[allow(non_snake_case)]
 fn SelectBestTarget(ctx: &mut Ctx) -> bool {
-    let prev = ctx.blackboard.target.take();
-
     let options = &mut ctx.blackboard.options;
     if options.is_empty() { return false; }
 
@@ -1010,8 +1008,9 @@ fn SelectBestTarget(ctx: &mut Ctx) -> bool {
     };
     let target = *options.select_nth_unstable_by_key(0, score).1;
 
+    let prev = &ctx.blackboard.target;
     let recent = target.time > ctx.blackboard.prev_time;
-    let change = if let Some(x) = &prev { x.target.last != target.last } else { true };
+    let change = if let Some(x) = prev { x.target.last != target.last } else { true };
     let fresh = change || (recent && target.sense != Sense::Smell);
     let reset = change || recent;
 
