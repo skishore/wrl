@@ -17,18 +17,10 @@ pub const CALL_FOR_HELP_RETRY: Timedelta = Timedelta::from_seconds(24.);
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Threat state
-
-pub type ThreatHandle = Handle<Threat>;
-
-#[derive(Copy, Clone, Eq, PartialEq, Hash)]
-pub enum TID { CID, EID(EID), UID(UID) }
+// Threat
 
 #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ThreatStatus { Hostile, Friendly, Neutral, Scanned, Unknown }
-
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
-pub enum FightOrFlight { Fight, Flight, #[default] Safe }
 
 #[derive(Clone)]
 pub struct Threat {
@@ -45,23 +37,6 @@ pub struct Threat {
     // Flags:
     pub asleep: bool,
     pub seen: bool,
-}
-
-#[derive(Default)]
-pub struct ThreatState {
-    pub threats: List<Threat>,
-    pub threat_index: HashMap<TID, ThreatHandle>,
-
-    // Summaries used for flight pathing.
-    pub hostile: Vec<Threat>,
-    pub unknown: Vec<Threat>,
-
-    // Fight-or-flight.
-    pub state: FightOrFlight,
-
-    // Calling for help.
-    pub called: Timestamp,
-    pub call_for_help: bool,
 }
 
 impl Threat {
@@ -156,6 +131,35 @@ impl Threat {
         };
         self.update_status(status);
     }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// ThreatState
+
+pub type ThreatHandle = Handle<Threat>;
+
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+pub enum TID { CID, EID(EID), UID(UID) }
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub enum FightOrFlight { Fight, Flight, #[default] Safe }
+
+#[derive(Default)]
+pub struct ThreatState {
+    pub threats: List<Threat>,
+    pub threat_index: HashMap<TID, ThreatHandle>,
+
+    // Summaries used for flight pathing.
+    pub hostile: Vec<Threat>,
+    pub unknown: Vec<Threat>,
+
+    // Fight-or-flight.
+    pub state: FightOrFlight,
+
+    // Calling for help.
+    pub called: Timestamp,
+    pub call_for_help: bool,
 }
 
 impl ThreatState {
