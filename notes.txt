@@ -1,0 +1,72 @@
+Unless otherwise specified: all entities @ full health
+
+List of relations:
+  - Unknown
+  - Scanned
+  - Neutral
+  - Friendly
+  - Uncertain
+    - Means we'll growl at it
+    - If they don't respond: can switch to Dangerous or Hostile
+    - Can we reach this state without seeing an entity?
+      - e.g. based only on a scary sound?
+      - maybe we want "Friendly" to take priority?
+      - or: maybe we split status into a bitset
+  - Dangerous
+    - Means we'll run from it, but not attack
+    - If they keep pursuing: may turn Hostile
+  - Hostile
+
+Current transitions:
+  - Scan an unknown sound -> Scanned
+  - Hear source call for help "for us" -> Friendly
+    - Right now: it's "for us" if we're a Pidgey
+    - Instead: match call sound against ours + friends
+  - Attacked -> Hostile
+  - Else, if we see entity:
+    - Our predator -> Hostile
+    - Other Pidgey -> Friendly
+    - All else -> Neutral
+  - We can do better!
+
+Pidgey spot player:
+  50% run
+  50% growl:
+    - If player doesn't leave:
+      25% run
+      25% growl
+      50% attack
+      - If player doesn't leave:
+        - 12.5% run
+        - 12.5% growl
+        - 75% attack
+
+  How many parameters?
+    - Initial split: [0.5, 0.5]
+    - Initial split may also have a chance of attack-on-sight
+    - Decay in favor of attack: x0.5
+
+Pidgey spot Ratatta:
+  - If awake:
+    100% run
+  - Else:
+    100% back away slowly
+
+Pidgey spot Weedle:
+  - If hungry:
+    100% attack
+  - Else:
+    100% ignore
+
+Ratatta spot Pidgey (or Weedle?):
+  - If hungry:
+    100% attack
+  - Else:
+    100% ignore
+
+Ratatta spot Ratatta:
+  100% ignore
+  (or maybe growl?)
+
+X attacked by Y:
+  - Normal FOF behavior
