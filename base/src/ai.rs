@@ -15,7 +15,7 @@ use crate::game::{Action, AttackAction, CallForHelpAction, EatAction, MoveAction
 use crate::knowledge::{Knowledge, Sense, Timedelta, Timestamp};
 use crate::pathing::{AStar, BFS, DijkstraLength, DijkstraMap, Neighborhood, Status};
 use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
-use crate::threats::{FightOrFlight, ThreatState, ThreatStatus};
+use crate::threats::{FightOrFlight, ThreatState};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -541,9 +541,7 @@ fn HeardUnknownNoise(ctx: &mut Ctx) -> bool {
     if bb.threats.unknown.is_empty() { return false; }
 
     if bb.dirs.kind == DirsKind::Noises && bb.dirs.dirs.len() == 1 {
-        for threat in &mut bb.threats.threats {
-            threat.update_status(ThreatStatus::Scanned);
-        }
+        for threat in &mut bb.threats.threats { threat.mark_scanned(); }
     }
     true
 }

@@ -20,14 +20,13 @@ pub const CALL_FOR_HELP_RETRY: Timedelta = Timedelta::from_seconds(24.);
 // Threat
 
 #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum ThreatStatus { Hostile, Friendly, Neutral, Scanned, Unknown }
+enum ThreatStatus { Hostile, Friendly, Neutral, Scanned, Unknown }
 
 #[derive(Clone)]
 pub struct Threat {
     pub pos: Point,
     pub time: Timestamp,
     pub sense: Sense,
-    pub status: ThreatStatus,
     pub combat: Timestamp,
 
     // Stats:
@@ -37,6 +36,9 @@ pub struct Threat {
     // Flags:
     pub asleep: bool,
     pub seen: bool,
+
+    // See status accessors:
+    status: ThreatStatus,
 }
 
 impl Threat {
@@ -45,7 +47,6 @@ impl Threat {
             pos: Default::default(),
             time: Default::default(),
             sense: Sense::Sight,
-            status: ThreatStatus::Unknown,
             combat: Default::default(),
 
             // Stats:
@@ -55,10 +56,13 @@ impl Threat {
             // Flags:
             asleep: false,
             seen: false,
+
+            // See status accessors:
+            status: ThreatStatus::Unknown,
         }
     }
 
-    // Status-related helpers:
+    // Status accessors:
 
     pub fn friendly(&self) -> bool {
         self.status == ThreatStatus::Friendly
@@ -72,11 +76,15 @@ impl Threat {
         self.status == ThreatStatus::Unknown
     }
 
-    pub fn update_status(&mut self, status: ThreatStatus) {
-        self.status = min(self.status, status);
+    pub fn mark_scanned(&mut self) {
+        self.update_status(ThreatStatus::Scanned);
     }
 
     // State updates:
+
+    fn update_status(&mut self, status: ThreatStatus) {
+        self.status = min(self.status, status);
+    }
 
     fn merge_from(&mut self, other: &Threat) {
         // No need to update any fields that we unconditionally update in
@@ -172,7 +180,7 @@ impl ThreatState {
 
     pub fn on_call_for_help(&mut self, point: Point, time: Timestamp) {
         for threat in &mut self.threats {
-            if threat.status != ThreatStatus::Friendly { continue; }
+            if !threat.friendly() { continue; }
             if (threat.pos - point).len_nethack() > CALL_VOLUME { continue; }
             threat.combat = time;
         }
