@@ -81,8 +81,11 @@ struct Blackboard {
     path: CachedPath,
     threats: ThreatState,
     flight: Option<FlightState>,
+
+    // Per-tick chase state:
     target: Option<ChaseTarget>,
     options: Vec<Target>,
+    had_target: bool,
 
     prev_time: Timestamp,
     turn_time: Timestamp,
@@ -111,8 +114,11 @@ impl Blackboard {
             path: Default::default(),
             threats: Default::default(),
             flight: None,
+
+            // Per-tick chase state:
             target: None,
             options: vec![],
+            had_target: false,
 
             prev_time: Timestamp::default(),
             turn_time: Timestamp::default(),
@@ -486,7 +492,7 @@ fn ForceThreatState(ctx: &mut Ctx, state: FightOrFlight) {
 // Wandering:
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum DirsKind { Assess, Flight, Noises, #[default] None }
+pub enum DirsKind { Assess, Flight, Noises, Target, #[default] None }
 
 #[derive(Default)]
 struct CachedDirs {
@@ -544,6 +550,17 @@ fn HeardUnknownNoise(ctx: &mut Ctx) -> bool {
         for threat in &mut bb.threats.threats { threat.mark_scanned(); }
     }
     true
+}
+
+#[allow(non_snake_case)]
+fn LookForTarget(ctx: &mut Ctx) -> Option<Action> {
+    let (bb, rng) = (&mut *ctx.blackboard, &mut *ctx.env.rng);
+    if !bb.had_target { return None; }
+
+    let kind = DirsKind::Target;
+    let dirs = assess_directions(&[ctx.dir], ASSESS_TURNS_FLIGHT, rng);
+    bb.dirs = CachedDirs { kind, dirs, used: false };
+    FollowDirs(ctx, kind)
 }
 
 #[allow(non_snake_case)]
@@ -931,6 +948,11 @@ fn CleanupChaseState(ctx: &mut Ctx) {
 }
 
 #[allow(non_snake_case)]
+fn CleanupTarget(ctx: &mut Ctx) {
+    ctx.blackboard.had_target = false;
+}
+
+#[allow(non_snake_case)]
 fn ClearTargets(ctx: &mut Ctx) {
     ctx.blackboard.options.clear();
 }
@@ -942,11 +964,19 @@ fn MarkSafeIfLostView(ctx: &mut Ctx) -> bool {
     true
 }
 
+macro_rules! check_time {
+    ($ctx:ident, $time:expr, $limit:expr) => {{
+        let &mut Blackboard { prev_time, turn_time, .. } = $ctx.blackboard;
+        if prev_time - $time < $limit { $ctx.blackboard.had_target = true; }
+        turn_time - $time < $limit
+    }}
+}
+
 #[allow(non_snake_case)]
 fn ListThreatsBySight(ctx: &mut Ctx) -> bool {
     let initial = ctx.blackboard.options.len();
     for other in &ctx.blackboard.threats.hostile {
-        if ctx.known.time - other.time >= MIN_SEARCH_TIME { continue; }
+        if !check_time!(ctx, other.time, MIN_SEARCH_TIME) { break; }
         let target = Target { last: other.pos, time: other.time, sense: other.sense };
         ctx.blackboard.options.push(target);
     }
@@ -958,7 +988,7 @@ fn ListPreyBySight(ctx: &mut Ctx) -> bool {
     let initial = ctx.blackboard.options.len();
     for other in &ctx.known.entities {
         if other.delta >= 0 { continue; }
-        if ctx.known.time - other.time >= MAX_SEARCH_TIME { continue; }
+        if !check_time!(ctx, other.time, MAX_SEARCH_TIME) { break; }
         let target = Target { last: other.pos, time: other.time, sense: other.sense };
         ctx.blackboard.options.push(target);
     }
@@ -971,7 +1001,7 @@ fn ListPreyBySound(ctx: &mut Ctx) -> bool {
     for other in &ctx.blackboard.threats.unknown {
         if other.delta >= 0 { continue; }
         if other.sense != Sense::Sound { continue; }
-        if ctx.known.time - other.time >= MAX_SEARCH_TIME { continue; }
+        if !check_time!(ctx, other.time, MAX_SEARCH_TIME) { break; }
         let target = Target { last: other.pos, time: other.time, sense: other.sense };
         ctx.blackboard.options.push(target);
     }
@@ -982,11 +1012,11 @@ fn ListPreyBySound(ctx: &mut Ctx) -> bool {
 fn ListPreyByScent(ctx: &mut Ctx) -> bool {
     let initial = ctx.blackboard.options.len();
     if let Some(x) = &ctx.blackboard.target && x.target.sense == Sense::Smell &&
-       ctx.known.time - x.target.time < MAX_TRACKING_TIME {
+       check_time!(ctx, x.target.time, MAX_TRACKING_TIME) {
         ctx.blackboard.options.push(x.target);
     }
     for &scent in &ctx.known.scents {
-        if ctx.known.time - scent.time >= MAX_TRACKING_TIME { continue; }
+        if !check_time!(ctx, scent.time, MAX_TRACKING_TIME) { continue; }
         let target = Target { last: scent.pos, time: scent.time, sense: Sense::Smell };
         ctx.blackboard.options.push(target);
     }
@@ -1243,8 +1273,6 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
 //
 //  - Periodically re-plan a path to a need if there is a closer one?
 //
-//  - Add an assess before "MarkSafeIfLostView".
-//
 //  - Update CachedPath to do "look at the target for a path w/ skip = 1",
 //    then get rid of the Look actions for basic needs and `SearchForPrey`.
 //
@@ -1355,6 +1383,15 @@ fn InvestigateNoises() -> impl Bhv {
             act!("Follow(Noises)", |x| FollowDirs(x, DirsKind::Noises)),
             act!("Search(Noises)", LookForNoises),
         ],
+    ]
+}
+
+#[allow(non_snake_case)]
+fn LookForLastTarget() -> impl Bhv {
+    pri![
+        "LookForLastTarget",
+        act!("Follow(Target)", |x| FollowDirs(x, DirsKind::Target)),
+        act!("Search(Target)", LookForTarget),
     ]
 }
 
@@ -1470,10 +1507,12 @@ fn Root() -> impl Bhv {
         cb!("RunCombatAnalysis", RunCombatAnalysis),
         FightOrFlight(),
         HuntForMeat(),
+        LookForLastTarget(),
         InvestigateNoises(),
         Wander(),
     ]
     .post_tick(CleanupChaseState)
+    .post_tick(CleanupTarget)
     .post_tick(CleanupDirs)
 }
 
