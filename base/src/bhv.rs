@@ -330,31 +330,31 @@ impl<S: Policy, T: Bhv, U: Bhv> Bhv for Composite<S, T, U> {
 
 #[macro_export]
 macro_rules! act {
-    ($name:literal, $x:expr) => {
-        crate::bhv::Node::new(concat!("! ", $name), crate::bhv::Act::new($x))
-    };
+    ($name:literal, $x:expr) => {{
+        $crate::bhv::Node::new(concat!("! ", $name), $crate::bhv::Act::new($x))
+    }};
 }
 
 #[macro_export]
 macro_rules! cb {
-    ($name:literal, $x:expr) => {
-        crate::bhv::Node::new(concat!("\\ ", $name), crate::bhv::Lambda::new($x))
-    };
+    ($name:literal, $x:expr) => {{
+        $crate::bhv::Node::new(concat!("\\ ", $name), $crate::bhv::Lambda::new($x))
+    }};
 }
 
 #[macro_export]
 macro_rules! cond {
-    ($name:literal, $x:expr) => {
-        crate::bhv::Node::new(concat!("\\ ", $name), crate::bhv::Cond::new($x))
-    };
+    ($name:literal, $x:expr) => {{
+        $crate::bhv::Node::new(concat!("= ", $name), $crate::bhv::Cond::new($x))
+    }};
 }
 
 #[macro_export]
 macro_rules! util {
     ($name:literal $(,($x:expr, $y:expr))+ $(,)?) => {{
-        let utility = crate::bhv::Utility::new(
-                vec![$(Box::new(crate::bhv::UtilityNode::new($x, $y)),)+]);
-        crate::bhv::Node::new(concat!("# ", $name), utility)
+        use $crate::bhv::{Node, Utility, UtilityNode};
+        let utility = Utility::new(vec![$(Box::new(UtilityNode::new($x, $y)),)+]);
+        Node::new(concat!("# ", $name), utility)
     }};
 }
 
@@ -362,9 +362,8 @@ macro_rules! util {
 macro_rules! pri {
     (@go $name:expr, $x:expr) => { $x };
     (@go $name:expr, $x:expr $(,$xs:expr)+) => {{
-        let policy = crate::bhv::PriPolicy {};
-        let tree = crate::bhv::Composite::new(policy, $x, pri![@go () $(,$xs)+]);
-        crate::bhv::Node::new($name, tree)
+        use $crate::bhv::{Composite, Node, PriPolicy};
+        Node::new($name, Composite::new(PriPolicy {}, $x, pri![@go () $(,$xs)+]))
     }};
     ($name:literal $(,$xs:expr)+ $(,)?) => { pri![@go concat!("? ", $name) $(,$xs)+] };
 }
@@ -373,9 +372,8 @@ macro_rules! pri {
 macro_rules! run {
     (@go $name:expr, $x:expr) => { $x };
     (@go $name:expr, $x:expr $(,$xs:expr)+) => {{
-        let policy = crate::bhv::RunPolicy {};
-        let tree = crate::bhv::Composite::new(policy, $x, run![@go () $(,$xs)+]);
-        crate::bhv::Node::new($name, tree)
+        use $crate::bhv::{Composite, Node, RunPolicy};
+        Node::new($name, Composite::new(RunPolicy {}, $x, run![@go () $(,$xs)+]))
     }};
     ($name:literal $(,$xs:expr)+ $(,)?) => { run![@go concat!("* ", $name) $(,$xs)+] };
 }
@@ -384,9 +382,8 @@ macro_rules! run {
 macro_rules! seq {
     (@go $name:expr, $x:expr) => { $x };
     (@go $name:expr, $x:expr $(,$xs:expr)+) => {{
-        let policy = crate::bhv::SeqPolicy {};
-        let tree = crate::bhv::Composite::new(policy, $x, seq![@go () $(,$xs)+]);
-        crate::bhv::Node::new($name, tree)
+        use $crate::bhv::{Composite, Node, SeqPolicy};
+        Node::new($name, Composite::new(SeqPolicy {}, $x, seq![@go () $(,$xs)+]))
     }};
     ($name:literal $(,$xs:expr)+ $(,)?) => { seq![@go concat!("> ", $name) $(,$xs)+] };
 }
