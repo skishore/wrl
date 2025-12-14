@@ -567,7 +567,10 @@ fn LookForTarget(ctx: &mut Ctx) -> Option<Action> {
 fn LookForNoises(ctx: &mut Ctx) -> Option<Action> {
     let threats = &ctx.blackboard.threats;
     let (pos, rng) = (ctx.pos, &mut ctx.env.rng);
-    let dirs: Vec<_> = threats.unknown.iter().map(|x| x.pos - pos).collect();
+
+    let dirs: Vec<_> = threats.unknown.iter().filter_map(
+        |x| if x.pos != pos { Some(x.pos - pos) } else { None }).collect();
+    let dirs = if dirs.is_empty() { &[ctx.dir] } else { dirs.as_slice() };
 
     let kind = DirsKind::Noises;
     let dirs = assess_directions(&dirs, ASSESS_TURNS_FLIGHT, rng);
@@ -1285,6 +1288,10 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
 //  - Add "growl" / "intimidate" subtrees.
 //
 //  - Drop "unknown" targets earlier if we're chasing down enemies.
+//
+//  - Only run InvestigateNoises for recent unknown sources.
+//
+//  - Push "if nowhere to look, look ahead" logic into assess_directions.
 
 #[allow(non_snake_case)]
 fn AttackOrFollowPath(kind: PathKind) -> impl Bhv {
