@@ -214,11 +214,11 @@ fn safe_inv_l2(point: Point) -> f64 {
 }
 
 fn all_threats_asleep(ctx: &Ctx) -> bool {
-    ctx.blackboard.threats.hostile.iter().all(|x| x.asleep)
+    ctx.blackboard.threats.menacing.iter().all(|x| x.asleep)
 }
 
 fn is_hiding_place(ctx: &Ctx, point: Point) -> bool {
-    if ctx.blackboard.threats.hostile.iter().any(
+    if ctx.blackboard.threats.menacing.iter().any(
         |x| (x.pos - point).len_l1() <= 1) { return false; }
     let cell = ctx.known.get(point);
     cell.shade() || matches!(cell.tile(), Some(x) if x.limits_vision())
@@ -409,7 +409,7 @@ fn select_flight_target(ctx: &mut Ctx, hiding: bool) -> Option<Point> {
 
     let min_distance = DijkstraLength(Point(FOV_RADIUS_NPC, 0));
     let scale = 1. / DijkstraLength(Point(1, 0)) as f64;
-    let threats = &ctx.blackboard.threats.hostile;
+    let threats = &ctx.blackboard.threats.menacing;
 
     let score = |p: Point, source_distance: i32| -> (f64, bool) {
         let mut threat = Point::default();
@@ -1131,11 +1131,11 @@ fn UpdateFlightState(ctx: &mut Ctx) -> bool {
     let bb = &mut ctx.blackboard;
     let prev = bb.flight.take();
 
-    // State may be Safe even if we're aware of hostiles, if we tried to hunt
+    // State may be Safe even if we're aware of threats, if we tried to hunt
     // them down and lost sight for long enough. See: MarkSafeIfLostView.
     let threats = &bb.threats;
     if threats.state == FightOrFlight::Safe { return false; }
-    let Some(threat) = threats.hostile.first() else { return false };
+    let Some(threat) = threats.menacing.first() else { return false };
 
     let reset = threat.time > bb.prev_time;
     let fleeing = bb.path.kind == PathKind::Hide || bb.path.kind == PathKind::Flee;
@@ -1169,7 +1169,7 @@ fn UpdateFlightState(ctx: &mut Ctx) -> bool {
 
 #[allow(non_snake_case)]
 fn LookForThreats(ctx: &mut Ctx) -> Option<Action> {
-    let threats = &ctx.blackboard.threats.hostile;
+    let threats = &ctx.blackboard.threats.menacing;
     let (pos, rng, time) = (ctx.pos, &mut *ctx.env.rng, ctx.known.time);
 
     let mut visible: Vec<_> = threats.iter().filter_map(
@@ -1236,11 +1236,15 @@ fn FleeFromThreats(ctx: &mut Ctx) -> Result {
 
 #[allow(non_snake_case)]
 fn CallStrength(ctx: &mut Ctx) -> i64 {
+    if ctx.blackboard.threats.hostile.is_empty() { return -1; }
+
     if ctx.blackboard.threats.call_for_help { 2 } else { -1 }
 }
 
 #[allow(non_snake_case)]
 fn FightStrength(ctx: &mut Ctx) -> i64 {
+    if ctx.blackboard.threats.hostile.is_empty() { return -1; }
+
     match ctx.blackboard.threats.state {
         FightOrFlight::Safe   => -1,
         FightOrFlight::Fight  =>  1,

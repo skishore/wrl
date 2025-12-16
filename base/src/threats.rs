@@ -1,4 +1,4 @@
-use std::cmp::{max, min};
+use std::cmp::max;
 use std::fmt::Debug;
 
 use crate::base::{HashMap, Point, Slice};
@@ -20,7 +20,10 @@ pub const CALL_FOR_HELP_RETRY: Timedelta = Timedelta::from_seconds(24.);
 // Threat
 
 #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-enum ThreatStatus { Hostile, Friendly, Neutral, Scanned, Unknown }
+enum Confidence { Zero, Low, Mid, High }
+
+#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum Valence { Friendly, Neutral, Menacing, Hostile }
 
 #[derive(Clone)]
 pub struct Threat {
@@ -35,10 +38,12 @@ pub struct Threat {
 
     // Flags:
     pub asleep: bool,
+    pub player: bool,
     pub seen: bool,
 
     // See status accessors:
-    status: ThreatStatus,
+    confidence: Confidence,
+    valence: Valence,
 }
 
 impl Threat {
@@ -55,43 +60,72 @@ impl Threat {
 
             // Flags:
             asleep: false,
+            player: false,
             seen: false,
 
             // See status accessors:
-            status: ThreatStatus::Unknown,
+            confidence: Confidence::Zero,
+            valence: Valence::Neutral,
         }
+    }
+
+    pub fn debug(&self, slice: &mut Slice, time: Timestamp) {
+        slice.write_str("Threat:").newline();
+        slice.write_str(&format!("  age: {:?}", time - self.time)).newline();
+        slice.write_str(&format!("  pos: {:?}", self.pos)).newline();
+        slice.write_str(&format!("  sense: {:?}", self.sense)).newline();
+        slice.write_str(&format!("  combat: {:?}", time - self.combat)).newline();
+        slice.write_str(&format!("  status: {:?}:{:?}", self.confidence, self.valence)).newline();
+        slice.newline();
     }
 
     // Status accessors:
 
     pub fn friendly(&self) -> bool {
-        self.status == ThreatStatus::Friendly
+        self.valence == Valence::Friendly
     }
 
     pub fn hostile(&self) -> bool {
-        self.status == ThreatStatus::Hostile
+        self.valence == Valence::Hostile
+    }
+
+    pub fn menacing(&self) -> bool {
+        self.valence == Valence::Menacing
+    }
+
+    pub fn certain(&self) -> bool {
+        self.confidence == Confidence::High
+    }
+
+    pub fn uncertain(&self) -> bool {
+        self.confidence == Confidence::Low
     }
 
     pub fn unknown(&self) -> bool {
-        self.status == ThreatStatus::Unknown
+        self.confidence == Confidence::Zero
     }
 
     pub fn mark_scanned(&mut self) {
-        self.update_status(ThreatStatus::Scanned);
+        self.merge_status(Confidence::Low, self.valence);
     }
 
     // State updates:
 
-    fn update_status(&mut self, status: ThreatStatus) {
-        self.status = min(self.status, status);
+    fn merge_status(&mut self, confidence: Confidence, valence: Valence) {
+        if confidence == self.confidence {
+            self.valence = max(valence, self.valence);
+        } else if confidence > self.confidence {
+            self.confidence = confidence;
+            self.valence = valence;
+        }
     }
 
     fn merge_from(&mut self, other: &Threat) {
         // No need to update any fields that we unconditionally update in
         // update_for_event, since we merge right before processing an event.
-        self.sense = other.sense;
         self.seen |= other.seen;
-        self.update_status(other.status);
+        self.combat = max(self.combat, other.combat);
+        self.merge_status(other.confidence, other.valence);
     }
 
     fn update_for_event(&mut self, me: &Entity, event: &Event) {
@@ -101,16 +135,18 @@ impl Threat {
         self.asleep = false;
 
         match &event.data {
-            EventData::Attack(x) => {
-                let attacked = x.target == Some(me.eid);
-                if attacked { self.update_status(ThreatStatus::Hostile); }
-                if x.combat { self.combat = event.time; }
+            EventData::Attack(x) if x.combat => {
+                let high = x.target == Some(me.eid) || self.valence >= Valence::Menacing;
+                let confidence = if high { Confidence::High } else { Confidence::Mid };
+                self.merge_status(confidence, Valence::Hostile);
+                self.combat = event.time;
             },
             EventData::CallForHelp(x) => {
                 let for_us = ThreatState::call_for_us(me, x);
-                if for_us { self.update_status(ThreatStatus::Friendly); }
+                if for_us { self.merge_status(Confidence::High, Valence::Friendly); }
                 self.combat = event.time;
             },
+            EventData::Attack(_) => {},
             EventData::Forget(_) => {},
             EventData::Move(_) => {},
             EventData::Spot(_) => {},
@@ -126,18 +162,21 @@ impl Threat {
         self.delta = other.delta;
 
         self.asleep = other.asleep;
+        self.player = other.player;
         self.seen = true;
 
-        let status = if other.player {
-            ThreatStatus::Neutral
+        let (confidence, valence) = if other.player {
+            (Confidence::Low, Valence::Neutral)
         } else if other.delta > 0 {
-            ThreatStatus::Hostile
+            let combat = other.time - self.combat < ACTIVE_THREAT_TIME;
+            let valence = if combat { Valence::Hostile } else { Valence::Menacing };
+            (Confidence::High, valence)
         } else if !me.predator && other.delta == 0 {
-            ThreatStatus::Friendly
+            (Confidence::High, Valence::Friendly)
         } else {
-            ThreatStatus::Neutral
+            (Confidence::High, Valence::Neutral)
         };
-        self.update_status(status);
+        self.merge_status(confidence, valence);
     }
 }
 
@@ -159,6 +198,7 @@ pub struct ThreatState {
     pub threat_index: HashMap<TID, ThreatHandle>,
 
     // Summaries used for flight pathing.
+    pub menacing: Vec<Threat>,
     pub hostile: Vec<Threat>,
     pub unknown: Vec<Threat>,
 
@@ -176,6 +216,9 @@ impl ThreatState {
         slice.write_str(&format!("  state: {:?}", self.state)).newline();
         slice.write_str(&format!("  called: {:?}", time - self.called)).newline();
         slice.write_str(&format!("  call_for_help: {}", self.call_for_help)).newline();
+
+        slice.newline();
+        for threat in &self.threats { threat.debug(slice, time); }
     }
 
     pub fn on_call_for_help(&mut self, point: Point, time: Timestamp) {
@@ -191,7 +234,7 @@ impl ThreatState {
         for event in &me.known.events {
             let Some(threat) = self.get_by_event(me, event) else { continue };
             threat.update_for_event(me, event);
-            if threat.hostile() { self.forget_tid(TID::CID); }
+            if threat.certain() && threat.hostile() { self.forget_tid(TID::CID); }
 
             if let EventData::CallForHelp(x) = &event.data && Self::call_for_us(me, x) {
                 self.on_call_for_help(event.point, event.time);
@@ -202,9 +245,10 @@ impl ThreatState {
             if !other.visible { break; }
             let Some(threat) = self.get_by_entity(me, other.eid) else { continue };
             threat.update_for_sighting(me, other);
-            if threat.hostile() { self.forget_tid(TID::CID); }
+            if threat.certain() && threat.hostile() { self.forget_tid(TID::CID); }
         }
 
+        self.menacing.clear();
         self.hostile.clear();
         self.unknown.clear();
 
@@ -217,29 +261,42 @@ impl ThreatState {
         for x in &self.threats {
             if me.known.time - x.time > ACTIVE_THREAT_TIME { break; }
 
-            if x.hostile() { self.hostile.push(x.clone()); }
-            if x.unknown() { self.unknown.push(x.clone()); }
+            let menacing = x.menacing();
+            let hostile = x.hostile();
+            let unknown = x.unknown();
 
-            if x.hostile() && !x.seen { hidden_hostile += 1; }
-            if x.hostile() && x.seen { seen_hostile += 1; }
+            if menacing { self.menacing.push(x.clone()); }
+            if hostile { self.menacing.push(x.clone()); }
+            if hostile { self.hostile.push(x.clone()); }
+            if unknown { self.unknown.push(x.clone()); }
+
+            let foe = hostile || menacing;
+            if foe && !x.seen { hidden_hostile += 1; }
+            if foe && x.seen { seen_hostile += 1; }
         }
 
         // Start fight-or-flight if we have an active known enemy. Stop when
         // we no longer have any known enemies. We also stop it with known
         // enemies if we escape from them (see: UpdateFlightState).
-        if let Some(x) = self.hostile.first() && x.time > prev_time {
+        if let Some(x) = self.menacing.first() && x.time > prev_time {
             active = true;
-        } else if self.hostile.is_empty() {
+        } else if self.menacing.is_empty() {
             active = false;
         }
 
         // While active, also attack / flee from potential enemies.
+        if active && !self.menacing.is_empty() {
+            self.menacing.extend_from_slice(&self.unknown);
+            self.menacing.sort_by_key(|x| me.known.time - x.time);
+        }
         if active && !self.hostile.is_empty() {
             self.hostile.extend_from_slice(&self.unknown);
             self.hostile.sort_by_key(|x| me.known.time - x.time);
         }
 
-        let strength = |x: &Threat| { 1.5f64.powi(x.delta.signum()) * x.hp };
+        let strength = |x: &Threat| {
+            if x.player { 0. } else { 1.5f64.powi(x.delta.signum()) * x.hp }
+        };
         let mut hidden_count = max(hidden_hostile - seen_hostile, 0);
         let mut team_strength = me.hp_fraction();
         let mut call_strength = team_strength;
@@ -248,7 +305,7 @@ impl ThreatState {
         for x in &self.threats {
             if me.known.time - x.time > ACTIVE_THREAT_TIME { break; }
 
-            if x.hostile() {
+            if x.hostile() || x.menacing() {
                 if !x.seen && hidden_count == 0 { continue; }
                 if !x.seen { hidden_count -= 1; }
                 foes_strength += strength(x);
