@@ -10,9 +10,9 @@ use crate::{act, cb, cond, pri, run, seq, util};
 use crate::base::{LOS, Point, RNG, Slice, dirs, sample, weighted};
 use crate::bhv::{Bhv, Debug, Result};
 use crate::entity::Entity;
-use crate::game::{FOV_RADIUS_NPC, MOVE_VOLUME, Item, move_ready};
-use crate::game::{Action, AttackAction, CallForHelpAction, EatAction, MoveAction};
-use crate::knowledge::{Knowledge, Sense, Timedelta, Timestamp};
+use crate::game::{FOV_RADIUS_NPC, CALL_VOLUME, MOVE_VOLUME, Item, move_ready};
+use crate::game::{Action, AttackAction, CallAction, EatAction, MoveAction};
+use crate::knowledge::{Call, Knowledge, Sense, Timedelta, Timestamp};
 use crate::pathing::{AStar, BFS, DijkstraLength, DijkstraMap, Neighborhood, Status};
 use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
 use crate::threats::{FightOrFlight, ThreatState};
@@ -43,6 +43,9 @@ const ASSESS_GAIN: RangeInclusive<i32> = (MAX_ASSESS / 2)..=MAX_ASSESS;
 const HUNGER_GAIN: RangeInclusive<i32> = (MAX_HUNGER / 4)..=(MAX_HUNGER / 2);
 const THIRST_GAIN: RangeInclusive<i32> = (MAX_THIRST / 4)..=(MAX_THIRST / 2);
 const RESTED_GAIN: RangeInclusive<i32> = 1..=2;
+
+const WARNING_LIMIT: Timedelta = Timedelta::from_seconds(24.);
+const WARNING_RETRY: Timedelta = Timedelta::from_seconds(4.);
 
 const MIN_SEARCH_TIME: Timedelta = Timedelta::from_seconds(24.);
 const MAX_SEARCH_TIME: Timedelta = Timedelta::from_seconds(48.);
@@ -89,6 +92,7 @@ struct Blackboard {
 
     prev_time: Timestamp,
     turn_time: Timestamp,
+    last_warning: Timestamp,
 
     // Basic needs:
     till_assess: i32,
@@ -122,6 +126,7 @@ impl Blackboard {
 
             prev_time: Timestamp::default(),
             turn_time: Timestamp::default(),
+            last_warning: Timestamp::default(),
 
             // Basic needs:
             till_assess: rng.random_range(0..MAX_ASSESS),
@@ -553,7 +558,7 @@ fn HeardUnknownNoise(ctx: &mut Ctx) -> bool {
 }
 
 #[allow(non_snake_case)]
-fn LookForTarget(ctx: &mut Ctx) -> Option<Action> {
+fn LookForLastTarget(ctx: &mut Ctx) -> Option<Action> {
     let (bb, rng) = (&mut *ctx.blackboard, &mut *ctx.env.rng);
     if !bb.had_target { return None; }
 
@@ -576,6 +581,35 @@ fn LookForNoises(ctx: &mut Ctx) -> Option<Action> {
     let dirs = assess_directions(&dirs, ASSESS_TURNS_FLIGHT, rng);
     ctx.blackboard.dirs = CachedDirs { kind, dirs, used: false };
     FollowDirs(ctx, kind)
+}
+
+#[allow(non_snake_case)]
+fn WarnOffThreats(ctx: &mut Ctx) -> Option<Action> {
+    let (pos, time) = (ctx.pos, ctx.blackboard.turn_time);
+    let (rng, threats) = (&mut *ctx.env.rng, &mut ctx.blackboard.threats);
+    let stare = time - ctx.blackboard.last_warning < WARNING_RETRY;
+    let mut result = None;
+
+    for threat in &mut threats.threats {
+        if time - threat.time >= WARNING_LIMIT { break; }
+
+        if !threat.uncertain() { continue; }
+        if (threat.pos - pos).len_nethack() > CALL_VOLUME { continue; }
+
+        let warn = !stare && threat.time > ctx.blackboard.last_warning;
+        if warn { threat.mark_warned(rng); }
+
+        if result.is_some() { continue; }
+
+        let (call, look) = (Call::Warning, threat.pos - pos);
+        if warn {
+            result = Some(Action::Call(CallAction { call, look }));
+            ctx.blackboard.last_warning = time;
+        } else if stare {
+            result = Some(Action::Look(look));
+        };
+    }
+    result
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -1267,7 +1301,7 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
     threats.on_call_for_help(ctx.pos, ctx.known.time);
 
     let look = threats.hostile.first().map(|x| x.pos - ctx.pos).unwrap_or(ctx.dir);
-    Some(Action::CallForHelp(CallForHelpAction { look }))
+    Some(Action::Call(CallAction { call: Call::Help, look }))
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -1398,11 +1432,11 @@ fn InvestigateNoises() -> impl Bhv {
 }
 
 #[allow(non_snake_case)]
-fn LookForLastTarget() -> impl Bhv {
+fn LookForTarget() -> impl Bhv {
     pri![
-        "LookForLastTarget",
+        "LookForTarget",
         act!("Follow(Target)", |x| FollowDirs(x, DirsKind::Target)),
-        act!("Search(Target)", LookForTarget),
+        act!("Search(Target)", LookForLastTarget),
     ]
 }
 
@@ -1518,7 +1552,8 @@ fn Root() -> impl Bhv {
         cb!("RunCombatAnalysis", RunCombatAnalysis),
         FightOrFlight(),
         HuntForMeat(),
-        LookForLastTarget(),
+        LookForTarget(),
+        act!("WarnOffThreats", WarnOffThreats),
         InvestigateNoises(),
         Wander(),
     ]
