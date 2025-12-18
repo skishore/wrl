@@ -13,8 +13,8 @@ use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs, sample, weighted};
 use crate::dex::{Attack, Species};
 use crate::effect::{CB, Effect, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
-use crate::knowledge::{Knowledge, Scent, Sense, Timedelta, Timestamp};
-use crate::knowledge::{AttackEvent, CallForHelpEvent, Event, EventData, MoveEvent};
+use crate::knowledge::{Call, Knowledge, Scent, Sense, Timedelta, Timestamp};
+use crate::knowledge::{AttackEvent, CallEvent, Event, EventData, MoveEvent};
 use crate::mapgen::mapgen_with_size as mapgen;
 use crate::pathing::Status;
 use crate::shadowcast::{INITIAL_VISIBILITY, VISIBILITY_LOSSES, Vision, VisionArgs};
@@ -623,7 +623,7 @@ fn advance_turn(board: &mut Board) -> Option<EID> {
 
 pub struct AttackAction { pub attack: &'static Attack, pub target: Point }
 
-pub struct CallForHelpAction { pub look: Point }
+pub struct CallAction { pub call: Call, pub look: Point }
 
 pub struct EatAction { pub target: Point, pub item: Option<Item> }
 
@@ -635,9 +635,9 @@ pub enum Action {
     SniffAround,
     WaitForInput,
     Look(Point),
+    Call(CallAction),
     Move(MoveAction),
     Attack(AttackAction),
-    CallForHelp(CallForHelpAction),
     Drink(Point),
     Eat(EatAction),
 }
@@ -752,30 +752,42 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             board.add_effect(effect, &mut state.env);
             ActionResult::success()
         }
-        Action::CallForHelp(CallForHelpAction { look }) => {
+        Action::Call(CallAction { call, look }) => {
             let noise = Noise { cause: Some(eid), point: source, volume: CALL_VOLUME };
             let sightings = get_sightings(&state.board, &noise, &mut state.env);
 
-            // Deliver a CallForHelpEvent to each entity that heard the call.
-            let data = EventData::CallForHelp(CallForHelpEvent {});
+            // Deliver a CallEvent to each entity that heard the call.
+            let data = EventData::Call(CallEvent { call });
             let mut event = state.board.create_event(eid, data, source);
             for Sighting { eid: oid, source_seen: seen, .. } in sightings {
                 event.sense = if seen { Sense::Sight } else { Sense::Sound };
                 state.board.observe_event(oid, &event, &mut state.env);
             }
 
-            let color = 0x00ffff;
+            // Use a different color for different call types.
+            let (color, wait) = match call {
+                Call::Help    => (0x00ffff, true),
+                Call::Warning => (0xff8000, false),
+            };
             let board = &mut state.board;
             let mut effect = Effect::default();
             for _ in 0..3 {
                 effect = effect.then(apply_flash(board, source, color, None));
                 effect = effect.then(Effect::pause(UI_FLASH));
             }
+
+            // For some call types, we look before calling; when calling for
+            // help, we shout in the direction of our allies, then look.
             let cb = move |board: &mut Board, _: &mut UpdateEnv| {
                 let Some(entity) = board.entities.get_mut(eid) else { return };
                 entity.face_direction(look);
             };
-            effect.sub_on_finished(Box::new(cb));
+            if wait {
+                effect.sub_on_finished(Box::new(cb));
+            } else {
+                cb(board, &mut state.env);
+            }
+
             board.add_effect(effect, &mut state.env);
             ActionResult::success()
         }

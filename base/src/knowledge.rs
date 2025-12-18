@@ -132,14 +132,17 @@ pub struct UID(NonZeroU64);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Sense { Sight, Sound, Smell }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Call { Help, Warning }
+
 #[derive(Clone, Debug)]
 pub struct AttackEvent { pub combat: bool, pub target: Option<EID> }
 
 #[derive(Clone, Debug, Default)]
-pub struct CallForHelpEvent {}
-
-#[derive(Clone, Debug, Default)]
 pub struct ForgetEvent {}
+
+#[derive(Clone, Debug)]
+pub struct CallEvent { pub call: Call }
 
 #[derive(Clone, Debug)]
 pub struct MoveEvent { pub from: Point }
@@ -150,8 +153,8 @@ pub struct SpotEvent {}
 #[derive(Clone, Debug)]
 pub enum EventData {
     Attack(AttackEvent),
-    CallForHelp(CallForHelpEvent),
     Forget(ForgetEvent),
+    Call(CallEvent),
     Move(MoveEvent),
     Spot(SpotEvent),
 }
