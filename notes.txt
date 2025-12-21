@@ -1,3 +1,11 @@
+Win rates:
+20 predators, 0 prey, no resting, always hungry, speed 1.0 @ 3c08a1bbcd988075d4b07c871a2d8b86553fe95a: 1/10
+20 predators, 0 prey, with rest,  always hungry  speed 1.0 @ 3c08a1bbcd988075d4b07c871a2d8b86553fe95a: 0/2
+20 predators, 0 prey, with rest, hunger timeout  speed 1.0 @ 3c08a1bbcd988075d4b07c871a2d8b86553fe95a: 2/3
+5 predators, 15 prey, with rest, hunger timeout  speed 1.0 @ 3c08a1bbcd988075d4b07c871a2d8b86553fe95a: 3/4 - can sprint to finish
+5 predators, 15 prey, with rest, hunger timeout, speed 0.8 @ 3c08a1bbcd988075d4b07c871a2d8b86553fe95a: 4/6
+5 predators, 15 prey, with rest, hunger timeout, speed 0.8, fast warnings @ 3c08a1bbcd988075d4b07c871a2d8b86553fe95a: 4/10
+
 Unless otherwise specified: all entities @ full health
 
 List of relations:

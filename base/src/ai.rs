@@ -44,8 +44,8 @@ const HUNGER_GAIN: RangeInclusive<i32> = (MAX_HUNGER / 4)..=(MAX_HUNGER / 2);
 const THIRST_GAIN: RangeInclusive<i32> = (MAX_THIRST / 4)..=(MAX_THIRST / 2);
 const RESTED_GAIN: RangeInclusive<i32> = 1..=2;
 
-const WARNING_LIMIT: Timedelta = Timedelta::from_seconds(24.);
-const WARNING_RETRY: Timedelta = Timedelta::from_seconds(4.);
+const WARNING_LIMIT: Timedelta = Timedelta::from_seconds(16.);
+const WARNING_RETRY: Timedelta = Timedelta::from_seconds(2.);
 
 const MIN_SEARCH_TIME: Timedelta = Timedelta::from_seconds(24.);
 const MAX_SEARCH_TIME: Timedelta = Timedelta::from_seconds(48.);
