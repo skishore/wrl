@@ -22,7 +22,14 @@ use crate::threats::{FightOrFlight, ThreatState};
 // Constants
 
 const ASTAR_LIMIT_ATTACK: i32 = 256;
-const ASTAR_LIMIT_WANDER: i32 = 1024;
+// TODO(shaunak): AStar can go through "unknown" areas that aren't in the
+// neighborhood and burn its budget before getting to the target.
+//
+// Instead, we should either:
+//  - Fall back to AStar-through-known
+//  - Use the neighborhood itself for pathfinding
+//  - Use regular AStar but fall back to the neighborhood
+const ASTAR_LIMIT_WANDER: i32 = 4096;
 const BFS_LIMIT_ATTACK: i32 = 8;
 const HIDING_CELLS: i32 = 256;
 const HIDING_LIMIT: i32 = 32;
@@ -382,22 +389,25 @@ fn select_explore_target(ctx: &mut Ctx) -> Option<Point> {
 
 fn select_chase_target(
         ctx: &mut Ctx, age: Timedelta, bias: Point, center: Point) -> Option<Point> {
-    let Ctx { known, pos, .. } = *ctx;
+    let Ctx { known, pos, dir, .. } = *ctx;
+    let inv_dir_l2 = safe_inv_l2(dir);
     let inv_bias_l2 = safe_inv_l2(bias);
 
     let is_search_candidate = |p: Point| {
+        if p == pos { return false; }
         let cell = known.get(p);
-        !cell.blocked() && cell.time_since_entity_visible() > age
+        !cell.blocked() && cell.time_since_entity_visible() >= age
     };
-    if center != pos && is_search_candidate(center) { return Some(center); }
+    if is_search_candidate(center) { return Some(center); }
 
-    let score = |p: Point, distance: i32| -> f64 {
-        if distance == 0 || !is_search_candidate(p) { return 0.; }
+    let score = |p: Point| -> f64 {
+        if !is_search_candidate(p) { return 0.; }
 
         let delta = p - pos;
         let inv_delta_l2 = safe_inv_l2(delta);
-        let cos = delta.dot(bias) as f64 * inv_delta_l2 * inv_bias_l2;
-        let angle = (cos + 1.).pow(4);
+        let cos0 = delta.dot(dir) as f64 * inv_delta_l2 * inv_dir_l2;
+        let cos1 = delta.dot(bias) as f64 * inv_delta_l2 * inv_bias_l2;
+        let angle = ((cos0 + 1.) * (cos1 + 1.)).pow(4);
 
         angle / (((p - center).len_l2_squared() + 1) as f64).pow(2)
     };
@@ -405,7 +415,7 @@ fn select_chase_target(
     ensure_neighborhood(ctx);
 
     let scores: Vec<_> = ctx.neighborhood.visited.iter().map(
-        |&(p, distance)| (p, score(p, distance))).collect();
+        |&(p, _)| (p, score(p))).collect();
     select_target(&scores, ctx.env)
 }
 
@@ -434,8 +444,8 @@ fn select_flight_target(ctx: &mut Ctx, hiding: bool) -> Option<Point> {
         // This heuristic can cause a piece to be "checkmated" in a corner,
         // if we don't find a cell that's far enough away. But that's okay -
         // in that case, we'll switch to fighting back.
-        let score = 1.5 * scale * (threat_distance as f64) +
-                    -1. * scale * (source_distance as f64) +
+        let score = 1.5 * scale * threat_distance as f64 +
+                    -1. * scale * source_distance as f64 +
                     16. * if blocked { 1. } else { 0. } +
                     16. * if frontier { 1. } else { 0. } +
                     16. * if hidden { 1. } else { 0. };
@@ -1035,9 +1045,9 @@ fn ListPreyBySight(ctx: &mut Ctx) -> bool {
 #[allow(non_snake_case)]
 fn ListPreyBySound(ctx: &mut Ctx) -> bool {
     let initial = ctx.blackboard.options.len();
-    for other in &ctx.blackboard.threats.unknown {
+    for other in &ctx.blackboard.threats.threats {
+        if other.seen { continue; }
         if other.delta >= 0 { continue; }
-        if other.sense != Sense::Sound { continue; }
         if !check_time!(ctx, other.time, MAX_SEARCH_TIME) { break; }
         let target = Target { last: other.pos, time: other.time, sense: other.sense };
         ctx.blackboard.options.push(target);
@@ -1119,7 +1129,11 @@ fn SearchForEnemy(ctx: &mut Ctx) -> Option<Action> {
         let center = if steps > bias.len_l1() { pos } else { target.last };
         select_chase_target(ctx, age, bias, center)?
     };
-    if (target - pos).len_l1() == 1 { return Some(Action::Look(target - pos)); }
+
+    if (target - pos).len_l1() == 1 {
+        let look = matches!(known.get(target).status(), Status::Blocked | Status::Occupied);
+        if look { return Some(Action::Look(target - pos)); }
+    }
 
     let kind = PathKind::Enemy;
     if FindPath(ctx, target, kind) { FollowPath(ctx, kind) } else { None }
