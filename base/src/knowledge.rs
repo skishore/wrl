@@ -27,7 +27,7 @@ const SOURCE_TRACKING_LIMIT: Timedelta = Timedelta::from_seconds(16.);
 const SOURCE_RETENTION_TIME: Timedelta = Timedelta::from_seconds(96.);
 
 fn trophic_level(x: &Entity) -> i32 {
-    if x.player { 3 } else if !x.predator { 1 } else { 2 }
+    if x.player { 0 } else if !x.predator { 1 } else { 2 }
 }
 
 //////////////////////////////////////////////////////////////////////////////

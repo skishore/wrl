@@ -1140,6 +1140,10 @@ impl State {
                 let p = Point(0, y);
                 if map.get(p) == 'R' { pos = p; }
             }
+            if full {
+                let wt = board.map.default.tile;
+                for &dir in &dirs::ALL { board.set_tile(pos + dir, wt); }
+            }
             if !board.get_tile(pos).blocks_movement() { break; }
         }
 
@@ -1217,7 +1221,7 @@ mod tests {
     fn test_state_update() {
         let mut states = vec![];
         for i in 0..NUM_SEEDS {
-            states.push(State::new(Some(BASE_SEED + i), /*full=*/false));
+            states.push(State::new(Some(BASE_SEED + i), /*full=*/true));
         }
 
         for index in 0..(NUM_SEEDS * NUM_STEPS) {
@@ -1235,7 +1239,7 @@ mod tests {
         let mut index = 0;
         let mut states = vec![];
         for i in 0..NUM_SEEDS {
-            states.push(State::new(Some(BASE_SEED + i), /*full=*/false));
+            states.push(State::new(Some(BASE_SEED + i), /*full=*/true));
         }
 
         b.iter(|| {
