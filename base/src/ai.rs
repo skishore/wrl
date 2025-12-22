@@ -13,7 +13,8 @@ use crate::entity::Entity;
 use crate::game::{FOV_RADIUS_NPC, CALL_VOLUME, MOVE_VOLUME, Item, move_ready};
 use crate::game::{Action, AttackAction, CallAction, EatAction, MoveAction};
 use crate::knowledge::{Call, Knowledge, Sense, Timedelta, Timestamp};
-use crate::pathing::{AStar, BFS, DijkstraLength, DijkstraMap, Neighborhood, Status};
+use crate::pathing::{AStar, AStarHeuristic, Status};
+use crate::pathing::{BFS, DijkstraLength, DijkstraMap, Neighborhood};
 use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
 use crate::threats::{FightOrFlight, ThreatState};
 
@@ -22,14 +23,7 @@ use crate::threats::{FightOrFlight, ThreatState};
 // Constants
 
 const ASTAR_LIMIT_ATTACK: i32 = 256;
-// TODO(shaunak): AStar can go through "unknown" areas that aren't in the
-// neighborhood and burn its budget before getting to the target.
-//
-// Instead, we should either:
-//  - Fall back to AStar-through-known
-//  - Use the neighborhood itself for pathfinding
-//  - Use regular AStar but fall back to the neighborhood
-const ASTAR_LIMIT_WANDER: i32 = 4096;
+const ASTAR_LIMIT_WANDER: i32 = 1024;
 const BFS_LIMIT_ATTACK: i32 = 8;
 const HIDING_CELLS: i32 = 256;
 const HIDING_LIMIT: i32 = 32;
@@ -236,7 +230,7 @@ fn is_hiding_place(ctx: &Ctx, point: Point) -> bool {
     cell.shade() || matches!(cell.tile(), Some(x) if x.limits_vision())
 }
 
-fn get_path_check<'a>(ctx: &'a Ctx) -> impl Fn(Point) -> Status + use<'a> {
+fn get_basic_check<'a>(ctx: &'a Ctx) -> impl Fn(Point) -> Status + use<'a> {
     let (fov, known, pos) = (&ctx.env.fov, ctx.known, ctx.pos);
     move |p: Point| match known.get(p).status() {
         Status::Occupied if (p - pos).len_l1() == 1 => Status::Blocked,
@@ -261,7 +255,7 @@ fn ensure_neighborhood(ctx: &mut Ctx) {
     if !ctx.neighborhood.visited.is_empty() { return; }
 
     ensure_vision(ctx);
-    let (pos, check) = (ctx.pos, get_path_check(ctx));
+    let (pos, check) = (ctx.pos, get_basic_check(ctx));
     ctx.neighborhood = DijkstraMap(pos, check, SEARCH_CELLS, SEARCH_LIMIT);
 }
 
@@ -649,10 +643,53 @@ struct CachedPath {
 }
 
 #[allow(non_snake_case)]
+pub fn AStarHelper(ctx: &mut Ctx, target: Point, hiding: bool) -> Option<Vec<Point>> {
+    // Try using A* to find the best path:
+    let source = ctx.pos;
+    let result = if hiding {
+        AStar(source, target, ASTAR_LIMIT_WANDER, get_sneak_check(ctx))
+    } else {
+        AStar(source, target, ASTAR_LIMIT_WANDER, get_basic_check(ctx))
+    };
+    if let Some(mut path) = result {
+        path.insert(0, source);
+        return Some(path);
+    }
+
+    // If that fails, recover a path from the Dijkstra neighborhood:
+    let cells = if hiding { &mut ctx.sneakable } else { &mut ctx.neighborhood };
+    if cells.visited.is_empty() { return None; }
+
+    // Lazily construct a table of neighborhood's scores:
+    let scores = &mut cells.scores;
+    if scores.is_empty() { *scores = cells.visited.iter().map(|&x| x).collect(); }
+
+    // Walk back from `target`, greedily moving to the closest neighbor to `source`.
+    // Use the A* heuristic to break ties to favor that follows the LOS.
+    let mut prev = target;
+    let mut path = vec![target];
+    let los = LOS(source, target);
+    while prev != source {
+        let (mut best_point, mut best_score) = (None, (std::i32::MAX, std::i32::MAX));
+        for &dir in &dirs::ALL {
+            let point = prev + dir;
+            let Some(&score) = cells.scores.get(&point) else { continue };
+            let score = (score, AStarHeuristic(point, &los));
+            if score < best_score { (best_point, best_score) = (Some(point), score); }
+        }
+        let Some(next) = best_point else { return None };
+
+        path.push(next);
+        prev = next;
+    }
+    path.reverse();
+    Some(path)
+}
+
+#[allow(non_snake_case)]
 fn FindPath(ctx: &mut Ctx, target: Point, kind: PathKind) -> bool {
     ensure_vision(ctx);
-    let (pos, check) = (ctx.pos, get_path_check(ctx));
-    let path = AStar(pos, target, ASTAR_LIMIT_WANDER, check);
+    let path = AStarHelper(ctx, target, /*hiding=*/false);
     let Some(path) = path else { return false };
 
     type K = PathKind;
@@ -661,7 +698,6 @@ fn FindPath(ctx: &mut Ctx, target: Point, kind: PathKind) -> bool {
         K::Enemy | K::Hide | K::Flee | K::Rest | K::Explore | K::None => 0,
     };
     ctx.blackboard.path = CachedPath { kind, path, skip, step: 0 };
-    ctx.blackboard.path.path.insert(0, pos);
     true
 }
 
@@ -1243,18 +1279,16 @@ fn HideFromThreats(ctx: &mut Ctx) -> Result {
     let pos = ctx.pos;
     let okay = get_sneak_check(ctx);
     ctx.sneakable = DijkstraMap(pos, okay, HIDING_CELLS, HIDING_LIMIT);
-    let target = select_flight_target(ctx, true);
+    let target = select_flight_target(ctx, /*hiding=*/true);
     let Some(target) = target else { return Result::Failed };
 
     if target == pos { return Result::Success; }
 
     let kind = PathKind::Hide;
-    let okay = get_sneak_check(ctx);
-    let path = AStar(pos, target, ASTAR_LIMIT_WANDER, okay);
+    let path = AStarHelper(ctx, target, /*hiding=*/true);
     let Some(path) = path else { return Result::Failed };
 
     ctx.blackboard.path = CachedPath { kind, path, skip: 0, step: 0 };
-    ctx.blackboard.path.path.insert(0, pos);
     let Some(action) = FollowPath(ctx, kind) else { return Result::Failed };
 
     ctx.action = Some(action);
@@ -1265,7 +1299,7 @@ fn HideFromThreats(ctx: &mut Ctx) -> Result {
 fn FleeFromThreats(ctx: &mut Ctx) -> Result {
     let pos = ctx.pos;
     ensure_neighborhood(ctx);
-    let target = select_flight_target(ctx, false);
+    let target = select_flight_target(ctx, /*hiding=*/false);
     let Some(target) = target else { return Result::Failed };
 
     if target == pos { return Result::Success; }
