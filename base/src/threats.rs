@@ -166,9 +166,12 @@ impl Threat {
 
         match &event.data {
             EventData::Attack(x) if x.combat => {
-                let high = x.target == Some(me.eid) || (self.certain() && self.menacing());
-                let confidence = if high { Confidence::High } else { Confidence::Mid };
-                self.merge_status(confidence, Valence::Hostile);
+                if x.target == Some(me.eid) || (self.certain() && self.menacing()) {
+                    self.merge_status(Confidence::High, Valence::Hostile);
+                } else {
+                    let valence = if self.timid { Valence::Hostile } else { Valence::Neutral };
+                    self.merge_status(Confidence::Mid, valence);
+                }
                 self.mark_combat(event.time);
             },
             EventData::Call(x) => {
