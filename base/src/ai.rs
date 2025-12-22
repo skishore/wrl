@@ -438,11 +438,11 @@ fn select_flight_target(ctx: &mut Ctx, hiding: bool) -> Option<Point> {
         // This heuristic can cause a piece to be "checkmated" in a corner,
         // if we don't find a cell that's far enough away. But that's okay -
         // in that case, we'll switch to fighting back.
-        let score = 1.5 * scale * threat_distance as f64 +
+        let score = 2.5 * scale * threat_distance as f64 +
                     -1. * scale * source_distance as f64 +
                     16. * if blocked { 1. } else { 0. } +
                     16. * if frontier { 1. } else { 0. } +
-                    16. * if hidden { 1. } else { 0. };
+                    64. * if hidden { 1. } else { 0. };
         let valid = hidden || blocked || threat_distance > min_distance;
         (score, valid)
     };
