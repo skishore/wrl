@@ -257,15 +257,16 @@ fn AStarLength(p: Point) -> i32 {
 //      diagonal steps, rather than doing all the diagonal steps first).
 //
 #[allow(non_snake_case)]
-fn AStarHeuristic(p: Point, los: &Vec<Point>) -> i32 {
+fn AStarHeuristic(p: Point, los: &[Point]) -> i32 {
     let Point(px, py) = p;
     let Point(sx, sy) = los[0];
     let Point(tx, ty) = *los.last().unwrap();
 
-    let diff = (|| {
+    let diff = {
         let dx = tx - sx;
         let dy = ty - sy;
         let l = (los.len() - 1) as i32;
+
         if dx.abs() > dy.abs() {
             let index = if dx > 0 { px - sx } else { sx - px };
             if index < 0 { return (px - sx).abs() + (py - sy).abs() };
@@ -277,7 +278,7 @@ fn AStarHeuristic(p: Point, los: &Vec<Point>) -> i32 {
             if index > l { return (px - tx).abs() + (py - ty).abs(); }
             (px - los[index as usize].0).abs()
         }
-    })();
+   };
 
    ASTAR_LOS_DIFF_PENALTY * diff + AStarLength(p - Point(tx, ty))
 }
