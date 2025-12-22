@@ -257,7 +257,7 @@ fn AStarLength(p: Point) -> i32 {
 //      diagonal steps, rather than doing all the diagonal steps first).
 //
 #[allow(non_snake_case)]
-fn AStarHeuristic(p: Point, los: &[Point]) -> i32 {
+pub fn AStarHeuristic(p: Point, los: &[Point]) -> i32 {
     let Point(px, py) = p;
     let Point(sx, sy) = los[0];
     let Point(tx, ty) = *los.last().unwrap();
@@ -443,6 +443,7 @@ thread_local! {
 pub struct Neighborhood {
     pub blocked: Vec<(Point, i32)>,
     pub visited: Vec<(Point, i32)>,
+    pub scores: HashMap<Point, i32>,
 }
 
 // Expose a distance function for use in other heuristics.
