@@ -62,22 +62,6 @@ const WANDER_TURNS: f64 = 2.;
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Interface
-
-#[derive(Default)]
-pub struct AIDebug {
-    pub targets: Vec<Point>,
-    pub utility: Vec<(Point, u8)>,
-}
-
-pub struct AIEnv<'a> {
-    pub debug: Option<&'a mut AIDebug>,
-    pub fov: &'a mut Vision,
-    pub rng: &'a mut RNG,
-}
-
-//////////////////////////////////////////////////////////////////////////////
-
 // Blackboard
 
 struct Blackboard {
@@ -197,7 +181,7 @@ impl Blackboard {
 
 // Ctx
 
-pub struct Ctx<'a, 'b> {
+pub struct Ctx<'a> {
     // Derived from the entity.
     entity: &'a Entity,
     known: &'a Knowledge,
@@ -209,9 +193,16 @@ pub struct Ctx<'a, 'b> {
     sneakable: Neighborhood,
     ran_vision: bool,
     // Mutable access to the RNG.
-    env: &'a mut AIEnv<'b>,
+    env: &'a mut AIEnv<'a>,
     // The tree's output; written by Act.
-    pub action: Option<Action>,
+    action: Option<Action>,
+}
+
+impl<'a> Ctx<'a> {
+    pub fn choose_action(&mut self, action: Action) -> Result {
+        self.action = Some(action);
+        Result::Running
+    }
 }
 
 fn safe_inv_l2(point: Point) -> f64 {
@@ -239,8 +230,7 @@ fn get_basic_check<'a>(ctx: &'a Ctx) -> impl Fn(Point) -> Status + use<'a> {
     }
 }
 
-fn get_sneak_check<'a, 'b, 'c>(
-        ctx: &'a Ctx<'b, 'c>) -> impl Fn(Point) -> Status + use<'a, 'b, 'c> {
+fn get_sneak_check<'a, 'b>(ctx: &'a Ctx<'b>) -> impl Fn(Point) -> Status + use<'a, 'b> {
     let (known, pos) = (ctx.known, ctx.pos);
     move |p: Point| {
         if !is_hiding_place(ctx, p) { return Status::Blocked; }
@@ -501,7 +491,7 @@ fn ForceThreatState(ctx: &mut Ctx, state: FightOrFlight) {
 // Wandering:
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum DirsKind { Assess, Flight, Noises, Target, #[default] None }
+enum DirsKind { Assess, Flight, Noises, Target, #[default] None }
 
 #[derive(Default)]
 struct CachedDirs {
@@ -621,7 +611,7 @@ fn WarnOffThreats(ctx: &mut Ctx) -> Option<Action> {
 // Pathfinding:
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum PathKind {
+enum PathKind {
     Enemy,
     Hide,
     Flee,
@@ -643,7 +633,7 @@ struct CachedPath {
 }
 
 #[allow(non_snake_case)]
-pub fn AStarHelper(ctx: &mut Ctx, target: Point, hiding: bool) -> Option<Vec<Point>> {
+fn AStarHelper(ctx: &mut Ctx, target: Point, hiding: bool) -> Option<Vec<Point>> {
     // Try using A* to find the best path:
     let source = ctx.pos;
     let result = if hiding {
@@ -727,8 +717,8 @@ fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
     if !valid { return None; }
 
     // When sneaking, also check that all cells are valid hiding places.
-    let seen = kind == PathKind::Hide && path.path.iter().skip(i).any(
-        |&x| !is_hiding_place(ctx, x));
+    let seen = kind == PathKind::Hide &&
+               path.path.iter().skip(i).any(|&x| !is_hiding_place(ctx, x));
     if seen { return None; }
 
     // The path is good! Follow it. Look ahead as far as possible on the path.
@@ -1277,8 +1267,8 @@ fn LookForThreats(ctx: &mut Ctx) -> Option<Action> {
 #[allow(non_snake_case)]
 fn HideFromThreats(ctx: &mut Ctx) -> Result {
     let pos = ctx.pos;
-    let okay = get_sneak_check(ctx);
-    ctx.sneakable = DijkstraMap(pos, okay, HIDING_CELLS, HIDING_LIMIT);
+    let check = get_sneak_check(ctx);
+    ctx.sneakable = DijkstraMap(pos, check, HIDING_CELLS, HIDING_LIMIT);
     let target = select_flight_target(ctx, /*hiding=*/true);
     let Some(target) = target else { return Result::Failed };
 
@@ -1291,8 +1281,7 @@ fn HideFromThreats(ctx: &mut Ctx) -> Result {
     ctx.blackboard.path = CachedPath { kind, path, skip: 0, step: 0 };
     let Some(action) = FollowPath(ctx, kind) else { return Result::Failed };
 
-    ctx.action = Some(action);
-    Result::Running
+    ctx.choose_action(action)
 }
 
 #[allow(non_snake_case)]
@@ -1308,8 +1297,7 @@ fn FleeFromThreats(ctx: &mut Ctx) -> Result {
     if !FindPath(ctx, target, kind) { return Result::Failed; }
     let Some(action) = FollowPath(ctx, kind) else { return Result::Failed };
 
-    ctx.action = Some(action);
-    Result::Running
+    ctx.choose_action(action)
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -1614,6 +1602,18 @@ fn Root() -> impl Bhv {
 
 // Entry point:
 
+#[derive(Default)]
+pub struct AIDebug {
+    pub targets: Vec<Point>,
+    pub utility: Vec<(Point, u8)>,
+}
+
+pub struct AIEnv<'a> {
+    pub debug: Option<&'a mut AIDebug>,
+    pub fov: &'a mut Vision,
+    pub rng: &'a mut RNG,
+}
+
 pub struct AIState {
     blackboard: Blackboard,
     tree: Box<dyn Bhv>,
@@ -1635,9 +1635,10 @@ impl AIState {
         self.blackboard.debug(slice);
     }
 
-    pub fn plan(&mut self, entity: &Entity, env: &mut AIEnv) -> Action {
+    pub fn plan(&mut self, entity: &Entity, env: AIEnv) -> Action {
         let known = &*entity.known;
         let blackboard = &mut self.blackboard;
+        let mut env = AIEnv { debug: env.debug, fov: env.fov, rng: env.rng };
 
         let mut ctx = Ctx {
             entity,
@@ -1649,7 +1650,7 @@ impl AIState {
             neighborhood: Default::default(),
             sneakable: Default::default(),
             ran_vision: false,
-            env,
+            env: &mut env,
         };
         self.tree.tick(&mut ctx);
         ctx.action.take().unwrap_or(Action::Idle)

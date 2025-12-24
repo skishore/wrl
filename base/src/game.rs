@@ -680,8 +680,8 @@ fn plan(state: &mut State, eid: EID) -> Action {
     swap(ai, &mut entity.ai);
 
     let debug = if state.pov == Some(eid) { Some(&mut env.ui.debug) } else { None };
-    let mut env = AIEnv { debug, fov: vision, rng: &mut env.rng };
-    let action = ai.plan(&entity, &mut env);
+    let env = AIEnv { debug, fov: vision, rng: &mut env.rng };
+    let action = ai.plan(&entity, env);
 
     swap(ai, &mut entity.ai);
 
