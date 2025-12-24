@@ -153,8 +153,8 @@ impl<T: Fn(&mut Ctx) -> Option<Action>> Act<T> {
 
 impl<T: Fn(&mut Ctx) -> Option<Action>> Bhv for Act<T> {
     fn tick(&mut self, ctx: &mut Ctx) -> Result {
-        ctx.action = (self.0)(ctx);
-        if ctx.action.is_some() { Result::Running } else { Result::Failed }
+        let Some(action) = (self.0)(ctx) else { return Result::Failed };
+        ctx.choose_action(action)
     }
 }
 
