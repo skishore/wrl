@@ -633,9 +633,10 @@ struct CachedPath {
 }
 
 #[allow(non_snake_case)]
-fn AStarHelper(ctx: &mut Ctx, target: Point, hiding: bool) -> Option<Vec<Point>> {
+fn AStarHelper(ctx: &mut Ctx, target: Point, kind: PathKind) -> Option<Vec<Point>> {
     // Try using A* to find the best path:
     let source = ctx.pos;
+    let hiding = kind == PathKind::Hide;
     let result = if hiding {
         AStar(source, target, ASTAR_LIMIT_WANDER, get_sneak_check(ctx))
     } else {
@@ -679,7 +680,7 @@ fn AStarHelper(ctx: &mut Ctx, target: Point, hiding: bool) -> Option<Vec<Point>>
 #[allow(non_snake_case)]
 fn FindPath(ctx: &mut Ctx, target: Point, kind: PathKind) -> bool {
     ensure_vision(ctx);
-    let path = AStarHelper(ctx, target, /*hiding=*/false);
+    let path = AStarHelper(ctx, target, kind);
     let Some(path) = path else { return false };
 
     type K = PathKind;
@@ -1265,39 +1266,32 @@ fn LookForThreats(ctx: &mut Ctx) -> Option<Action> {
 }
 
 #[allow(non_snake_case)]
-fn HideFromThreats(ctx: &mut Ctx) -> Result {
-    let pos = ctx.pos;
-    let check = get_sneak_check(ctx);
-    ctx.sneakable = DijkstraMap(pos, check, HIDING_CELLS, HIDING_LIMIT);
-    let target = select_flight_target(ctx, /*hiding=*/true);
-    let Some(target) = target else { return Result::Failed };
+fn FleeToLocation(ctx: &mut Ctx, target: Point, kind: PathKind) -> Result {
+    if target == ctx.pos { return Result::Success; }
 
-    if target == pos { return Result::Success; }
-
-    let kind = PathKind::Hide;
-    let path = AStarHelper(ctx, target, /*hiding=*/true);
-    let Some(path) = path else { return Result::Failed };
-
-    ctx.blackboard.path = CachedPath { kind, path, skip: 0, step: 0 };
+    if !FindPath(ctx, target, kind) { return Result::Failed; }
     let Some(action) = FollowPath(ctx, kind) else { return Result::Failed };
 
     ctx.choose_action(action)
 }
 
 #[allow(non_snake_case)]
+fn HideFromThreats(ctx: &mut Ctx) -> Result {
+    let check = get_sneak_check(ctx);
+    ctx.sneakable = DijkstraMap(ctx.pos, check, HIDING_CELLS, HIDING_LIMIT);
+    let target = select_flight_target(ctx, /*hiding=*/true);
+    let Some(target) = target else { return Result::Failed };
+
+    FleeToLocation(ctx, target, PathKind::Hide)
+}
+
+#[allow(non_snake_case)]
 fn FleeFromThreats(ctx: &mut Ctx) -> Result {
-    let pos = ctx.pos;
     ensure_neighborhood(ctx);
     let target = select_flight_target(ctx, /*hiding=*/false);
     let Some(target) = target else { return Result::Failed };
 
-    if target == pos { return Result::Success; }
-
-    let kind = PathKind::Flee;
-    if !FindPath(ctx, target, kind) { return Result::Failed; }
-    let Some(action) = FollowPath(ctx, kind) else { return Result::Failed };
-
-    ctx.choose_action(action)
+    FleeToLocation(ctx, target, PathKind::Flee)
 }
 
 //////////////////////////////////////////////////////////////////////////////
