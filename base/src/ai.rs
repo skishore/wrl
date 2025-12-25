@@ -87,6 +87,7 @@ struct Blackboard {
 
     chasing_enemy: bool,
     chasing_prey_: bool,
+    chasing_scent: bool,
     finding_food_: bool,
     finding_water: bool,
     getting_rest_: bool,
@@ -121,6 +122,7 @@ impl Blackboard {
 
             chasing_enemy: false,
             chasing_prey_: false,
+            chasing_scent: false,
             finding_food_: false,
             finding_water: false,
             getting_rest_: false,
@@ -1014,7 +1016,7 @@ struct ChaseTarget {
 #[allow(non_snake_case)]
 fn CleanupChaseState(ctx: &mut Ctx) {
     let bb = &mut ctx.blackboard;
-    if bb.chasing_enemy || bb.chasing_prey_ { return; }
+    if bb.chasing_enemy || bb.chasing_prey_ || bb.chasing_scent { return; }
 
     let chasing = bb.path.kind == PathKind::Enemy;
     if chasing { bb.path = Default::default(); }
@@ -1449,6 +1451,22 @@ fn Wander() -> impl Bhv {
 }
 
 #[allow(non_snake_case)]
+fn InvestigateScents() -> impl Bhv {
+    seq![
+        "InvestigateScents",
+        run![
+            "SelectRecentScent",
+            cond!("ListPreyByScent", ListPreyByScent),
+            cond!("SelectBestTarget", SelectBestTarget),
+        ],
+        HuntSelectedTarget(),
+    ]
+    .on_tick(ClearTargets)
+    .on_tick(|x| x.blackboard.chasing_scent = true)
+    .on_exit(|x| x.blackboard.chasing_scent = false)
+}
+
+#[allow(non_snake_case)]
 fn InvestigateNoises() -> impl Bhv {
     seq![
         "InvestigateNoises",
@@ -1585,6 +1603,7 @@ fn Root() -> impl Bhv {
         LookForTarget(),
         act!("WarnOffThreats", WarnOffThreats),
         InvestigateNoises(),
+        InvestigateScents(),
         Wander(),
     ]
     .post_tick(CleanupChaseState)
