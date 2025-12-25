@@ -1369,19 +1369,22 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
 //  - Update CachedPath to do "look at the target for a path w/ skip = 1",
 //    then get rid of the Look actions for basic needs and `SearchForPrey`.
 //
-//  - Fix bug in `select_chase_target`: if the target hasn't moved from where
-//    we last saw it, then we may not choose that cell because of the check
-//    on time_since_entity_visible() > age.
-//
 //  - Make the our-team-strength logic quadratic in team size.
 //
-//  - Add "growl" / "intimidate" subtrees.
-//
 //  - Drop "unknown" targets earlier if we're chasing down enemies.
+//
+//  - Include potentially-matching scents when chasing down enemies.
+//
+//  - Compare distance vs. turns-since-seen when chasing down enemies.
 //
 //  - Only run InvestigateNoises for recent unknown sources.
 //
 //  - Push "if nowhere to look, look ahead" logic into assess_directions.
+//
+//  - Predators should never be satiated by just berries.
+//
+//  - If we can't path to a valid target, we repeatedly run the "scan last
+//    target direction" logic.
 
 #[allow(non_snake_case)]
 fn AttackOrFollowPath(kind: PathKind) -> impl Bhv {
@@ -1606,7 +1609,7 @@ fn EscapeFromThreats() -> impl Bhv {
 fn FightOrFlight() -> impl Bhv {
     util![
         "FightOrFlight",
-        //(CallStrength, act!("CallForHelp", CallForHelp)),
+        (CallStrength, act!("CallForHelp", CallForHelp)),
         (FightStrength, FightAgainstThreats()),
         (FlightStrength, EscapeFromThreats()),
     ]
