@@ -309,12 +309,6 @@ fn select_target(scores: &[(Point, f64)], env: &mut AIEnv) -> Option<Point> {
     }).collect();
     if values.is_empty() { return None; }
 
-    if let Some(x) = env.debug.as_deref_mut() {
-        x.utility.clear();
-        for &(score, point) in &values {
-            x.utility.push((point, (score >> 8) as u8));
-        }
-    }
     Some(*weighted(&values, env.rng))
 }
 
@@ -331,12 +325,6 @@ fn select_target_softmax(scores: &[(Point, f64)], env: &mut AIEnv, temp: f64) ->
         (value, p)
     }).collect();
 
-    if let Some(x) = env.debug.as_deref_mut() {
-        x.utility.clear();
-        for &(score, point) in &values {
-            x.utility.push((point, (score >> 8) as u8));
-        }
-    }
     Some(*weighted(&values, env.rng))
 }
 
@@ -1638,14 +1626,7 @@ fn Root() -> impl Bhv {
 
 // Entry point:
 
-#[derive(Default)]
-pub struct AIDebug {
-    pub targets: Vec<Point>,
-    pub utility: Vec<(Point, u8)>,
-}
-
 pub struct AIEnv<'a> {
-    pub debug: Option<&'a mut AIDebug>,
     pub fov: &'a mut Vision,
     pub rng: &'a mut RNG,
 }
@@ -1674,7 +1655,7 @@ impl AIState {
     pub fn plan(&mut self, entity: &Entity, env: AIEnv) -> Action {
         let known = &*entity.known;
         let blackboard = &mut self.blackboard;
-        let mut env = AIEnv { debug: env.debug, fov: env.fov, rng: env.rng };
+        let mut env = AIEnv { fov: env.fov, rng: env.rng };
 
         let mut ctx = Ctx {
             entity,

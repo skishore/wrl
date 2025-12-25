@@ -199,8 +199,7 @@ fn main() {
         panic!("Usage: wrl-term (full)?");
     }
 
-    let full = args.len() == 2;
-    let game = State::new(/*seed=*/None, full);
+    let game = State::new(/*seed=*/None, /*test=*/false);
     let mut output = Matrix::default();
     game.render(&mut output);
 
