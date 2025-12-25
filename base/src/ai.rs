@@ -1621,7 +1621,7 @@ fn Root() -> impl Bhv {
         FightOrFlight(),
         HuntForMeat(),
         LookForTarget(),
-        //act!("WarnOffThreats", WarnOffThreats),
+        act!("WarnOffThreats", WarnOffThreats),
         //InvestigateNoises(),
         InvestigateScents(),
         Wander(),

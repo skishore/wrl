@@ -74,8 +74,8 @@ impl Threat {
             warnings: 0,
 
             // See status accessors:
-            confidence: Confidence::Zero,
-            valence: Valence::Hostile,
+            confidence: Confidence::Low,
+            valence: Valence::Neutral,
         }
     }
 
@@ -121,7 +121,7 @@ impl Threat {
         let sample = rng.random::<f32>() * 2f32.powi(warnings);
 
         if sample < 0.25 {
-            let valence = if self.timid { Valence::Menacing } else { Valence::Neutral };
+            let valence = if self.timid { Valence::Menacing } else { Valence::Hostile };
             self.merge_status(Confidence::Mid, valence);
         } else if sample >= 0.75 {
             self.merge_status(Confidence::Mid, Valence::Hostile);
@@ -169,8 +169,7 @@ impl Threat {
                 if x.target == Some(me.eid) || (self.certain() && self.menacing()) {
                     self.merge_status(Confidence::High, Valence::Hostile);
                 } else {
-                    let valence = if self.timid { Valence::Hostile } else { Valence::Neutral };
-                    self.merge_status(Confidence::Mid, valence);
+                    self.merge_status(Confidence::Mid, Valence::Hostile);
                 }
                 self.mark_combat(event.time);
             },
@@ -178,7 +177,7 @@ impl Threat {
                 if ThreatState::call_for_us(me, x) {
                     self.merge_status(Confidence::High, Valence::Friendly);
                 } else if x.call == Call::Warning {
-                    let valence = if self.timid { Valence::Menacing } else { Valence::Neutral };
+                    let valence = if self.timid { Valence::Menacing } else { Valence::Hostile };
                     self.merge_status(Confidence::Mid, valence);
                 }
                 if x.call == Call::Help { self.mark_combat(event.time); }
@@ -203,7 +202,7 @@ impl Threat {
         self.seen = true;
 
         let (confidence, valence) = if other.player {
-            (Confidence::High, Valence::Hostile)
+            (Confidence::Low, Valence::Neutral)
         } else if other.delta > 0 {
             let combat = other.time - self.combat < ACTIVE_THREAT_TIME;
             let valence = if combat { Valence::Hostile } else { Valence::Menacing };
