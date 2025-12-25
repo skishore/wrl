@@ -207,8 +207,8 @@ impl Threat {
             let combat = other.time - self.combat < ACTIVE_THREAT_TIME;
             let valence = if combat { Valence::Hostile } else { Valence::Menacing };
             (Confidence::High, valence)
-        } else if !me.predator && other.delta == 0 {
-            (Confidence::High, Valence::Neutral)
+        } else if !me.predator && me.species == other.species {
+            (Confidence::High, Valence::Friendly)
         } else {
             (Confidence::High, Valence::Neutral)
         };
