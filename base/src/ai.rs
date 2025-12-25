@@ -12,7 +12,7 @@ use crate::bhv::{Bhv, Debug, Result};
 use crate::entity::Entity;
 use crate::game::{FOV_RADIUS_NPC, CALL_VOLUME, MOVE_VOLUME, Item, move_ready};
 use crate::game::{Action, AttackAction, CallAction, EatAction, MoveAction};
-use crate::knowledge::{Call, Knowledge, Sense, Timedelta, Timestamp};
+use crate::knowledge::{Call, Knowledge, ScentEvent, Sense, Timedelta, Timestamp};
 use crate::pathing::{AStar, AStarHeuristic, Status};
 use crate::pathing::{BFS, DijkstraLength, DijkstraMap, Neighborhood};
 use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
@@ -1004,6 +1004,7 @@ struct Target {
     last: Point,
     time: Timestamp,
     sense: Sense,
+    scent: Option<ScentEvent>,
 }
 
 struct ChaseTarget {
@@ -1053,7 +1054,9 @@ fn ListThreatsBySight(ctx: &mut Ctx) -> bool {
     let initial = ctx.blackboard.options.len();
     for other in &ctx.blackboard.threats.hostile {
         if !check_time!(ctx, other.time, MIN_SEARCH_TIME) { break; }
-        let target = Target { last: other.pos, time: other.time, sense: other.sense };
+
+        let (last, time, sense) = (other.pos, other.time, other.sense);
+        let target = Target { last, time, sense, scent: None };
         ctx.blackboard.options.push(target);
     }
     ctx.blackboard.options.len() > initial
@@ -1065,7 +1068,9 @@ fn ListPreyBySight(ctx: &mut Ctx) -> bool {
     for other in &ctx.known.entities {
         if other.delta >= 0 { continue; }
         if !check_time!(ctx, other.time, MAX_SEARCH_TIME) { break; }
-        let target = Target { last: other.pos, time: other.time, sense: other.sense };
+
+        let (last, time, sense) = (other.pos, other.time, other.sense);
+        let target = Target { last, time, sense, scent: None };
         ctx.blackboard.options.push(target);
     }
     ctx.blackboard.options.len() > initial
@@ -1078,7 +1083,9 @@ fn ListPreyBySound(ctx: &mut Ctx) -> bool {
         if other.seen { continue; }
         if other.delta >= 0 { continue; }
         if !check_time!(ctx, other.time, MAX_SEARCH_TIME) { break; }
-        let target = Target { last: other.pos, time: other.time, sense: other.sense };
+
+        let (last, time, sense) = (other.pos, other.time, other.sense);
+        let target = Target { last, time, sense, scent: None };
         ctx.blackboard.options.push(target);
     }
     ctx.blackboard.options.len() > initial
@@ -1086,14 +1093,27 @@ fn ListPreyBySound(ctx: &mut Ctx) -> bool {
 
 #[allow(non_snake_case)]
 fn ListPreyByScent(ctx: &mut Ctx) -> bool {
+    ListTargetsByScent(ctx, |x| x.delta < 0)
+}
+
+#[allow(non_snake_case)]
+fn ListHumansByScent(ctx: &mut Ctx) -> bool {
+    ListTargetsByScent(ctx, |x| x.species.name == "Human")
+}
+
+#[allow(non_snake_case)]
+fn ListTargetsByScent<F: Fn(&ScentEvent) -> bool>(ctx: &mut Ctx, f: F) -> bool {
     let initial = ctx.blackboard.options.len();
-    if let Some(x) = &ctx.blackboard.target && x.target.sense == Sense::Smell &&
+    if let Some(x) = &ctx.blackboard.target && let Some(s) = &x.target.scent && f(s) &&
        check_time!(ctx, x.target.time, MAX_TRACKING_TIME) {
         ctx.blackboard.options.push(x.target);
     }
-    for &scent in &ctx.known.scents {
-        if !check_time!(ctx, scent.time, MAX_TRACKING_TIME) { continue; }
-        let target = Target { last: scent.pos, time: scent.time, sense: Sense::Smell };
+    for event in &ctx.known.scents {
+        if !f(event) { continue; }
+        if !check_time!(ctx, event.scent.time, MAX_TRACKING_TIME) { continue; }
+
+        let (last, time, sense) = (event.scent.pos, event.scent.time, Sense::Smell);
+        let target = Target { last, time, sense, scent: Some(*event) };
         ctx.blackboard.options.push(target);
     }
     ctx.blackboard.options.len() > initial
@@ -1456,7 +1476,7 @@ fn InvestigateScents() -> impl Bhv {
         "InvestigateScents",
         run![
             "SelectRecentScent",
-            cond!("ListPreyByScent", ListPreyByScent),
+            cond!("ListHumansByScent", ListHumansByScent),
             cond!("SelectBestTarget", SelectBestTarget),
         ],
         HuntSelectedTarget(),

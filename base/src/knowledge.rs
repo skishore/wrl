@@ -178,6 +178,13 @@ pub struct Scent {
     pub time: Timestamp,
 }
 
+#[derive(Clone, Copy)]
+pub struct ScentEvent {
+    pub delta: i32,
+    pub scent: Scent,
+    pub species: &'static Species,
+}
+
 //////////////////////////////////////////////////////////////////////////////
 
 // Knowledge
@@ -258,7 +265,7 @@ pub struct Knowledge {
     pub cells: List<CellKnowledge>,
     pub entities: List<EntityKnowledge>,
     pub events: Vec<Event>,
-    pub scents: Vec<Scent>,
+    pub scents: Vec<ScentEvent>,
     pub time: Timestamp,
 
     eid_index: HashMap<EID, EIDState>,
@@ -596,16 +603,17 @@ impl Knowledge {
     fn populate_scents(&mut self, me: &Entity, board: &Board, rng: &mut RNG) {
         if me.asleep { return; }
 
-        let level = trophic_level(me);
-
         for (_, other) in &board.entities {
-            if trophic_level(other) >= level { continue; }
             let mut remainder = rng.random::<f64>();
 
             for age in 0..other.trail.capacity() {
                 remainder -= other.get_historical_scent_at(me.pos, age);
                 if remainder >= 0. { continue; }
-                self.scents.push(other.trail[age]);
+
+                let scent = other.trail[age];
+                let delta = trophic_level(other) - trophic_level(me);
+                let event = ScentEvent { delta, scent, species: other.species };
+                self.scents.push(event);
                 break;
             }
         }
