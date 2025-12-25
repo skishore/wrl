@@ -133,6 +133,29 @@ impl Threat {
         self.merge_status(Confidence::Low, self.valence);
     }
 
+    // TODO list for player interactions:
+    //
+    //   - Wilds are not appropriately hostile, except on this branch. They
+    //     spend too much time warning or scanning unknown noises.
+    //
+    //   - We can turn the "scan unknown noise" subtree into just the first
+    //     watch period for the first warning. ("auto-warn" unknown threats.)
+    //
+    //   - We should only update our valence after a warning after the watch
+    //     period is complete.
+    //
+    //   - Wilds may attack player; however, if they spot a predator, flee
+    //     from it, and then spot a player while the predator's age is still
+    //     within ACTIVE_THREAT_TIME, we'll incorrectly flee from the player.
+    //
+    //   - Can we make scent just another event type? Can we tie scent to an
+    //     EID / TID and disable further updates once we identify it?
+    //
+    //   - Can we make call-for-help carry information about target EID(s)?
+    //     Seems hard - we can call based on unknown threats.
+    //
+    //   - Hunting behavior should focus more on where the entity was last seen.
+
     // State updates:
 
     fn merge_status(&mut self, confidence: Confidence, valence: Valence) {
