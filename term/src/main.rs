@@ -9,7 +9,7 @@ use termion::raw::{IntoRawMode, RawTerminal};
 use termion::screen::{ToAlternateScreen, ToMainScreen};
 
 use wrl_base::base::{Char, Color, Glyph, Matrix, Point};
-use wrl_base::game::{Input, State};
+use wrl_base::game::{GameMode, Input, State};
 
 type RawMouseTerminal = MouseTerminal<RawTerminal<io::Stdout>>;
 
@@ -195,11 +195,11 @@ fn input(event: Event, screen: &Screen) -> Option<Input> {
 
 fn main() {
     let args: Vec<_> = std::env::args().collect();
-    if !(args.len() == 1 || (args.len() == 2 && args[1] == "full")) {
-        panic!("Usage: wrl-term (full)?");
+    if !(args.len() == 1 || (args.len() == 2 && args[1] == "--debug")) {
+        panic!("Usage: wrl-term (--debug)?");
     }
 
-    let game = State::new(/*seed=*/None, /*test=*/false);
+    let game = State::new(/*seed=*/None, GameMode::Play);
     let mut output = Matrix::default();
     game.render(&mut output);
 
