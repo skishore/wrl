@@ -11,6 +11,7 @@ use crate::ai::{AIEnv, AIState};
 use crate::base::{Buffer, Color, Glyph};
 use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs, sample, weighted};
 use crate::dex::{Attack, Species};
+use crate::debug::DebugTrace;
 use crate::effect::{CB, Effect, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
 use crate::knowledge::{Call, Knowledge, Scent, Sense, Timedelta, Timestamp};
@@ -138,7 +139,7 @@ lazy_static! {
 
 // Item
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Item { Berry, Corpse }
 
 pub fn show_item(item: &Item) -> Glyph {
@@ -620,14 +621,19 @@ fn advance_turn(board: &mut Board) -> Option<EID> {
 
 // Action
 
+#[derive(Debug)]
 pub struct AttackAction { pub attack: &'static Attack, pub target: Point }
 
+#[derive(Debug)]
 pub struct CallAction { pub call: Call, pub look: Point }
 
+#[derive(Debug)]
 pub struct EatAction { pub target: Point, pub item: Option<Item> }
 
+#[derive(Debug)]
 pub struct MoveAction { pub look: Point, pub step: Point, pub turns: f64 }
 
+#[derive(Debug)]
 pub enum Action {
     Idle,
     Rest,
@@ -1040,6 +1046,7 @@ fn update_state(state: &mut State) {
 
         update = true;
         let action = plan(state, eid);
+        state.record_trace(&action, eid);
         let result = act(state, eid, action);
         if player && !result.success { break; }
 
@@ -1069,9 +1076,10 @@ fn update_state(state: &mut State) {
 // State
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-pub enum GameMode { Play, Test }
+pub enum GameMode { Play, Test, Debug }
 
 pub struct UpdateEnv {
+    debug: Option<Box<DebugTrace>>,
     known: Box<Knowledge>,
     fov: FOV,
     rng: RNG,
@@ -1111,7 +1119,9 @@ impl State {
         let size = Point(WORLD_SIZE, WORLD_SIZE);
         let rng = seed.map(|x| RNG::seed_from_u64(x));
         let rng = rng.unwrap_or_else(|| RNG::from_os_rng());
+        let debug = mode == GameMode::Debug;
         let mut env = UpdateEnv {
+            debug: if debug { Some(Default::default()) } else { None },
             known: Default::default(),
             fov: Default::default(),
             ui: Default::default(),
@@ -1176,10 +1186,6 @@ impl State {
         Self { board, input, inputs, player, env, ai }
     }
 
-    fn get_player(&self) -> &Entity { &self.board.entities[self.player] }
-
-    fn mut_player(&mut self) -> &mut Entity { &mut self.board.entities[self.player] }
-
     pub fn add_effect(&mut self, x: Effect) { self.board.add_effect(x, &mut self.env) }
 
     pub fn add_input(&mut self, input: Input) { self.inputs.push(input) }
@@ -1189,6 +1195,21 @@ impl State {
     pub fn render(&self, buffer: &mut Buffer) {
         let entity = self.get_player();
         self.ui.render(buffer, entity, &self.board);
+    }
+
+    // Private helpers:
+
+    fn get_player(&self) -> &Entity { &self.board.entities[self.player] }
+
+    fn mut_player(&mut self) -> &mut Entity { &mut self.board.entities[self.player] }
+
+    fn record_trace(&mut self, action: &Action, eid: EID) {
+        if matches!(action, Action::WaitForInput) { return; }
+        let Some(debug) = &mut self.env.debug else { return };
+
+        let board = &self.board;
+        let entity = &board.entities[eid];
+        debug.record(action, board, entity);
     }
 }
 

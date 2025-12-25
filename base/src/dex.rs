@@ -23,6 +23,12 @@ impl Attack {
     }
 }
 
+impl std::fmt::Debug for Attack {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(self.name)
+    }
+}
+
 lazy_static! {
     static ref ATTACKS: HashMap<&'static str, Attack> = {
         let items: Vec<(&'static str, i32, i32, AttackEffect)> = vec![

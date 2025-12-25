@@ -199,7 +199,9 @@ fn main() {
         panic!("Usage: wrl-term (--debug)?");
     }
 
-    let game = State::new(/*seed=*/None, GameMode::Play);
+    let debug = args.len() == 2;
+    let mode = if debug { GameMode::Debug } else { GameMode::Play };
+    let game = State::new(/*seed=*/None, mode);
     let mut output = Matrix::default();
     game.render(&mut output);
 

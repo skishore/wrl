@@ -613,57 +613,16 @@ impl UI {
     // Rendering the map
 
     fn render_map(&self, buffer: &mut Buffer, entity: &Entity, frame: Option<&Frame>) {
+        let (known, player) = (&*entity.known, entity.player);
         let slice = &mut Slice::new(buffer, self.layout.map);
         let offset = self.get_map_offset(entity);
+        let size = self.get_map_size();
 
         // Render each tile's base glyph, if it's known.
-        let (known, player) = (&*entity.known, entity.player);
-        let unseen = Glyph::wide(' ');
-
-        let render_source = |source: Option<&SourceKnowledge>| -> Glyph {
-            let Some(x) = source else { return unseen };
-            Glyph::wdfg('?', Color::white().fade(0.25 + 0.5 * x.freshness()))
-        };
-
-        let render_tile = |point: Point| -> Glyph {
-            let cell = known.get(point);
-            let (source, tile) = (cell.source(), cell.tile());
-            let Some(tile) = tile else { return render_source(source) };
-
-            let entity = cell.entity();
-            let entity = if let Some(x) = entity && x.visible { entity } else { None };
-            if entity.is_none() && source.is_some() { return render_source(source) };
-
-            let obscured = tile.limits_vision();
-            let shadowed = cell.shade();
-
-            let glyph = if let Some(x) = entity {
-                let big = x.too_big_to_hide();
-                let glyph = Self::knowledge_glyph(x);
-                if x.hp == 0. { Glyph::wdfg('%', 0xff0000) }
-                else if obscured && !big { glyph.with_fg(tile.glyph.fg()) }
-                else { glyph }
-            } else if let Some(x) = cell.items().last() {
-                show_item(x)
-            } else {
-                tile.glyph
-            };
-
-            let mut color = glyph.fg();
-            if !cell.visible() {
-                color = Color::white().fade(UI_REMEMBERED);
-            } else if shadowed {
-                color = color.fade(UI_SHADE_FADE);
-            }
-            glyph.with_fg(color)
-        };
-
-        // Render all currently-visible cells.
         slice.fill(Glyph::wide(' '));
-        let size = self.get_map_size();
         for y in 0..size.1 {
             for x in 0..size.0 {
-                let glyph = render_tile(Point(x, y) + offset);
+                let glyph = Self::render_tile(known, Point(x, y) + offset);
                 slice.set(Point(2 * x, y), glyph);
             }
         }
@@ -1143,11 +1102,49 @@ impl UI {
         if sneaking { Glyph::wide('e') } else { entity.species.glyph }
     }
 
+    fn source_glyph(source: Option<&SourceKnowledge>) -> Glyph {
+        let Some(x) = source else { return Glyph::wide(' ') };
+        Glyph::wdfg('?', Color::white().fade(0.25 + 0.5 * x.freshness()))
+    }
+
     fn hp_color(hp: f64) -> Color {
         (if hp <= 0.25 { 0xff0000 } else if hp <= 0.50 { 0xffff00 } else { 0x00a800 }).into()
     }
 
     fn render_key(key: char) -> String {
         format!("[{}] ", key)
+    }
+
+    pub fn render_tile(known: &Knowledge, point: Point) -> Glyph {
+        let cell = known.get(point);
+        let (source, tile) = (cell.source(), cell.tile());
+        let Some(tile) = tile else { return Self::source_glyph(source) };
+
+        let entity = cell.entity();
+        let entity = if let Some(x) = entity && x.visible { entity } else { None };
+        if entity.is_none() && source.is_some() { return Self::source_glyph(source) };
+
+        let obscured = tile.limits_vision();
+        let shadowed = cell.shade();
+
+        let glyph = if let Some(x) = entity {
+            let big = x.too_big_to_hide();
+            let glyph = Self::knowledge_glyph(x);
+            if x.hp == 0. { Glyph::wdfg('%', 0xff0000) }
+            else if obscured && !big { glyph.with_fg(tile.glyph.fg()) }
+            else { glyph }
+        } else if let Some(x) = cell.items().last() {
+            show_item(x)
+        } else {
+            tile.glyph
+        };
+
+        let mut color = glyph.fg();
+        if !cell.visible() {
+            color = Color::white().fade(UI_REMEMBERED);
+        } else if shadowed {
+            color = color.fade(UI_SHADE_FADE);
+        }
+        glyph.with_fg(color)
     }
 }
