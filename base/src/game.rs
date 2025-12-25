@@ -554,6 +554,7 @@ fn hit_entity(board: &mut Board, env: &mut UpdateEnv, attack: &Attack, logged: b
     let critted = env.rng.gen_range(0..16) == 0;
     let factor = if critted { 1.5 } else { 1. } * env.rng.gen_range(0.85..=1.);
     let damage = (factor * attack.damage as f64).round() as i32;
+    let damage = if target.species.name == "Human" { 1 } else { damage };
     let fainted = target.cur_hp <= damage;
 
     if fainted {
