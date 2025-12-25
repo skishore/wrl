@@ -283,9 +283,9 @@ impl Board {
     }
 
     fn advance_effect(&mut self, pov: EID, env: &mut UpdateEnv) -> bool {
-        let mut visible = self._pov_sees_effect(pov, env);
+        let mut visible = self._pov_sees_effect(pov);
         while self._advance_one_frame(env) {
-            visible = visible || self._pov_sees_effect(pov, env);
+            visible = visible || self._pov_sees_effect(pov);
             if visible { return true; }
         }
         false
@@ -293,7 +293,7 @@ impl Board {
 
     fn start_effect(&mut self, pov: EID, env: &mut UpdateEnv) {
         if self.get_frame().is_none() { return; }
-        if !self._pov_sees_effect(pov, env) { self.advance_effect(pov, env); }
+        if !self._pov_sees_effect(pov) { self.advance_effect(pov, env); }
     }
 
     fn _advance_one_frame(&mut self, env: &mut UpdateEnv) -> bool {
@@ -323,9 +323,7 @@ impl Board {
         true
     }
 
-    fn _pov_sees_effect(&self, pov: EID, env: &UpdateEnv) -> bool {
-        if env.ui.full { return true; }
-
+    fn _pov_sees_effect(&self, pov: EID) -> bool {
         let Some(frame) = self._effect.frames.get(0) else { return false };
         let Some(entity) = self.entities.get(pov) else { return false };
 
@@ -680,8 +678,7 @@ fn plan(state: &mut State, eid: EID) -> Action {
     let entity = &mut board.entities[eid];
     swap(ai, &mut entity.ai);
 
-    let debug = if state.pov == Some(eid) { Some(&mut env.ui.debug) } else { None };
-    let env = AIEnv { debug, fov: vision, rng: &mut env.rng };
+    let env = AIEnv { fov: vision, rng: &mut env.rng };
     let action = ai.plan(&entity, env);
 
     swap(ai, &mut entity.ai);
@@ -975,26 +972,6 @@ fn apply_effect(mut effect: Effect, what: FT, callback: CB) -> Effect {
 // Update
 
 fn process_input(state: &mut State, input: Input) {
-    if input == Input::Char('q') || input == Input::Char('w') {
-        let board = &state.board;
-        let eids: Vec<_> = board.entities.iter().map(|(eid, _)| eid).collect();
-        let i = eids.iter().position(|&x| Some(x) == state.pov).unwrap_or(0);
-        let l = eids.len();
-        let j = (i + if input == Input::Char('q') { l - 1 } else { 1 }) % l;
-        state.pov = if j == 0 { None } else { Some(eids[j]) };
-        state.ui.debug = Default::default();
-        return;
-    }
-
-    if state.ui.full && let Input::Click(pos) = input {
-        let pov = state.get_pov_entity();
-        let Some(pos) = state.ui.get_map_cell(pov, pos) else { return };
-        let Some(eid) = state.board.get_cell(pos).eid else { return };
-        let off = eid == state.player || state.pov == Some(eid);
-        state.pov = if off { None } else { Some(eid) };
-        return;
-    }
-
     let player = &state.board.entities[state.player];
     if state.env.ui.process_input(player, input) { return; }
 
@@ -1018,11 +995,8 @@ fn process_input(state: &mut State, input: Input) {
     state.input = Action::Move(MoveAction { look: dir, step: dir, turns });
 }
 
-fn update_pov_entities(state: &mut State) {
+fn update_player_knowledge(state: &mut State) {
     state.board.update_known(state.player, &mut state.env);
-    if let Some(x) = state.pov && state.board.entities.has(x) {
-        state.board.update_known(x, &mut state.env);
-    }
     let player = &state.board.entities[state.player];
     state.env.ui.update_focus(player);
 }
@@ -1031,10 +1005,10 @@ fn update_state(state: &mut State) {
     let pos = state.get_player().pos;
     state.env.ui.update(pos, &mut state.env.rng);
 
-    // If an Effect is active, run it, skipping frames the POV entity can't see.
-    let pov = state.get_pov_entity().eid;
+    // If an Effect is active, run it, skipping frames the player can't see.
+    let pov = state.player;
     if state.board.advance_effect(pov, &mut state.env) {
-        update_pov_entities(state);
+        update_player_knowledge(state);
         return;
     }
 
@@ -1083,11 +1057,11 @@ fn update_state(state: &mut State) {
         drain(entity, &result);
     }
 
-    // Skip the prefix of Effect frames that the POV entity can't see.
-    let pov = state.get_pov_entity().eid;
+    // Skip the prefix of Effect frames that the player can't see.
+    let pov = state.player;
     state.board.start_effect(pov, &mut state.env);
 
-    if update { update_pov_entities(state); }
+    if update { update_player_knowledge(state); }
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -1107,7 +1081,6 @@ pub struct State {
     inputs: Vec<Input>,
     player: EID,
     env: UpdateEnv,
-    pov: Option<EID>,
     ai: Box<AIState>,
 }
 
@@ -1131,7 +1104,7 @@ impl DerefMut for State {
 }
 
 impl State {
-    pub fn new(seed: Option<u64>, full: bool) -> Self {
+    pub fn new(seed: Option<u64>, test: bool) -> Self {
         let size = Point(WORLD_SIZE, WORLD_SIZE);
         let rng = seed.map(|x| RNG::seed_from_u64(x));
         let rng = rng.unwrap_or_else(|| RNG::from_os_rng());
@@ -1156,7 +1129,7 @@ impl State {
                 let p = Point(0, y);
                 if map.get(p) == 'R' { pos = p; }
             }
-            if full {
+            if test {
                 let wt = board.map.default.tile;
                 for &dir in &dirs::ALL { board.set_tile(pos + dir, wt); }
             }
@@ -1188,7 +1161,6 @@ impl State {
 
         let inputs = Default::default();
         let ai = Box::new(AIState::new(/*predator=*/false, &mut env.rng));
-        let pov = None;
 
         let ui = &mut env.ui;
         match WEATHER {
@@ -1196,13 +1168,8 @@ impl State {
             Weather::None => (),
         }
         ui.log.log("Welcome to WildsRL! Use vikeys (h/j/k/l/y/u/b/n) to move.");
-        if full { ui.show_full_view(); }
 
-        Self { board, input, inputs, player, env, pov, ai }
-    }
-
-    fn get_pov_entity(&self) -> &Entity {
-        self.pov.and_then(|x| self.board.get_entity(x)).unwrap_or(self.get_player())
+        Self { board, input, inputs, player, env, ai }
     }
 
     fn get_player(&self) -> &Entity { &self.board.entities[self.player] }
@@ -1216,7 +1183,7 @@ impl State {
     pub fn update(&mut self) { update_state(self); }
 
     pub fn render(&self, buffer: &mut Buffer) {
-        let entity = self.get_pov_entity();
+        let entity = self.get_player();
         self.ui.render(buffer, entity, &self.board);
     }
 }
@@ -1237,7 +1204,8 @@ mod tests {
     fn test_state_update() {
         let mut states = vec![];
         for i in 0..NUM_SEEDS {
-            states.push(State::new(Some(BASE_SEED + i), /*full=*/true));
+            let seed = Some(BASE_SEED + i);
+            states.push(State::new(seed, /*test=*/true));
         }
 
         for index in 0..(NUM_SEEDS * NUM_STEPS) {
@@ -1255,7 +1223,8 @@ mod tests {
         let mut index = 0;
         let mut states = vec![];
         for i in 0..NUM_SEEDS {
-            states.push(State::new(Some(BASE_SEED + i), /*full=*/true));
+            let seed = Some(BASE_SEED + i);
+            states.push(State::new(seed, /*test=*/true));
         }
 
         b.iter(|| {

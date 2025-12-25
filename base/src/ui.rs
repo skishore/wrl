@@ -3,12 +3,11 @@ use std::collections::VecDeque;
 
 use rand::Rng;
 
-use crate::ai::AIDebug;
 use crate::base::{HashMap, LOS, Point, RNG, dirs};
 use crate::base::{Buffer, Color, Glyph, Matrix, Rect, Slice};
 use crate::effect::{Frame, self};
 use crate::entity::{EID, Entity};
-use crate::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_, WORLD_SIZE};
+use crate::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_};
 use crate::game::{Board, Input, Tile, show_item};
 use crate::knowledge::{EntityKnowledge, Knowledge, SourceKnowledge};
 use crate::pathing::Status;
@@ -23,7 +22,6 @@ const UI_ROW_SPACE: i32 = 1;
 const UI_KEY_SPACE: i32 = 4;
 
 const UI_LOG_SIZE: i32 = 4;
-const UI_DEBUG_SIZE: i32 = 60;
 const UI_CHOICE_SIZE: i32 = 40;
 const UI_STATUS_SIZE: i32 = 30;
 const UI_COLOR: i32 = 0xffc000;
@@ -90,7 +88,6 @@ fn within_map_bounds(ui: &UI, entity: &Entity, point: Point) -> bool {
 struct Layout {
     log: Rect,
     map: Rect,
-    debug: Rect,
     choice: Rect,
     rivals: Rect,
     status: Rect,
@@ -100,23 +97,16 @@ struct Layout {
 
 impl Default for Layout {
     fn default() -> Self {
-        let side = 2 * FOV_RADIUS_PC_ + 1;
-        Self::new(Point(side, side))
-    }
-}
-
-impl Layout {
-    fn new(size: Point) -> Self {
         let kl = UI::render_key('a').chars().count() as i32;
         assert!(kl == UI_KEY_SPACE);
 
-        let Point(x, y) = size;
+        let side = 2 * FOV_RADIUS_PC_ + 1;
+        let (x, y) = (side, side);
+
         let ss = UI_STATUS_SIZE;
         let (col, row) = (UI_COL_SPACE, UI_ROW_SPACE);
         let w = 2 * x + 2 + 2 * (ss + kl + 2 * col);
         let h = y + 2 + row + UI_LOG_SIZE + row + 1;
-
-        let debug = Rect::default();
         let bounds = Point(w, h);
 
         let status = Rect {
@@ -153,29 +143,7 @@ impl Layout {
             size: Point(ss + kl, status.root.1 + status.size.1 - ry),
         };
 
-        Self { log, map, debug, choice, rivals, status, target, bounds }
-    }
-
-    fn full(size: Point) -> Self {
-        let Point(x, y) = size;
-        let w = UI_DEBUG_SIZE;
-        let (col, row) = (UI_COL_SPACE, UI_ROW_SPACE);
-        let map = Rect { root: Point(w + col + 1, 1), size: Point(2 * x, y) };
-        let debug = Rect {
-            root: Point(0, row + 1),
-            size: Point(w, y - 2 * row),
-        };
-        let log = Rect {
-            root: Point(0, map.root.1 + map.size.1 + row + 1),
-            size: Point(map.root.0 + map.size.0 + 1, UI_LOG_SIZE + 1),
-        };
-        let bounds = log.root + log.size;
-        let bounds = Point(bounds.0, bounds.1 + row + 1);
-
-        let x = Rect::default();
-        let (choice, rivals, status, target) = (x, x, x, x);
-
-        Self { log, map, debug, choice, rivals, status, target, bounds }
+        Self { log, map, choice, rivals, status, target, bounds }
     }
 }
 
@@ -517,23 +485,21 @@ pub struct UI {
     frame: usize,
     layout: Layout,
 
-    // Public members
-    pub debug: AIDebug,
-    pub full: bool,
-    pub log: Log,
-
-    // Animations
+    // Animations:
     moves: HashMap<Point, MoveAnimation>,
     rainfall: Option<Rainfall>,
 
-    // Modal components
+    // Modal components:
     focus: Option<EID>,
     target: Option<Box<Target>>,
     focused: Focused,
+
+    // Used by state updates:
+    pub log: Log,
 }
 
 impl UI {
-    // Rendering entry point
+    // Rendering entry point:
 
     pub fn render(&self, buffer: &mut Buffer, entity: &Entity, board: &Board) {
         if buffer.data.is_empty() {
@@ -542,32 +508,17 @@ impl UI {
         buffer.fill(buffer.default);
         self.render_layout(buffer);
 
-        self.render_log(buffer, entity);
+        self.render_log(buffer);
         self.render_rivals(buffer, entity);
         self.render_status(buffer, entity, None, None);
         self.render_target(buffer, entity);
 
-        // Render the base map, then the debug layer, then the weather:
         let frame = board.get_frame();
         self.render_map(buffer, entity, frame);
-        if !entity.player && frame.is_none() {
-            self.render_debug_overlay(buffer, entity, board);
-        }
         self.render_weather(buffer, entity);
-
-        if !entity.player && self.full {
-            self.render_debug(buffer, entity);
-        }
     }
 
-    pub fn get_map_cell(&self, entity: &Entity, point: Point) -> Option<Point> {
-        let Rect { root, size } = self.layout.map;
-        let Point(x, y) = point - root;
-        if !(0 <= x && x < size.0 && 0 <= y && y < size.1) { return None; }
-        Some(Point(x / 2, y) + self.get_map_offset(entity))
-    }
-
-    // Update entry points
+    // Update entry points:
 
     pub fn animate_move(&mut self, color: Color, point: Point) {
         let manim = MoveAnimation { color, frame: 0, limit: UI_MOVE_FRAMES };
@@ -576,12 +527,6 @@ impl UI {
 
     pub fn process_input(&mut self, entity: &Entity, input: Input) -> bool {
         process_ui_input(self, entity, input)
-    }
-
-    pub fn show_full_view(&mut self) {
-        let side = max(WORLD_SIZE, 100);
-        self.layout = Layout::full(Point(side, side));
-        self.full = true;
     }
 
     pub fn start_rain(&mut self, delta: Point, count: usize) {
@@ -718,12 +663,7 @@ impl UI {
         let size = self.get_map_size();
         for y in 0..size.1 {
             for x in 0..size.0 {
-                let mut glyph = render_tile(Point(x, y) + offset);
-                if self.full {
-                    let scent = entity.get_scent_at(Point(x, y) + offset);
-                    let color = Color::from(0xff8080).fade(scent);
-                    glyph = glyph.with_bg(color);
-                };
+                let glyph = render_tile(Point(x, y) + offset);
                 slice.set(Point(2 * x, y), glyph);
             }
         }
@@ -772,7 +712,7 @@ impl UI {
         // Render any animation that's currently running.
         if let Some(frame) = frame {
             for &effect::Particle { point, glyph } in frame {
-                if !self.full && !known.get(point).visible() { continue; }
+                if !known.get(point).visible() { continue; }
                 let Point(x, y) = point - offset;
                 slice.set(Point(2 * x, y), glyph);
             }
@@ -835,54 +775,6 @@ impl UI {
         }
     }
 
-    fn render_debug(&self, buffer: &mut Buffer, entity: &Entity) {
-        let slice = &mut Slice::new(buffer, self.layout.debug);
-        entity.ai.debug(slice);
-    }
-
-    fn render_debug_overlay(&self, buffer: &mut Buffer, entity: &Entity, board: &Board) {
-        let slice = &mut Slice::new(buffer, self.layout.map);
-        let offset = self.get_map_offset(entity);
-
-        let path = entity.ai.get_path();
-        let slice_point = |p: Point| Point(2 * (p.0 - offset.0), p.1 - offset.1);
-
-        for &p in path {
-            let point = slice_point(p);
-            let mut glyph = slice.get(point);
-            if glyph.ch() == Glyph::wide(' ').ch() { glyph = Glyph::wide('.'); }
-            slice.set(point, glyph.with_fg(0xff0000));
-        }
-        for &(p, score) in &self.debug.utility {
-            let point = slice_point(p);
-            let glyph = slice.get(point);
-            let score = score as i32;
-            let color = (score << 16) | (score << 8) | (score / 2 + 128);
-            slice.set(point, glyph.with_bg(color));
-        }
-        if let Some(&p) = path.last() {
-            let point = slice_point(p);
-            let glyph = slice.get(point);
-            slice.set(point, glyph.with_fg(Color::black()).with_bg(0xff0000));
-        }
-        for (_, other) in &board.entities {
-            slice.set(slice_point(other.pos), Self::entity_glyph(other));
-        }
-        for pos in entity.known.debug_noise_sources() {
-            let glyph = Glyph::wdfg('?', Color::black()).with_bg(0xffff00);
-            slice.set(slice_point(pos), glyph);
-        }
-        for other in &entity.known.entities {
-            let color = if other.visible { 0x00ff00 } else {
-                let entity_at_pos = entity.known.get(other.pos).entity();
-                let moved = entity_at_pos.map(|x| x.eid) != Some(other.eid);
-                if moved { 0xff0000 } else { 0xffff00 }
-            };
-            let glyph = Self::knowledge_glyph(other).with_fg(Color::black()).with_bg(color);
-            slice.set(slice_point(other.pos), glyph);
-        };
-    }
-
     fn render_weather(&self, buffer: &mut Buffer, entity: &Entity) {
         let Some(rainfall) = &self.rainfall else { return };
 
@@ -940,20 +832,9 @@ impl UI {
 
     // Rendering each section of the UI
 
-    fn render_log(&self, buffer: &mut Buffer, entity: &Entity) {
+    fn render_log(&self, buffer: &mut Buffer) {
         let slice = &mut Slice::new(buffer, self.layout.log);
-
-        if self.full {
-            let pos = entity.pos;
-            let time = entity.known.time;
-            let scent = entity.get_scent_at(pos);
-            slice.write_str(&format!("time: {:?}; pos: {:?}; scent: {:.2}",
-                                     time, pos, scent)).newline();
-        }
-
-        for line in &self.log.lines {
-            slice.set_fg(Some(line.color)).write_str(&line.text).newline();
-        }
+        for x in &self.log.lines { slice.set_fg(Some(x.color)).write_str(&x.text).newline(); }
     }
 
     fn render_rivals(&self, buffer: &mut Buffer, entity: &Entity) {
@@ -1182,7 +1063,6 @@ impl UI {
     }
 
     fn get_map_offset(&self, entity: &Entity) -> Point {
-        if self.full { return Point::default(); }
         let size = self.get_map_size();
         entity.pos - Point(size.0 / 2, size.1 / 2)
     }
@@ -1234,10 +1114,6 @@ impl UI {
         self.render_title(buffer, ml, Point(ml + mw, mh - 1), "");
         self.render_title(buffer, uw, Point(0, uh - 1), "");
 
-        if self.full {
-            self.render_title(buffer, ml, Point(0, 0), "Debug");
-        }
-
         self.render_box(buffer, &self.layout.map);
     }
 
@@ -1261,11 +1137,6 @@ impl UI {
     }
 
     // Static helpers
-
-    fn entity_glyph(entity: &Entity) -> Glyph {
-        let sneaking = entity.player && entity.sneaking;
-        if sneaking { Glyph::wide('e') } else { entity.species.glyph }
-    }
 
     fn knowledge_glyph(entity: &EntityKnowledge) -> Glyph {
         let sneaking = entity.species.human && entity.sneaking;
