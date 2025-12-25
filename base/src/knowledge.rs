@@ -27,7 +27,7 @@ const SOURCE_TRACKING_LIMIT: Timedelta = Timedelta::from_seconds(16.);
 const SOURCE_RETENTION_TIME: Timedelta = Timedelta::from_seconds(96.);
 
 fn trophic_level(x: &Entity) -> i32 {
-    if x.player { 0 } else if !x.predator { 1 } else { 2 }
+    if x.species.human { 0 } else if !x.predator { 1 } else { 2 }
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -228,7 +228,6 @@ pub struct EntityKnowledge {
     // Flags:
     pub asleep: bool,
     pub friend: bool,
-    pub player: bool,
     pub sneaking: bool,
     pub visible: bool,
 }
@@ -309,14 +308,13 @@ impl EntityKnowledge {
             // Flags:
             asleep: false,
             friend: false,
-            player: false,
             sneaking: false,
             visible: false,
         }
     }
 
     pub fn too_big_to_hide(&self) -> bool {
-        self.player && !self.sneaking
+        self.species.human && !self.sneaking
     }
 }
 
@@ -662,7 +660,6 @@ impl Knowledge {
 
         entry.asleep = other.asleep;
         entry.friend = me.eid == other.eid;
-        entry.player = other.player;
         entry.sneaking = other.sneaking;
         entry.visible = true;
 

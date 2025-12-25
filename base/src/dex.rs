@@ -48,6 +48,7 @@ pub struct Species {
     pub name: &'static str,
     pub attacks: Vec<&'static Attack>,
     pub glyph: Glyph,
+    pub human: bool,
     pub speed: f64,
     pub hp: i32,
 }
@@ -75,9 +76,10 @@ lazy_static! {
         ];
         let mut result = HashMap::default();
         for (name, glyph, speed, hp, attacks) in items {
+            let human = name == "Human";
             let glyph = Glyph::wdfg(glyph.0, glyph.1);
             let attacks = attacks.into_iter().map(&Attack::get).collect();
-            result.insert(name, Species { name, attacks, glyph, speed, hp });
+            result.insert(name, Species { name, attacks, glyph, human, speed, hp });
         }
         result
     };
