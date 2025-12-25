@@ -40,7 +40,7 @@ pub struct Threat {
 
     // Flags:
     pub asleep: bool,
-    pub player: bool,
+    pub human: bool,
     pub seen: bool,
 
     // Warnings:
@@ -66,7 +66,7 @@ impl Threat {
 
             // Flags:
             asleep: false,
-            player: false,
+            human: false,
             seen: false,
 
             // Warnings:
@@ -221,10 +221,10 @@ impl Threat {
         self.delta = other.delta;
 
         self.asleep = other.asleep;
-        self.player = other.player;
+        self.human = other.species.human;
         self.seen = true;
 
-        let (confidence, valence) = if other.player {
+        let (confidence, valence) = if self.human {
             (Confidence::Low, Valence::Neutral)
         } else if other.delta > 0 {
             let combat = other.time - self.combat < ACTIVE_THREAT_TIME;
@@ -356,7 +356,7 @@ impl ThreatState {
         }
 
         let strength = |x: &Threat| {
-            if x.player { 0. } else { 1.75f64.powi(x.delta.signum()) * x.hp }
+            if x.human { 0. } else { 1.75f64.powi(x.delta.signum()) * x.hp }
         };
         let mut hidden_count = max(hidden_hostile - seen_hostile, 0);
         let mut team_strength = me.hp_fraction();

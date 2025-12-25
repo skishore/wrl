@@ -1098,7 +1098,7 @@ fn ListPreyByScent(ctx: &mut Ctx) -> bool {
 
 #[allow(non_snake_case)]
 fn ListHumansByScent(ctx: &mut Ctx) -> bool {
-    ListTargetsByScent(ctx, |x| x.species.name == "Human")
+    ListTargetsByScent(ctx, |x| x.species.human)
 }
 
 #[allow(non_snake_case)]
