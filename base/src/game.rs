@@ -43,7 +43,7 @@ const UI_FLASH: i32 = 4;
 const UI_DAMAGE_FLASH: i32 = 6;
 const UI_DAMAGE_TICKS: i32 = 6;
 
-const SLOWED_TURNS: f64 = 2.;
+const SLOWED_TURNS: f64 = 1.5;
 
 pub const ATTACK_VOLUME: i32 = FOV_RADIUS_NPC;
 pub const CALL_VOLUME: i32 = FOV_RADIUS_NPC;
