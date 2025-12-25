@@ -75,7 +75,7 @@ impl Threat {
 
             // See status accessors:
             confidence: Confidence::Zero,
-            valence: Valence::Neutral,
+            valence: Valence::Hostile,
         }
     }
 
@@ -203,13 +203,13 @@ impl Threat {
         self.seen = true;
 
         let (confidence, valence) = if other.player {
-            (Confidence::Low, Valence::Neutral)
+            (Confidence::High, Valence::Hostile)
         } else if other.delta > 0 {
             let combat = other.time - self.combat < ACTIVE_THREAT_TIME;
             let valence = if combat { Valence::Hostile } else { Valence::Menacing };
             (Confidence::High, valence)
         } else if !me.predator && other.delta == 0 {
-            (Confidence::High, Valence::Friendly)
+            (Confidence::High, Valence::Neutral)
         } else {
             (Confidence::High, Valence::Neutral)
         };

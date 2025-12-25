@@ -1586,7 +1586,7 @@ fn EscapeFromThreats() -> impl Bhv {
 fn FightOrFlight() -> impl Bhv {
     util![
         "FightOrFlight",
-        (CallStrength, act!("CallForHelp", CallForHelp)),
+        //(CallStrength, act!("CallForHelp", CallForHelp)),
         (FightStrength, FightAgainstThreats()),
         (FlightStrength, EscapeFromThreats()),
     ]
@@ -1601,8 +1601,8 @@ fn Root() -> impl Bhv {
         FightOrFlight(),
         HuntForMeat(),
         LookForTarget(),
-        act!("WarnOffThreats", WarnOffThreats),
-        InvestigateNoises(),
+        //act!("WarnOffThreats", WarnOffThreats),
+        //InvestigateNoises(),
         InvestigateScents(),
         Wander(),
     ]
