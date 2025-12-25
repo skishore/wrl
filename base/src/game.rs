@@ -1068,6 +1068,9 @@ fn update_state(state: &mut State) {
 
 // State
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum GameMode { Play, Test }
+
 pub struct UpdateEnv {
     known: Box<Knowledge>,
     fov: FOV,
@@ -1086,7 +1089,7 @@ pub struct State {
 
 impl Default for State {
     fn default() -> Self {
-        Self::new(/*seed=*/None, /*full=*/false)
+        Self::new(/*seed=*/None, GameMode::Play)
     }
 }
 
@@ -1104,7 +1107,7 @@ impl DerefMut for State {
 }
 
 impl State {
-    pub fn new(seed: Option<u64>, test: bool) -> Self {
+    pub fn new(seed: Option<u64>, mode: GameMode) -> Self {
         let size = Point(WORLD_SIZE, WORLD_SIZE);
         let rng = seed.map(|x| RNG::seed_from_u64(x));
         let rng = rng.unwrap_or_else(|| RNG::from_os_rng());
@@ -1129,10 +1132,6 @@ impl State {
                 let p = Point(0, y);
                 if map.get(p) == 'R' { pos = p; }
             }
-            if test {
-                let wt = board.map.default.tile;
-                for &dir in &dirs::ALL { board.set_tile(pos + dir, wt); }
-            }
             if !board.get_tile(pos).blocks_movement() { break; }
         }
 
@@ -1140,6 +1139,11 @@ impl State {
         let (player, species) = (true, Species::get("Human"));
         let args = EntityArgs { pos, player, predator: false, species };
         let player = board.add_entity(&args, &mut env);
+
+        if mode == GameMode::Test {
+            board.map.entry_mut(pos).unwrap().eid = None;
+            board.entities[player].pos = Point(-9999, -9999);
+        }
 
         let pos = |board: &Board, rng: &mut RNG| {
             for _ in 0..100 {
@@ -1204,8 +1208,7 @@ mod tests {
     fn test_state_update() {
         let mut states = vec![];
         for i in 0..NUM_SEEDS {
-            let seed = Some(BASE_SEED + i);
-            states.push(State::new(seed, /*test=*/true));
+            states.push(State::new(Some(BASE_SEED + i), GameMode::Test));
         }
 
         for index in 0..(NUM_SEEDS * NUM_STEPS) {
@@ -1223,8 +1226,7 @@ mod tests {
         let mut index = 0;
         let mut states = vec![];
         for i in 0..NUM_SEEDS {
-            let seed = Some(BASE_SEED + i);
-            states.push(State::new(seed, /*test=*/true));
+            states.push(State::new(Some(BASE_SEED + i), GameMode::Test));
         }
 
         b.iter(|| {
