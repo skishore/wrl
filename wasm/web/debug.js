@@ -9,6 +9,7 @@ class DebugTrace {
     this.index = 0;
     this.ticks = [];
     this.entities = [];
+    this.aiOutput = [];
     this.lastIndex = -1;
     this.lastTicks = '';
     this.showAllEntities = true;
@@ -17,6 +18,7 @@ class DebugTrace {
 
     this.terminal = new Terminal();
     this.ui = {
+      aiOutput: document.getElementById('ai-trace'),
       checkbox: document.getElementById('show-all-entities'),
       entities: document.getElementById('entities'),
       map: document.getElementById('map'),
@@ -174,15 +176,35 @@ class DebugTrace {
       this.entities.push({eid, name, health, posX, posY, glyph0, glyph1});
     }
 
-    const elements = this.entities.map(x => {
+    const entityElements = this.entities.map(x => {
       const element = document.createElement('div');
       element.id = `entity-${x.eid}`;
-      element.innerHTML = `${x.name} - ${100 * x.health}%`;
+      element.textContent = `${x.name} - ${Math.max(Math.floor(100 * x.health), 1)}%`;
       element.classList.add('entity');
       if (x.eid === this.eid) element.classList.add('highlighted');
       return element;
     });
-    this.ui.entities.replaceChildren(...elements);
+    this.ui.entities.replaceChildren(...entityElements);
+
+    const numLines = reader.readInt();
+    this.aiOutput.length = 0;
+    for (let i = 0; i < numLines; i++) {
+      const color = reader.readInt();
+      const depth = reader.readInt();
+      const text = reader.readStr();
+      this.aiOutput.push({color, depth, text});
+    }
+
+    const traceElements = this.aiOutput.map(x => {
+      const element = document.createElement('div');
+      const color = x.color.toString(16);
+      const zeros = '0'.repeat(6 - color.length);
+      element.textContent = `${x.text}`;
+      element.classList.add('ai-trace-line');
+      element.style = `color: #${zeros}${color}; margin-left: ${12 * x.depth}px`;
+      return element;
+    });
+    this.ui.aiOutput.replaceChildren(...traceElements);
 
     const w = reader.readInt();
     const h = reader.readInt();

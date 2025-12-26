@@ -11,7 +11,7 @@ use crate::ai::{AIEnv, AIState};
 use crate::base::{Buffer, Color, Glyph};
 use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs, sample, weighted};
 use crate::dex::{Attack, Species};
-use crate::debug::DebugTrace;
+use crate::debug::DebugFile;
 use crate::effect::{CB, Effect, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
 use crate::knowledge::{Call, Knowledge, Scent, Sense, Timedelta, Timestamp};
@@ -1079,7 +1079,7 @@ fn update_state(state: &mut State) {
 pub enum GameMode { Play, Test, Debug }
 
 pub struct UpdateEnv {
-    debug: Option<Box<DebugTrace>>,
+    debug: Option<Box<DebugFile>>,
     known: Box<Knowledge>,
     fov: FOV,
     rng: RNG,
