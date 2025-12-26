@@ -10,6 +10,7 @@ use crate::ui::UI;
 //////////////////////////////////////////////////////////////////////////////
 
 pub struct DebugTrace {
+    dir: &'static str,
     file: BufWriter<File>,
     next_tick_index: usize,
 }
@@ -19,7 +20,7 @@ impl Default for DebugTrace {
         let dir = "wasm/debug";
         std::fs::create_dir_all(dir).unwrap();
         let file = BufWriter::new(File::create(format!("{}/ticks.txt", dir)).unwrap());
-        Self { file, next_tick_index: 0 }
+        Self { dir, file, next_tick_index: 0 }
     }
 }
 
@@ -36,7 +37,7 @@ impl DebugTrace {
         let eid = unsafe { std::mem::transmute::<EID, u64>(entity.eid) };
 
         write!(self.file, "{{")?;
-        write!(self.file, r#""time":"{:?}","#, board.time)?;
+        write!(self.file, r#""time":"{}","#, board.time.nsec())?;
         write!(self.file, r#""name":"{}","#, entity.species.name)?;
         write!(self.file, r#""eid":"{}","#, eid)?;
         write!(self.file, r#""health":{:.4},"#, hp_fraction)?;
@@ -46,7 +47,7 @@ impl DebugTrace {
     }
 
     fn try_record_tick(&mut self, entity: &Entity) -> Result<()> {
-        let filename = format!("debug/tick-{}.bin", self.next_tick_index);
+        let filename = format!("{}/tick-{}.bin", self.dir, self.next_tick_index);
         let mut file = BufWriter::new(File::create(filename).unwrap());
         self.next_tick_index += 1;
 
