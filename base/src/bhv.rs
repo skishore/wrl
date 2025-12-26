@@ -1,28 +1,6 @@
 use crate::ai::Ctx;
-use crate::base::Slice;
+use crate::debug::DebugLog;
 use crate::game::Action;
-
-//////////////////////////////////////////////////////////////////////////////
-
-// Debug
-
-pub struct Debug<'a, 'b> {
-    pub depth: usize,
-    pub slice: &'a mut Slice<'b>,
-    pub verbose: bool,
-}
-
-impl<'a, 'b> Debug<'a, 'b> {
-    fn append(&mut self, t: impl std::fmt::Display) {
-        self.slice.spaces(2 * self.depth).write_str(&format!("{}", t)).newline();
-    }
-
-    fn indent(&mut self, n: usize, f: impl Fn(&mut Debug) -> ()) {
-        self.depth += n;
-        f(self);
-        self.depth -= n;
-    }
-}
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -32,7 +10,7 @@ impl<'a, 'b> Debug<'a, 'b> {
 pub enum Result { Failed, Running, Success }
 
 pub trait Bhv {
-    fn debug(&self, _: &mut Debug) {}
+    fn debug(&self, _: &mut DebugLog) {}
     fn reset(&mut self, _: &mut Ctx) {}
     fn tick(&mut self, _: &mut Ctx) -> Result;
 }
@@ -78,7 +56,7 @@ impl<S: Label, T: Bhv> Node<S, T> {
 }
 
 impl<S: Label, T: Bhv> Bhv for Node<S, T> {
-    fn debug(&self, debug: &mut Debug) {
+    fn debug(&self, debug: &mut DebugLog) {
         let Some(x) = self.label.show() else {
             return self.tree.debug(debug);
         };
@@ -88,8 +66,8 @@ impl<S: Label, T: Bhv> Bhv for Node<S, T> {
             Some(Result::Success) => 0xe0ffc0,
             None                  => 0x545454,
         };
-        debug.slice.set_fg(Some(color.into()));
         debug.append(x);
+        if let Some(x) = debug.lines.last_mut() { x.color = color.into(); };
 
         if !debug.verbose && self.last.is_none() { return; }
 
@@ -116,7 +94,7 @@ impl<S: Label, T: Bhv> Bhv for Node<S, T> {
 pub struct OnExit<S, T>(S, T);
 
 impl<S: Fn(&mut Ctx) -> (), T: Bhv> Bhv for OnExit<S, T> {
-    fn debug(&self, debug: &mut Debug) { self.1.debug(debug) }
+    fn debug(&self, debug: &mut DebugLog) { self.1.debug(debug) }
     fn reset(&mut self, ctx: &mut Ctx) { self.1.reset(ctx); (self.0)(ctx) }
     fn tick(&mut self, ctx: &mut Ctx) -> Result {
         let result = self.1.tick(ctx);
@@ -128,7 +106,7 @@ impl<S: Fn(&mut Ctx) -> (), T: Bhv> Bhv for OnExit<S, T> {
 pub struct OnTick<S, T>(S, T);
 
 impl<S: Fn(&mut Ctx) -> (), T: Bhv> Bhv for OnTick<S, T> {
-    fn debug(&self, debug: &mut Debug) { self.1.debug(debug) }
+    fn debug(&self, debug: &mut DebugLog) { self.1.debug(debug) }
     fn reset(&mut self, ctx: &mut Ctx) { self.1.reset(ctx) }
     fn tick(&mut self, ctx: &mut Ctx) -> Result { (self.0)(ctx); self.1.tick(ctx) }
 }
@@ -136,7 +114,7 @@ impl<S: Fn(&mut Ctx) -> (), T: Bhv> Bhv for OnTick<S, T> {
 pub struct PostTick<S, T>(S, T);
 
 impl<S: Fn(&mut Ctx) -> (), T: Bhv> Bhv for PostTick<S, T> {
-    fn debug(&self, debug: &mut Debug) { self.1.debug(debug) }
+    fn debug(&self, debug: &mut DebugLog) { self.1.debug(debug) }
     fn reset(&mut self, ctx: &mut Ctx) { self.1.reset(ctx) }
     fn tick(&mut self, ctx: &mut Ctx) -> Result { let x = self.1.tick(ctx); (self.0)(ctx); x }
 }
@@ -203,7 +181,7 @@ impl<S: Fn(&mut Ctx) -> i64, T: Bhv> UtilityNode<S, T> {
 }
 
 impl<S: Fn(&mut Ctx) -> i64, T: Bhv> Bhv for UtilityNode<S, T> {
-    fn debug(&self, debug: &mut Debug) { self.1.debug(debug) }
+    fn debug(&self, debug: &mut DebugLog) { self.1.debug(debug) }
     fn reset(&mut self, ctx: &mut Ctx) { self.1.reset(ctx) }
     fn tick(&mut self, ctx: &mut Ctx) -> Result { self.1.tick(ctx) }
 }
@@ -223,28 +201,19 @@ impl Utility {
 }
 
 impl Bhv for Utility {
-    fn debug(&self, debug: &mut Debug) {
+    fn debug(&self, debug: &mut DebugLog) {
         if !debug.verbose && self.1.iter().all(|x| x.0 < 0) { return; }
 
         for (i, x) in self.0.iter().enumerate() {
-            let mut cursor = debug.slice.get_cursor();
+            let index = debug.lines.len();
             x.debug(debug);
-
-            let mut last = None;
-            while cursor.0 < debug.slice.size().0 {
-                let glyph = debug.slice.get(cursor);
-                if glyph.ch().0 != ' ' as u16 { last = Some((cursor, glyph)); }
-                cursor.0 += 1;
-            }
-            let Some(last) = last else { continue };
 
             let mut value = -1;
             for &(utility, j) in &self.1 { if j == i { value = utility; } }
-            let cursor = debug.slice.get_cursor();
-            debug.slice.set_cursor(last.0 + crate::base::Point(2, 0));
-            debug.slice.set_fg(Some(last.1.fg()));
-            debug.slice.write_str(&format!("[{}]", value));
-            debug.slice.set_cursor(cursor);
+
+            if let Some(x) = debug.lines.get_mut(index) {
+                x.text = format!("{} [{}]", x.text, value);
+            }
         }
     }
 
@@ -310,7 +279,7 @@ impl<S, T, U> Composite<S, T, U> {
 }
 
 impl<S: Policy, T: Bhv, U: Bhv> Bhv for Composite<S, T, U> {
-    fn debug(&self, debug: &mut Debug) {
+    fn debug(&self, debug: &mut DebugLog) {
         self.lhs.debug(debug);
         self.rhs.debug(debug);
     }

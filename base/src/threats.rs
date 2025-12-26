@@ -1,9 +1,9 @@
 use std::cmp::max;
-use std::fmt::Debug;
 
 use rand::Rng;
 
-use crate::base::{HashMap, Point, RNG, Slice};
+use crate::base::{HashMap, Point, RNG};
+use crate::debug::DebugLog;
 use crate::entity::{Entity, EID};
 use crate::knowledge::{AttackEvent, CallEvent, Event, EventData};
 use crate::knowledge::{Call, EntityKnowledge, Sense, Timedelta, Timestamp, UID};
@@ -79,15 +79,17 @@ impl Threat {
         }
     }
 
-    pub fn debug(&self, slice: &mut Slice, time: Timestamp) {
-        slice.write_str("Threat:").newline();
-        slice.write_str(&format!("  age: {:?}", time - self.time)).newline();
-        slice.write_str(&format!("  pos: {:?}", self.pos)).newline();
-        slice.write_str(&format!("  sense: {:?}", self.sense)).newline();
-        slice.write_str(&format!("  combat: {:?}", time - self.combat)).newline();
-        slice.write_str(&format!("  status: {:?}:{:?}", self.confidence, self.valence)).newline();
-        slice.write_str(&format!("  warnings: {}", self.warnings)).newline();
-        slice.newline();
+    pub fn debug(&self, debug: &mut DebugLog, time: Timestamp) {
+        debug.append("Threat:");
+        debug.indent(1, |debug| {
+            debug.append(format!("age: {:?}", time - self.time));
+            debug.append(format!("pos: {:?}", self.pos));
+            debug.append(format!("sense: {:?}", self.sense));
+            debug.append(format!("combat: {:?}", time - self.combat));
+            debug.append(format!("status: {:?}:{:?}", self.confidence, self.valence));
+            debug.append(format!("warnings: {}", self.warnings));
+        });
+        debug.newline();
     }
 
     // Status accessors:
@@ -270,14 +272,16 @@ pub struct ThreatState {
 }
 
 impl ThreatState {
-    pub fn debug(&self, slice: &mut Slice, time: Timestamp) {
-        slice.write_str("ThreatState:").newline();
-        slice.write_str(&format!("  state: {:?}", self.state)).newline();
-        slice.write_str(&format!("  called: {:?}", time - self.called)).newline();
-        slice.write_str(&format!("  call_for_help: {}", self.call_for_help)).newline();
+    pub fn debug(&self, debug: &mut DebugLog, time: Timestamp) {
+        debug.append("ThreatState:");
+        debug.indent(1, |debug| {
+            debug.append(format!("state: {:?}", self.state));
+            debug.append(format!("called: {:?}", time - self.called));
+            debug.append(format!("call_for_help: {}", self.call_for_help));
+        });
+        debug.newline();
 
-        slice.newline();
-        for threat in &self.threats { threat.debug(slice, time); }
+        for threat in &self.threats { threat.debug(debug, time); }
     }
 
     pub fn on_call_for_help(&mut self, point: Point, time: Timestamp) {
