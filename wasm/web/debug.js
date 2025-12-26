@@ -1,4 +1,4 @@
-import {Terminal} from './lib.js';
+import {Reader, Terminal} from './lib.js';
 
 class DebugTrace {
   constructor() {
@@ -8,31 +8,93 @@ class DebugTrace {
     this.eid = '';
     this.index = 0;
     this.ticks = [];
+    this.entities = [];
     this.lastIndex = -1;
     this.lastTicks = '';
+    this.showAllEntities = true;
 
     this.reloading = false;
 
     this.terminal = new Terminal();
-    this.timeline = document.getElementById('timeline');
+    this.ui = {
+      checkbox: document.getElementById('show-all-entities'),
+      entities: document.getElementById('entities'),
+      map: document.getElementById('map'),
+      timeline: document.getElementById('timeline'),
+      view: document.getElementById('view'),
+    };
+
+    window.onkeydown = this.onkeydown.bind(this);
+    window.onmousedown = this.onmousedown.bind(this);
+    window.onmousemove = this.onmousemove.bind(this);
+
+    this.ui.checkbox.onchange = this.onShowAllEntitiesChange.bind(this);
+    this.ui.checkbox.checked = this.showAllEntities;
   }
 
-  onkeydown(e) {
-    const code = e.key.length === 1 ? e.key.charCodeAt(0) : e.keyCode;
-    const options = this.ticks.map((x, i) => [x, i]).filter(x => x[0].eid === this.eid);
-    const prev = options.findIndex(x => x[1] === this.index);
-    if (prev < 0) return;
+  onShowAllEntitiesChange() {
+    this.showAllEntities = this.ui.checkbox.checked;
+    this.lastIndex = -1;
+  }
 
-    const next = e.key === 'j' ? prev + 1 : e.key === 'k' ? prev - 1 : -1;
+  onkeydown(keyEvent) {
+    const key = keyEvent.key;
+    const code = key.length === 1 ? key.charCodeAt(0) : keyEvent.keyCode;
+
+    if (key === 's') {
+      this.ui.checkbox.checked = !this.ui.checkbox.checked;
+      this.onShowAllEntitiesChange();
+      return;
+    }
+
+    const options = this.ticks.map((x, i) => [x, i]).filter(x => x[0].eid === this.eid);
+    if (options.length === 0) return;
+
+    const existing = options.findIndex(x => x[1] === this.index);
+    const prev = existing < 0 ? 0 : existing;
+
+    const next = key === 'j' ? prev + 1 : key === 'k' ? prev - 1 : -1;
     if (next < 0 || next >= options.length) return;
 
-    this.timeline.children[prev].classList.remove('highlighted');
-    this.timeline.children[next].classList.add('highlighted');
+    this.ui.timeline.children[prev].classList.remove('highlighted');
+    this.ui.timeline.children[next].classList.add('highlighted');
     this.index = options[next][1];
+  }
+
+
+  onmousedown(mouseEvent) {
+    const eid = this.getEID(mouseEvent);
+    if (eid === null) return;
+
+    this.eid = eid;
+    this.lastIndex = -1;
+    this.lastTicks = '';
+  }
+
+  onmousemove(mouseEvent) {
+    const eid = this.getEID(mouseEvent);
+    const id = eid ? `entity-${eid}` : '';
+
+    for (const entity of this.entities) {
+      for (const element of this.ui.entities.children) {
+        if (element.id !== id) element.classList.remove('mouseover');
+        if (element.id === id) element.classList.add('mouseover');
+      }
+    }
+  }
+
+  getEID(mouseEvent) {
+    const skip = mouseEvent.target !== this.terminal.app.canvas;
+    const x = skip ? -1 : Math.floor(mouseEvent.layerX / (2 * this.terminal.unitX));
+    const y = skip ? -1 : Math.floor(mouseEvent.layerY / this.terminal.unitY);
+
+    const entity = this.entities.filter(e => e.posX === x && e.posY === y)[0];
+    return entity ? entity.eid : null;
   }
 
   async init() {
     await this.terminal.init(2 * this.mapX, this.mapY);
+    this.ui.map.appendChild(this.terminal.app.canvas);
     this.terminal.app.ticker.add(async () => { await this.reload(); });
   }
 
@@ -61,8 +123,14 @@ class DebugTrace {
     this.index = Math.max(0, Math.min(this.index, this.ticks.length - 1));
     if (this.ticks.length === 0) return;
 
-    const existing = this.ticks.some(x => x.eid === this.eid);
-    if (!existing) this.eid = this.ticks[this.index].eid;
+    const options = this.ticks.map((x, i) => [x, i]).filter(x => x[0].eid === this.eid);
+    if (options.length === 0) {
+      this.eid = this.ticks[this.index].eid;
+    } else {
+      let best = options.filter(x => x[1] >= this.index)[0];
+      best = best ? best : options[options.length - 1];
+      this.index = best[1];
+    }
 
     const min = BigInt(this.ticks[0].time);
     const max = BigInt(this.ticks[this.ticks.length - 1].time);
@@ -81,20 +149,56 @@ class DebugTrace {
       if (i === this.index) element.classList.add('highlighted');
       return element;
     });
-    this.timeline.replaceChildren(...elements.filter(x => !!x));
+    this.ui.timeline.replaceChildren(...elements.filter(x => !!x));
   }
 
   async reloadView() {
     if (this.index === this.lastIndex) return;
 
     this.lastIndex = this.index;
-    const response = await fetch(`debug/tick-${this.index}.bin`);
-    const data = await response.arrayBuffer();
-    const view = new DataView(data, 8);
+    const response = await fetch(`debug/tick-${this.index}.bin.gz`);
+    const inflated = new Response(response.body.pipeThrough(new DecompressionStream('gzip')));
+    const data = await inflated.arrayBuffer();
+    const reader = new Reader(data);
+
+    const numEntities = reader.readInt();
+    this.entities.length = 0;
+    for (let i = 0; i < numEntities; i++) {
+      const eid = reader.readStr();
+      const name = reader.readStr();
+      const health = reader.readDbl();
+      const posX = reader.readInt();
+      const posY = reader.readInt();
+      const glyph0 = reader.readInt();
+      const glyph1 = reader.readInt();
+      this.entities.push({eid, name, health, posX, posY, glyph0, glyph1});
+    }
+
+    const elements = this.entities.map(x => {
+      const element = document.createElement('div');
+      element.id = `entity-${x.eid}`;
+      element.innerHTML = `${x.name} - ${100 * x.health}%`;
+      element.classList.add('entity');
+      if (x.eid === this.eid) element.classList.add('highlighted');
+      return element;
+    });
+    this.ui.entities.replaceChildren(...elements);
+
+    const w = reader.readInt();
+    const h = reader.readInt();
+    if (w !== this.mapX || h !== this.mapY) {
+      throw Error(`Expected: ${this.mapX} x ${this.mapY} map; got: ${w} x ${h}`);
+    }
 
     for (let y = 0; y < this.mapY; y++) {
       for (let x = 0; x < this.mapX; x++) {
-        this.terminal.draw(2 * x, y, view, 8 * (x + y * this.mapX));
+        this.terminal.draw(2 * x, y, reader);
+      }
+    }
+    if (this.showAllEntities) {
+      for (const entity of this.entities) {
+        const {posX, posY, glyph0, glyph1} = entity;
+        this.terminal.drawGlyph(2 * posX, posY, glyph0, glyph1);
       }
     }
   }
@@ -103,7 +207,6 @@ class DebugTrace {
 const main = async () => {
   const debug = new DebugTrace();
   await debug.init();
-  window.onkeydown = debug.onkeydown.bind(debug);
 };
 
 main();

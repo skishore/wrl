@@ -92,8 +92,44 @@ const fontTexture = (image) => {
   return PIXI.Texture.from(canvas);
 };
 
+class Reader {
+  constructor(buffer, offset = 0) {
+    this.view = new DataView(buffer, offset);
+    this.decoder = new TextDecoder('utf-8');
+    this.offset = 0;
+  }
+
+  consume(size) {
+    this.offset += size;
+  }
+
+  readDbl() {
+    const result = this.view.getFloat64(this.offset, /*littleEndian=*/true);
+    this.offset += 8;
+    return result;
+  }
+
+  readInt() {
+    const result = this.view.getInt32(this.offset, /*littleEndian=*/true);
+    this.offset += 4;
+    return result;
+  }
+
+  readStr() {
+    let [source, target] = [this.offset, this.offset];
+    while (this.view.getUint8(target) !== 0) target++;
+    const offset = this.view.byteOffset;
+    const substr = this.view.buffer.slice(source + offset, target + offset);
+    const result = this.decoder.decode(substr);
+    this.offset = target + 1;
+    return result;
+  }
+};
+
 class Terminal {
   constructor() {
+    this.unitX = 8;
+    this.unitY = 16;
     this.viewX = 0;
     this.viewY = 0;
 
@@ -121,8 +157,8 @@ class Terminal {
 
   // Load fonts and initialize a PIXI container.
   async init(viewX, viewY) {
-    const unitX = 8;
-    const unitY = 16;
+    const unitX = this.unitX;
+    const unitY = this.unitY;
     this.viewX = viewX;
     this.viewY = viewY;
 
@@ -136,8 +172,6 @@ class Terminal {
     await this.app.init({width: unitX * viewX, height: unitY * viewY})
     this.app.renderer.background.color = 0;
     this.app.canvas.classList.add('terminal');
-
-    document.body.appendChild(this.app.canvas);
 
     const frame = (source, x, y) => {
       const frame = new PIXI.Rectangle(x * unitX, y * unitY, unitX, unitY);
@@ -171,11 +205,15 @@ class Terminal {
   }
 
   // Returns the width of the characters drawn at the offset.
-  draw(x, y, view, offset) {
+  draw(x, y, reader) {
+    const glyph0 = reader.readInt();
+    const glyph1 = reader.readInt();
+    return this.drawGlyph(x, y, glyph0, glyph1);
+  }
+
+  drawGlyph(x, y, glyph0, glyph1) {
     const spriteIndex = x + y * this.viewX;
     const cell = this.map[spriteIndex];
-    const glyph0 = view.getInt32(offset, true);
-    const glyph1 = view.getInt32(offset + 4, true);
     const fg = ((glyph0 >> 16) & 0xffff) | ((glyph1 & 0xff) << 16);
     const bg = (glyph1 >> 8) & 0xffffff;
 
@@ -199,4 +237,4 @@ class Terminal {
   }
 };
 
-export {Terminal};
+export {Reader, Terminal};

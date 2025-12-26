@@ -16,13 +16,72 @@
     }
 
     canvas.terminal {
-      background-color: black;
-      padding: 16px;
+      display: block;
+      margin: 16px;
+      position: relative;
+    }
 
+    div#view {
+      align-items: stretch;
+      background-color: black;
+      display: flex;
+      font: 16px monospace;
       position: absolute;
       transform: translate(-50%, -50%) translateY(-16px) scale(0.75);
       left: 50%;
       top: 50%;
+    }
+
+    div#view #sidebar {
+      background-color: #ccc;
+      overflow: hidden;
+      position: relative;
+      width: 512px;
+    }
+
+    div#view #controls {
+      background-color: #ccc;
+      border-top: 1px solid black;
+      inset: 1248px 0 0 0;
+      padding: 16px;
+      position: absolute;
+    }
+
+    div#view #controls input {
+      margin: 8px 16px;
+    }
+
+    div#view #controls label {
+      user-select: none;
+    }
+
+    div#view #entities {
+      overflow-y: scroll;
+      height: 1232px;
+      padding: 8px 0;
+    }
+
+    div#view #entities > .entity {
+      background-color: white;
+      border: 1px solid black;
+      border-radius: 4px;
+      margin: 8px 16px;
+      padding: 8px 16px;
+    }
+
+    div#view #entities > .entity.highlighted {
+      background-color: blue;
+      color: white;
+    }
+
+    div#view #entities > .entity.mouseover {
+      background-color: yellow;
+      color: black;
+    }
+
+    div#view #entities > .entity:hover {
+      background-color: yellow;
+      color: black;
     }
 
     div#timeline {
@@ -40,7 +99,7 @@
     }
 
     div#timeline > .tick.highlighted {
-      border-left: 2px solid red;
+      border-left: 4px solid blue;
       position: absolute;
       height: 24px;
       top: -10px;
@@ -48,5 +107,15 @@
   </style>
 </head>
 <body>
+  <div id="view">
+    <div id="sidebar">
+      <div id="entities"></div>
+      <div id="controls">
+        <div>Controls</div>
+        <label><input type="checkbox" id="show-all-entities" checked="1" />Show all entities</label>
+      </div>
+    </div>
+    <div id="map"></div>
+  </div>
   <div id="timeline"></div>
 </body>
