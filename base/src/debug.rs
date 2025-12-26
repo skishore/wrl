@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io::{BufWriter, Result, Write};
 use std::process::Command;
 
-use crate::base::{Glyph, Matrix, Point};
+use crate::base::{Color, Glyph, Matrix, Point};
 use crate::entity::{EID, Entity};
 use crate::game::{WORLD_SIZE, Action, Board};
 use crate::ui::UI;
@@ -16,14 +16,48 @@ fn show(eid: EID) -> u64 {
 
 //////////////////////////////////////////////////////////////////////////////
 
-pub struct DebugTrace {
+// DebugLog
+
+pub struct DebugLine {
+    pub color: Color,
+    pub depth: i32,
+    pub text: String,
+}
+
+pub struct DebugLog {
+    pub depth: usize,
+    pub lines: Vec<DebugLine>,
+    pub verbose: bool,
+}
+
+impl DebugLog {
+    pub fn append(&mut self, t: impl std::fmt::Display) {
+        let color = Color::white();
+        let depth = self.depth as i32;
+        self.lines.push(DebugLine { color, depth, text: format!("{}", t) });
+    }
+
+    pub fn indent(&mut self, n: usize, f: impl Fn(&mut DebugLog) -> ()) {
+        self.depth += n;
+        f(self);
+        self.depth -= n;
+    }
+
+    pub fn newline(&mut self) { self.append(""); }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// DebugFile
+
+pub struct DebugFile {
     dir: &'static str,
     file: BufWriter<File>,
     map: Matrix<Glyph>,
     next_tick_index: usize,
 }
 
-impl Default for DebugTrace {
+impl Default for DebugFile {
     fn default() -> Self {
         let dir = "wasm/debug";
         std::fs::remove_dir_all(dir).unwrap();
@@ -34,7 +68,7 @@ impl Default for DebugTrace {
     }
 }
 
-impl DebugTrace {
+impl DebugFile {
     pub fn record(&mut self, action: &Action, board: &Board, me: &Entity) {
         self.record_one(action, board, me).unwrap();
     }
@@ -49,13 +83,14 @@ impl DebugTrace {
         self.file.flush()
     }
 
-    fn record_tick(&mut self, _: &Action, board: &Board, me: &Entity) -> Result<()> {
+    fn record_tick(&mut self, action: &Action, board: &Board, me: &Entity) -> Result<()> {
         let filename = format!("{}/tick-{}.bin", self.dir, self.next_tick_index);
         let mut file = BufWriter::new(File::create(&filename).unwrap());
         self.next_tick_index += 1;
 
+        // Dump binary data revealing all of the entities.
         let entities: Vec<_> = board.entities.iter().collect();
-        file.write_all(&(entities.len() as i32).to_le_bytes())?;
+        Self::write_bin(&mut file, &(entities.len() as i32))?;
 
         for &(eid, entity) in &entities {
             let Entity { cur_hp, max_hp, .. } = *entity;
@@ -71,11 +106,34 @@ impl DebugTrace {
             Self::write_bin(&mut file, &glyph)?;
         };
 
+        // Dump text debug output from behavior trees.
+        let color = Color::white();
+        let mut lines = me.ai.get_trace();
+        lines.insert(0, DebugLine { color, depth: 0, text: "".into() });
+        lines.insert(0, DebugLine { color, depth: 0, text: format!("{:?}", action) });
+        Self::write_bin(&mut file, &(lines.len() as i32))?;
+
+        for line in &lines {
+            Self::write_bin(&mut file, &line.color)?;
+            Self::write_bin(&mut file, &line.depth)?;
+            Self::write_str(&mut file, &line.text)?;
+        }
+
+        // Anything we scribble on the map shows up in the debug UI.
         for y in 0..self.map.size.1 {
             for x in 0..self.map.size.0 {
                 let glyph = UI::render_tile(&me.known, Point(x, y));
                 self.map.set(Point(x, y), glyph);
             }
+        }
+        for &p in me.ai.get_path() {
+            if p == me.pos { continue; }
+            let mut glyph = self.map.get(p);
+            if glyph.ch() == Glyph::wide(' ').ch() { glyph = Glyph::wide('.'); }
+            self.map.set(p, glyph.with_fg(0xff0000));
+        }
+        if let Some(&p) = me.ai.get_path().last() {
+            self.map.set(p, self.map.get(p).with_fg(Color::black()).with_bg(0xff0000));
         }
         Self::write_bin(&mut file, &self.map.size)?;
         Self::write_array(&mut file, self.map.data.as_slice())?;

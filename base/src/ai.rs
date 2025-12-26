@@ -7,8 +7,9 @@ use rand_distr::{Distribution, Normal};
 use rand_distr::num_traits::Pow;
 
 use crate::{act, cb, cond, pri, run, seq, util};
-use crate::base::{LOS, Point, RNG, Slice, dirs, sample, weighted};
-use crate::bhv::{Bhv, Debug, Result};
+use crate::base::{LOS, Point, RNG, dirs, sample, weighted};
+use crate::bhv::{Bhv, Result};
+use crate::debug::{DebugLine, DebugLog};
 use crate::entity::Entity;
 use crate::game::{FOV_RADIUS_NPC, CALL_VOLUME, MOVE_VOLUME, Item, move_ready};
 use crate::game::{Action, AttackAction, CallAction, EatAction, MoveAction};
@@ -133,49 +134,48 @@ impl Blackboard {
         }
     }
 
-    fn debug(&self, slice: &mut Slice) {
-        slice.write_str("Blackboard:").newline();
-        slice.write_str(&format!("  finding_food_: {}", self.finding_food_)).newline();
-        slice.write_str(&format!("  finding_water: {}", self.finding_water)).newline();
-        slice.write_str(&format!(
-                "  till_assess: {} / {}", self.till_assess, MAX_ASSESS)).newline();
-        slice.write_str(&format!(
-                "  till_hunger: {} / {}{}", self.till_hunger, MAX_HUNGER,
-                if self.hunger { " (hungry)" } else { "" })).newline();
-        slice.write_str(&format!(
-                "  till_thirst: {} / {}{}", self.till_thirst, MAX_THIRST,
-                if self.thirst { " (thirsty)" } else { "" })).newline();
-        slice.write_str(&format!(
-                "  till_weary_: {} / {}{}", self.till_weary_, MAX_WEARY_,
-                if self.weary_ { " (weary)" } else { "" })).newline();
-        slice.write_str(&format!(
-                "  dirs: {:?} ({} items)", self.dirs.kind, self.dirs.dirs.len())).newline();
-        slice.write_str(&format!("  path: {:?}", self.path.kind)).newline();
-        slice.newline();
+    fn debug(&self, debug: &mut DebugLog) {
+        debug.append("Blackboard:");
+        debug.indent(1, |debug| {
+            debug.append(format!("finding_food_: {}", self.finding_food_));
+            debug.append(format!("finding_water: {}", self.finding_water));
+            debug.append(format!("till_assess: {} / {}", self.till_assess, MAX_ASSESS));
+            debug.append(format!("till_hunger: {} / {}{}", self.till_hunger, MAX_HUNGER,
+                                 if self.hunger { " (hungry)" } else { "" }));
+            debug.append(format!("till_thirst: {} / {}{}", self.till_thirst, MAX_THIRST,
+                                 if self.thirst { " (thirsty)" } else { "" }));
+            debug.append(format!("till_weary_: {} / {}{}", self.till_weary_, MAX_WEARY_,
+                                 if self.weary_ { " (weary)" } else { "" }));
+            debug.append(format!("dirs: {:?} ({} items)",
+                                 self.dirs.kind, self.dirs.dirs.len()));
+            debug.append(format!("path: {:?}", self.path.kind));
+            debug.newline();
+        });
 
         if let Some(x) = &self.flight {
-            slice.write_str("Flight:").newline();
-            slice.write_str(&format!("  needs_path: {}", x.needs_path)).newline();
-            slice.write_str(&format!("  since_seen: {}", x.since_seen)).newline();
-            slice.write_str(&format!("  turn_limit: {}", x.turn_limit)).newline();
-            slice.newline();
+            debug.append("Flight:");
+            debug.indent(1, |debug| {
+                debug.append(format!("needs_path: {}", x.needs_path));
+                debug.append(format!("since_seen: {}", x.since_seen));
+                debug.append(format!("turn_limit: {}", x.turn_limit));
+            });
+            debug.newline();
         }
 
         if let Some(x) = &self.target {
-            slice.write_str("Target:").newline();
-            slice.write_str(&format!("  bias: {:?}", x.bias)).newline();
-            slice.write_str(&format!("  fresh: {}", x.fresh)).newline();
-            slice.write_str(&format!("  steps: {}", x.steps)).newline();
-            slice.write_str(&format!(
-                    "  target.age: {:?}", self.turn_time - x.target.time)).newline();
-            slice.write_str(&format!(
-                    "  target.last: {:?}", x.target.last)).newline();
-            slice.write_str(&format!(
-                    "  target.sense: {:?}", x.target.sense)).newline();
-            slice.newline();
+            debug.append("Target:");
+            debug.indent(1, |debug| {
+                debug.append(format!("bias: {:?}", x.bias));
+                debug.append(format!("fresh: {}", x.fresh));
+                debug.append(format!("steps: {}", x.steps));
+                debug.append(format!("target.age: {:?}", self.turn_time - x.target.time));
+                debug.append(format!("target.last: {:?}", x.target.last));
+                debug.append(format!("target.sense: {:?}", x.target.sense));
+            });
+            debug.newline();
         }
 
-        self.threats.debug(slice, self.turn_time);
+        self.threats.debug(debug, self.turn_time);
     }
 }
 
@@ -1645,11 +1645,12 @@ impl AIState {
         &self.blackboard.path.path
     }
 
-    pub fn debug(&self, slice: &mut Slice) {
-        let mut debug = Debug { depth: 0, slice, verbose: false };
+    pub fn get_trace(&self) -> Vec<DebugLine> {
+        let mut debug = DebugLog { depth: 0, lines: vec![], verbose: false };
         self.tree.debug(&mut debug);
-        slice.newline();
-        self.blackboard.debug(slice);
+        debug.newline();
+        self.blackboard.debug(&mut debug);
+        debug.lines
     }
 
     pub fn plan(&mut self, entity: &Entity, env: AIEnv) -> Action {

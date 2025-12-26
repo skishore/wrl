@@ -32,11 +32,29 @@
       top: 50%;
     }
 
-    div#view #sidebar {
+    div#view .sidebar {
       background-color: #ccc;
       overflow: hidden;
       position: relative;
       width: 512px;
+    }
+
+    div#view .sidebar:has(#ai-trace) {
+      width: 768px;
+    }
+
+    div#view #ai-trace {
+      background-color: black;
+      border-left: 1px solid white;
+      inset: 0;
+      overflow-y: scroll;
+      padding: 16px;
+      position: absolute;
+      width: 768;
+    }
+
+    div#view #ai-trace .ai-trace-line {
+      min-height: 1em;
     }
 
     div#view #controls {
@@ -108,7 +126,7 @@
 </head>
 <body>
   <div id="view">
-    <div id="sidebar">
+    <div class="sidebar">
       <div id="entities"></div>
       <div id="controls">
         <div>Controls</div>
@@ -116,6 +134,9 @@
       </div>
     </div>
     <div id="map"></div>
+    <div class="sidebar">
+      <div id="ai-trace"></div>
+    </div>
   </div>
   <div id="timeline"></div>
 </body>
