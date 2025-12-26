@@ -1,5 +1,3 @@
-import init, {keydown, size, tick} from '../pkg/wrl_wasm.js';
-
 const loadImage = async (uri) => new Promise((resolve, reject) => {
   const img = new Image();
   const canvas = document.createElement('canvas');
@@ -96,8 +94,6 @@ const fontTexture = (image) => {
 
 class Terminal {
   constructor() {
-    this.unitX = 8;
-    this.unitY = 16;
     this.viewX = 0;
     this.viewY = 0;
 
@@ -125,6 +121,8 @@ class Terminal {
 
   // Load fonts and initialize a PIXI container.
   async init(viewX, viewY) {
+    const unitX = 8;
+    const unitY = 16;
     this.viewX = viewX;
     this.viewY = viewY;
 
@@ -135,7 +133,7 @@ class Terminal {
     aquarius = upscaleAndCenterFont(aquarius, aquarius.width / 16);
 
     this.app = new PIXI.Application();
-    this.app.init({width: this.unitX * viewX, height: this.unitY * viewY})
+    await this.app.init({width: unitX * viewX, height: unitY * viewY})
     this.app.renderer.background.color = 0;
     this.app.canvas.classList.add('terminal');
 
@@ -146,12 +144,12 @@ class Terminal {
       return new PIXI.Texture({source, frame});
     };
 
-    aquariusFont = fontTexture(aquarius);
+    const aquariusFont = fontTexture(aquarius);
     for (let i = 0; i < 512; i++) {
       this.aquariusFrames.push(frame(aquariusFont, i & 0x1f, i >> 5));
     }
 
-    unifontFont = fontTexture(unifont);
+    const unifontFont = fontTexture(unifont);
     for (let i = 0; i < 256; i++) {
       this.unifontFrames.push(frame(unifontFont, i & 0xf, i >> 4));
     }
@@ -160,10 +158,10 @@ class Terminal {
       for (let x = 0; x < viewX; x++) {
         const items = [];
         for (let i = 0; i < 2; i++) {
-          const sprite = new PIXI.Sprite(aquariusFrames[0]);
+          const sprite = new PIXI.Sprite(this.aquariusFrames[0]);
+          this.app.stage.addChild(sprite);
           sprite.x = unitX * x;
           sprite.y = unitY * y;
-          app.stage.addChild(sprite);
           items.push(sprite);
         }
         const [bg, fg] = items;
@@ -175,7 +173,7 @@ class Terminal {
   // Returns the width of the characters drawn at the offset.
   draw(x, y, view, offset) {
     const spriteIndex = x + y * this.viewX;
-    const cell = map[spriteIndex];
+    const cell = this.map[spriteIndex];
     const glyph0 = view.getInt32(offset, true);
     const glyph1 = view.getInt32(offset + 4, true);
     const fg = ((glyph0 >> 16) & 0xffff) | ((glyph1 & 0xff) << 16);
@@ -185,15 +183,15 @@ class Terminal {
     code = this.boxDrawingMap.get(code) ?? code;
 
     if (code <= 0xff) {
-      cell.fg.texture = unifontFrames[code];
+      cell.fg.texture = this.unifontFrames[code];
       cell.fg.tint = fg;
       cell.bg.tint = bg;
       return 1;
     } else if (code >= 0xff00) {
       const wide = code - 0xff00 + 0x20;
-      const next = map[spriteIndex + 1];
-      cell.fg.texture = aquariusFrames[2 * wide + 0];
-      next.fg.texture = aquariusFrames[2 * wide + 1];
+      const next = this.map[spriteIndex + 1];
+      cell.fg.texture = this.aquariusFrames[2 * wide + 0];
+      next.fg.texture = this.aquariusFrames[2 * wide + 1];
       cell.fg.tint = next.fg.tint = fg;
       cell.bg.tint = next.bg.tint = bg;
       return 2;
@@ -202,32 +200,3 @@ class Terminal {
 };
 
 export {Terminal};
-
-const main = async () => {
-  const wasm = await init();
-  const [viewX, viewY] = size();
-  const terminal = new Terminal();
-  await terminal.init(viewX, viewY);
-
-  window.wasmCallbacks = {
-    render: (ptr, sx, sy) => {
-      const view = new DataView(wasm.memory.buffer, ptr);
-      for (let y = 0; y < viewY; y++) {
-        for (let x = 0; x < viewX; x++) {
-          const width = terminal.draw(x, y, view, 8 * (x + y * sx));
-          x += width - 1;
-        }
-      }
-    },
-  };
-  window.onkeydown = x => {
-    const code = x.key.length === 1 ? x.key.charCodeAt(0) : x.keyCode;
-    keydown(code, x.shiftKey);
-    if (x.keyCode !== 9) return;
-    x.preventDefault();
-    x.stopPropagation();
-  }
-  app.ticker.add(() => { tick(); });
-};
-
-main();
