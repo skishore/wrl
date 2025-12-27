@@ -303,7 +303,8 @@ impl Board {
             return false;
         }
         self.time = self.time.bump();
-        self._effect.frames.remove(0);
+        let frame = self._effect.frames.remove(0);
+        env.debug.as_mut().map(|x| x.record_frame(self.time, &frame));
         self._effect.events.iter_mut().for_each(|x| x.update_frame(|y| y - 1));
         self._execute_effect_callbacks(env);
         true

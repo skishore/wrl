@@ -124,6 +124,14 @@ class Reader {
     this.offset = target + 1;
     return result;
   }
+
+  readParticle() {
+    const posX = this.readInt();
+    const posY = this.readInt();
+    const glyph0 = this.readInt();
+    const glyph1 = this.readInt();
+    return {posX, posY, glyph1, glyph0};
+  }
 };
 
 class Terminal {
