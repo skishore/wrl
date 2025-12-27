@@ -46,8 +46,9 @@ const HUNGER_GAIN: RangeInclusive<i32> = (MAX_HUNGER / 4)..=(MAX_HUNGER / 2);
 const THIRST_GAIN: RangeInclusive<i32> = (MAX_THIRST / 4)..=(MAX_THIRST / 2);
 const RESTED_GAIN: RangeInclusive<i32> = 1..=2;
 
+// TODO: It'd be clearer and simpler to express all limits in turns...
 const WARNING_LIMIT: Timedelta = Timedelta::from_seconds(16.);
-const WARNING_RETRY: Timedelta = Timedelta::from_seconds(2.);
+const WARNING_RETRY: Timedelta = Timedelta::from_seconds(1.5);
 
 const MIN_SEARCH_TIME: Timedelta = Timedelta::from_seconds(24.);
 const MAX_SEARCH_TIME: Timedelta = Timedelta::from_seconds(48.);
@@ -137,6 +138,8 @@ impl Blackboard {
     fn debug(&self, debug: &mut DebugLog) {
         debug.append("Blackboard:");
         debug.indent(1, |debug| {
+            debug.append(format!("prev_turn: {:?}", self.turn_time - self.prev_time));
+            debug.append(format!("last_warning: {:?}", self.turn_time - self.last_warning));
             debug.append(format!("finding_food_: {}", self.finding_food_));
             debug.append(format!("finding_water: {}", self.finding_water));
             debug.append(format!("till_assess: {} / {}", self.till_assess, MAX_ASSESS));
