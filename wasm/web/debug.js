@@ -5,8 +5,12 @@ class DebugTrace {
     this.mapX = 100;
     this.mapY = 100;
 
+    this.map = [];
+    const w = this.mapX;
+    const h = this.mapY;
+    for (let i = 0; i < 2 * w * h; i++) this.map.push(-1);
+
     this.eid = '';
-    this.index = 0;
     this.ticks = [];
     this.tickState = {
       aiOutput: [],
@@ -14,11 +18,16 @@ class DebugTrace {
       map: [],
       sightings: [],
     };
+    this.animBatch = [];
+    this.animFrame = [];
     this.showAll = true;
     this.showSeen = true;
 
+    this.animIndex = 0;
+    this.tickIndex = 0;
     this.reloading = false;
-    this.lastIndex = -1;
+    this.lastAnimIndex = -1;
+    this.lastTickIndex = -1;
     this.lastTicks = '';
 
     this.terminal = new Terminal();
@@ -67,25 +76,36 @@ class DebugTrace {
       return;
     }
 
-    const options = this.ticks.map((x, i) => [x, i]).filter(x => x[0].eid === this.eid);
+    const eid = this.eid;
+    const options = this.ticks.map((x, i) => [x, i]).filter(
+        x => x[0].type === 'tick' && x[0].eid === eid);
     if (options.length === 0) return;
 
-    const existing = options.findIndex(x => x[1] === this.index);
+    const existing = options.findIndex(x => x[1] === this.tickIndex);
     const prev = existing < 0 ? 0 : existing;
 
     const next = key === 'j' ? prev + 1 : key === 'k' ? prev - 1 : -1;
     if (next < 0 || next >= options.length) return;
 
-    this.index = options[next][1];
+    this.animIndex = this.tickIndex;
+    this.tickIndex = options[next][1];
     this.markDirty();
   }
-
 
   onmousedown(mouseEvent) {
     const eid = this.getEID(mouseEvent);
     if (eid === null) return;
 
+    const options = this.ticks.map((x, i) => [x, i]).filter(
+        x => x[0].type === 'tick' && x[0].eid === eid);
+    if (options.length === 0) return;
+
+    const best = options.filter(x => x[1] >= this.tickIndex)[0];
+    const next = best ?? options[options.length - 1];
+
     this.eid = eid;
+    this.tickIndex = next[1];
+    this.animIndex = this.tickIndex;
     this.markDirty();
   }
 
@@ -106,7 +126,8 @@ class DebugTrace {
     const x = skip ? -1 : Math.floor(mouseEvent.layerX / (2 * this.terminal.unitX));
     const y = skip ? -1 : Math.floor(mouseEvent.layerY / this.terminal.unitY);
 
-    const entity = this.tickState.entities.filter(e => e.posX === x && e.posY === y)[0];
+    const entity = this.tickState.entities.filter(
+      e => e.particle.posX === x && e.particle.posY === y)[0];
     return entity ? entity.eid : null;
   }
 
@@ -121,6 +142,7 @@ class DebugTrace {
     this.reloading = true;
     try {
       await this.reloadTicks();
+      await this.reloadCurrentAnimation();
       await this.reloadCurrentTick();
       this.redraw();
     } catch (e) {
@@ -130,39 +152,89 @@ class DebugTrace {
   }
 
   async reloadTicks() {
+    if (this.ticks.length > 0) return;
+
     const response = await fetch('debug/ticks.txt');
     const ticks = await response.text();
     if (ticks == this.lastTicks) return;
 
-    this.ticks = [];
+    this.ticks.length = 0;
     for (const line of ticks.trim().split('\n')) {
       try { this.ticks.push(JSON.parse(line)); } catch { break; }
     }
-    this.index = Math.max(0, Math.min(this.index, this.ticks.length - 1));
     this.lastTicks = ticks;
     this.dirty = true;
 
-    if (this.ticks.length === 0) return;
+    const realTicks = this.ticks.filter(x => x.type === 'tick');
+    if (!this.eid && realTicks.length > 0) this.eid = realTicks[0].eid;
+  }
 
-    const options = this.ticks.map((x, i) => [x, i]).filter(x => x[0].eid === this.eid);
-    if (options.length === 0) {
-      this.eid = this.ticks[this.index].eid;
-    } else {
-      let best = options.filter(x => x[1] >= this.index)[0];
-      best = best ? best : options[options.length - 1];
-      this.index = best[1];
+  async reloadDataFile(type, index) {
+    const response = await fetch(`debug/${type}-${index}.bin.gz`);
+    const inflated = new Response(response.body.pipeThrough(new DecompressionStream('gzip')));
+    const data = await inflated.arrayBuffer();
+    return new Reader(data);
+  }
+
+  async reloadAnimationBatch() {
+    const {type, index} = this.ticks[this.animIndex];
+    if (index === this.lastAnimIndex) return;
+
+    const reader = await this.reloadDataFile(type, index);
+    this.lastAnimIndex = index;
+
+    const numFrames = reader.readInt();
+    this.animBatch.length = 0;
+    for (let i = 0; i < numFrames; i++) {
+      const frame = [];
+      const numParticles = reader.readInt();
+      for (let j = 0; j < numParticles; j++) {
+        frame.push(reader.readParticle());
+      }
+      this.animBatch.push(frame);
     }
   }
 
+  async reloadCurrentAnimation() {
+    if (this.animIndex === this.tickIndex) return;
+
+    this.dirty = true;
+
+    while (this.animIndex < this.tickIndex) {
+      if (this.ticks[this.animIndex].type === 'animation') break;
+      this.animIndex++;
+    }
+    if (this.animIndex >= this.tickIndex) {
+      this.animIndex = this.tickIndex;
+      this.animBatch.length = 0;
+      this.animFrame.length = 0;
+      this.lastAnimIndex = -1;
+      return;
+    }
+
+    const prev = this.animIndex;
+
+    await this.reloadAnimationBatch();
+
+    if (this.animIndex !== prev) return;
+
+    const frame = this.ticks[this.animIndex].frame;
+    this.animFrame = this.animBatch[frame];
+    this.animIndex++;
+  }
+
   async reloadCurrentTick() {
-    if (this.index === this.lastIndex) return;
+    const eid = this.eid;
+    const options = this.ticks.map((x, i) => [x, i]).filter(
+        x => x[0].type === 'tick' && x[0].eid === eid);
+    const best = options.filter(x => x[1] <= this.animIndex).pop();
+    if (!best) return;
 
-    const response = await fetch(`debug/tick-${this.index}.bin.gz`);
-    const inflated = new Response(response.body.pipeThrough(new DecompressionStream('gzip')));
-    const data = await inflated.arrayBuffer();
-    const reader = new Reader(data);
+    const {type, index} = best[0];
+    if (index === this.lastTickIndex) return;
 
-    this.lastIndex = this.index;
+    const reader = await this.reloadDataFile(type, index);
+    this.lastTickIndex = index;
     this.dirty = true;
 
     const numEntities = reader.readInt();
@@ -171,21 +243,14 @@ class DebugTrace {
       const eid = reader.readStr();
       const name = reader.readStr();
       const health = reader.readDbl();
-      const posX = reader.readInt();
-      const posY = reader.readInt();
-      const glyph0 = reader.readInt();
-      const glyph1 = reader.readInt();
-      this.tickState.entities.push({eid, name, health, posX, posY, glyph0, glyph1});
+      const particle = reader.readParticle();
+      this.tickState.entities.push({eid, name, health, particle});
     }
 
     const numSightings = reader.readInt();
     this.tickState.sightings.length = 0;
     for (let i = 0; i < numSightings; i++) {
-      const posX = reader.readInt();
-      const posY = reader.readInt();
-      const glyph0 = reader.readInt();
-      const glyph1 = reader.readInt();
-      this.tickState.sightings.push({posX, posY, glyph0, glyph1});
+      this.tickState.sightings.push(reader.readParticle());
     }
 
     const numLines = reader.readInt();
@@ -208,8 +273,24 @@ class DebugTrace {
     }
   }
 
+  drawGlyph(x, y, glyph0, glyph1) {
+    const map = this.map;
+    const index = 2 * (x + y * this.mapX);
+    if (map[index] == glyph0 && map[index + 1] == glyph1) {
+      return;
+    }
+    map[index] = glyph0;
+    map[index + 1] = glyph1;
+    this.terminal.drawGlyph(2 * x, y, glyph0, glyph1);
+  }
+
+  drawParticle(particle) {
+    const {posX, posY, glyph0, glyph1} = particle;
+    this.drawGlyph(posX, posY, glyph0, glyph1);
+  }
+
   markDirty() {
-    this.lastTicks = '';
+    this.dirty = true;
   }
 
   redraw() {
@@ -252,20 +333,24 @@ class DebugTrace {
     const map = this.tickState.map;
     for (let y = 0; y < this.mapY; y++) {
       for (let x = 0; x < this.mapX; x++) {
-        this.terminal.drawGlyph(2 * x, y, map[index], map[index + 1]);
+        this.drawGlyph(x, y, map[index], map[index + 1]);
         index += 2;
       }
     }
-    if (this.showAll) {
-      for (const entity of this.tickState.entities) {
-        const {posX, posY, glyph0, glyph1} = entity;
-        this.terminal.drawGlyph(2 * posX, posY, glyph0, glyph1);
+    if (this.animIndex < this.tickIndex) {
+      for (const particle of this.animFrame) {
+        this.drawParticle(particle);
       }
-    }
-    if (this.showSeen) {
-      for (const entity of this.tickState.sightings) {
-        const {posX, posY, glyph0, glyph1} = entity;
-        this.terminal.drawGlyph(2 * posX, posY, glyph0, glyph1);
+    } else {
+      if (this.showAll) {
+        for (const entity of this.tickState.entities) {
+          this.drawParticle(entity.particle);
+        }
+      }
+      if (this.showSeen) {
+        for (const particle of this.tickState.sightings) {
+          this.drawParticle(particle);
+        }
       }
     }
   }
@@ -280,7 +365,7 @@ class DebugTrace {
     const max = BigInt(this.ticks[this.ticks.length - 1].time);
 
     const elements = this.ticks.map((x, i) => {
-      if (x.eid !== this.eid) return null;
+      if (!(x.type === 'tick' && x.eid === this.eid)) return null;
 
       const element = document.createElement('div');
       const fraction = (() => {
@@ -290,7 +375,7 @@ class DebugTrace {
       })();
       element.style = `left: ${fraction}%`;
       element.classList.add('tick');
-      if (i === this.index) element.classList.add('highlighted');
+      if (i === this.tickIndex) element.classList.add('highlighted');
       return element;
     });
     this.ui.timeline.replaceChildren(...elements.filter(x => !!x));
