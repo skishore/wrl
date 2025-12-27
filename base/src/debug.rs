@@ -6,6 +6,7 @@ use std::process::Command;
 use crate::base::{Color, Glyph, Matrix, Point};
 use crate::entity::{EID, Entity};
 use crate::game::{WORLD_SIZE, Action, Board};
+use crate::knowledge::EntityKnowledge;
 use crate::ui::UI;
 
 //////////////////////////////////////////////////////////////////////////////
@@ -95,9 +96,7 @@ impl DebugFile {
         for &(eid, entity) in &entities {
             let Entity { cur_hp, max_hp, .. } = *entity;
             let hp_fraction = cur_hp as f64 / max(max_hp, 1) as f64;
-
-            let sneak = entity.species.human && entity.sneaking;
-            let glyph = if sneak { Glyph::wide('e') } else { entity.species.glyph };
+            let glyph = Self::entity_glyph(entity);
 
             Self::write_str(&mut file, &format!("{}", show(eid)))?;
             Self::write_str(&mut file, entity.species.name)?;
@@ -105,6 +104,24 @@ impl DebugFile {
             Self::write_bin(&mut file, &entity.pos)?;
             Self::write_bin(&mut file, &glyph)?;
         };
+
+        // Dump info about our view of other entities.
+        let mut sightings = vec![];
+        for pos in me.known.debug_noise_sources() {
+            let glyph = Glyph::wdfg('?', Color::black()).with_bg(0xffff00);
+            sightings.push((pos, glyph));
+        }
+        for other in &me.known.entities {
+            let color = if other.visible { 0x00ff00 } else {
+                let entity_at_pos = me.known.get(other.pos).entity();
+                let moved = entity_at_pos.map(|x| x.eid) != Some(other.eid);
+                if moved { 0xff0000 } else { 0xffff00 }
+            };
+            let glyph = Self::knowledge_glyph(other).with_fg(Color::black()).with_bg(color);
+            sightings.push((other.pos, glyph));
+        }
+        Self::write_bin(&mut file, &(sightings.len() as i32))?;
+        Self::write_array(&mut file, sightings.as_slice())?;
 
         // Dump text debug output from behavior trees.
         let color = Color::white();
@@ -158,6 +175,16 @@ impl DebugFile {
     fn write_str(f: &mut BufWriter<File>, s: &str) -> Result<()> {
         f.write_all(s.as_bytes())?;
         f.write_all(&[b'\0'])
+    }
+
+    fn entity_glyph(entity: &Entity) -> Glyph {
+        let sneaking = entity.species.human && entity.sneaking;
+        if sneaking { Glyph::wide('e') } else { entity.species.glyph }
+    }
+
+    fn knowledge_glyph(entity: &EntityKnowledge) -> Glyph {
+        let sneaking = entity.species.human && entity.sneaking;
+        if sneaking { Glyph::wide('e') } else { entity.species.glyph }
     }
 }
 

@@ -12,8 +12,10 @@ class DebugTrace {
       aiOutput: [],
       entities: [],
       map: [],
+      sightings: [],
     };
-    this.showAllEntities = true;
+    this.showAll = true;
+    this.showSeen = true;
 
     this.reloading = false;
     this.lastIndex = -1;
@@ -22,9 +24,10 @@ class DebugTrace {
     this.terminal = new Terminal();
     this.ui = {
       aiOutput: document.getElementById('ai-trace'),
-      checkbox: document.getElementById('show-all-entities'),
       entities: document.getElementById('entities'),
       map: document.getElementById('map'),
+      showAll: document.getElementById('show-all-entities'),
+      showSeen: document.getElementById('show-sightings'),
       timeline: document.getElementById('timeline'),
       view: document.getElementById('view'),
     };
@@ -33,12 +36,20 @@ class DebugTrace {
     window.onmousedown = this.onmousedown.bind(this);
     window.onmousemove = this.onmousemove.bind(this);
 
-    this.ui.checkbox.onchange = this.onShowAllEntitiesChange.bind(this);
-    this.ui.checkbox.checked = this.showAllEntities;
+    this.ui.showAll.onchange = this.onShowAllChange.bind(this);
+    this.ui.showAll.checked = this.showAll;
+
+    this.ui.showSeen.onchange = this.onShowSeenChange.bind(this);
+    this.ui.showSeen.checked = this.showSeen;
   }
 
-  onShowAllEntitiesChange() {
-    this.showAllEntities = this.ui.checkbox.checked;
+  onShowAllChange() {
+    this.showAll = this.ui.showAll.checked;
+    this.markDirty();
+  }
+
+  onShowSeenChange() {
+    this.showSeen = this.ui.showSeen.checked;
     this.markDirty();
   }
 
@@ -46,9 +57,13 @@ class DebugTrace {
     const key = keyEvent.key;
     const code = key.length === 1 ? key.charCodeAt(0) : keyEvent.keyCode;
 
-    if (key === 's') {
-      this.ui.checkbox.checked = !this.ui.checkbox.checked;
-      this.onShowAllEntitiesChange();
+    if (key === 'r') {
+      this.ui.showSeen.checked = !this.ui.showSeen.checked;
+      this.onShowSeenChange();
+      return;
+    } else if (key === 's') {
+      this.ui.showAll.checked = !this.ui.showAll.checked;
+      this.onShowAllChange();
       return;
     }
 
@@ -163,6 +178,16 @@ class DebugTrace {
       this.tickState.entities.push({eid, name, health, posX, posY, glyph0, glyph1});
     }
 
+    const numSightings = reader.readInt();
+    this.tickState.sightings.length = 0;
+    for (let i = 0; i < numSightings; i++) {
+      const posX = reader.readInt();
+      const posY = reader.readInt();
+      const glyph0 = reader.readInt();
+      const glyph1 = reader.readInt();
+      this.tickState.sightings.push({posX, posY, glyph0, glyph1});
+    }
+
     const numLines = reader.readInt();
     this.tickState.aiOutput.length = 0;
     for (let i = 0; i < numLines; i++) {
@@ -231,8 +256,14 @@ class DebugTrace {
         index += 2;
       }
     }
-    if (this.showAllEntities) {
+    if (this.showAll) {
       for (const entity of this.tickState.entities) {
+        const {posX, posY, glyph0, glyph1} = entity;
+        this.terminal.drawGlyph(2 * posX, posY, glyph0, glyph1);
+      }
+    }
+    if (this.showSeen) {
+      for (const entity of this.tickState.sightings) {
         const {posX, posY, glyph0, glyph1} = entity;
         this.terminal.drawGlyph(2 * posX, posY, glyph0, glyph1);
       }
