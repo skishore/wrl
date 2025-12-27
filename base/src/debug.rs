@@ -4,9 +4,10 @@ use std::io::{BufWriter, Result, Write};
 use std::process::Command;
 
 use crate::base::{Color, Glyph, Matrix, Point};
+use crate::effect::Frame;
 use crate::entity::{EID, Entity};
 use crate::game::{WORLD_SIZE, Action, Board};
-use crate::knowledge::EntityKnowledge;
+use crate::knowledge::{EntityKnowledge, Timestamp};
 use crate::ui::UI;
 
 //////////////////////////////////////////////////////////////////////////////
@@ -52,10 +53,11 @@ impl DebugLog {
 // DebugFile
 
 pub struct DebugFile {
+    animation: Vec<Frame>,
     dir: &'static str,
     file: BufWriter<File>,
     map: Matrix<Glyph>,
-    next_tick_index: usize,
+    next_tick: usize,
 }
 
 impl Default for DebugFile {
@@ -65,29 +67,66 @@ impl Default for DebugFile {
         std::fs::create_dir_all(dir).unwrap();
         let file = BufWriter::new(File::create(format!("{}/ticks.txt", dir)).unwrap());
         let map = Matrix::new(Point(WORLD_SIZE, WORLD_SIZE), Glyph::wide(' '));
-        Self { dir, file, map, next_tick_index: 0 }
+        Self { animation: vec![], dir, file, map, next_tick: 0 }
     }
 }
 
 impl DebugFile {
     pub fn record(&mut self, action: &Action, board: &Board, me: &Entity) {
-        self.record_one(action, board, me).unwrap();
+        self.try_record(action, board, me).unwrap();
     }
 
-    fn record_one(&mut self, action: &Action, board: &Board, me: &Entity) -> Result<()> {
+    pub fn record_frame(&mut self, time: Timestamp, frame: &Frame) {
+        self.try_record_frame(time, frame).unwrap();
+    }
+
+    fn try_record(&mut self, action: &Action, board: &Board, me: &Entity) -> Result<()> {
         self.record_tick(action, board, me)?;
+        self.next_tick += 1;
 
         write!(self.file, "{{")?;
+        write!(self.file, r#""index":{},"#, self.next_tick - 1)?;
+        write!(self.file, r#""type":"tick","#)?;
         write!(self.file, r#""time":"{}","#, board.time.nsec())?;
         write!(self.file, r#""eid":"{}""#, show(me.eid))?;
         write!(self.file, "}}\n")?;
         self.file.flush()
     }
 
+    fn try_record_frame(&mut self, time: Timestamp, frame: &Frame) -> Result<()> {
+        self.animation.push(frame.clone());
+
+        write!(self.file, "{{")?;
+        write!(self.file, r#""index":{},"#, self.next_tick)?;
+        write!(self.file, r#""type":"animation","#)?;
+        write!(self.file, r#""time":"{}","#, time.nsec())?;
+        write!(self.file, r#""frame":{}"#, self.animation.len() - 1)?;
+        write!(self.file, "}}\n")?;
+        self.file.flush()
+    }
+
     fn record_tick(&mut self, action: &Action, board: &Board, me: &Entity) -> Result<()> {
-        let filename = format!("{}/tick-{}.bin", self.dir, self.next_tick_index);
+        // Dump binary data for all animations happening prior to this tick.
+        if !self.animation.is_empty() {
+            let filename = format!("{}/animation-{}.bin", self.dir, self.next_tick);
+            let mut file = BufWriter::new(File::create(&filename).unwrap());
+
+            Self::write_bin(&mut file, &(self.animation.len() as i32))?;
+            for frame in &self.animation {
+                Self::write_bin(&mut file, &(frame.len() as i32))?;
+                Self::write_array(&mut file, frame.as_slice())?;
+            }
+            file.flush()?;
+
+            std::mem::drop(file);
+            Command::new("gzip").arg(filename).spawn()?;
+
+            self.animation.clear();
+        }
+
+        // Dump binary data for the tick itself.
+        let filename = format!("{}/tick-{}.bin", self.dir, self.next_tick);
         let mut file = BufWriter::new(File::create(&filename).unwrap());
-        self.next_tick_index += 1;
 
         // Dump binary data revealing all of the entities.
         let entities: Vec<_> = board.entities.iter().collect();
@@ -163,7 +202,7 @@ impl DebugFile {
     }
 
     fn write_array<T>(f: &mut BufWriter<File>, t: &[T]) -> Result<()> {
-        let ptr = &t[0] as *const T as *const u8;
+        let ptr = t.as_ptr() as *const u8;
         let len = t.len() * std::mem::size_of::<T>();
         f.write_all(unsafe { std::slice::from_raw_parts(ptr, len) })
     }
