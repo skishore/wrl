@@ -1,7 +1,9 @@
 use std::cmp::max;
 use std::fs::File;
 use std::io::{BufWriter, Result, Write};
-use std::process::Command;
+
+use flate2::Compression;
+use flate2::write::GzEncoder;
 
 use crate::base::{Color, Glyph, Matrix, Point};
 use crate::effect::Frame;
@@ -108,8 +110,9 @@ impl DebugFile {
     fn record_tick(&mut self, action: &Action, board: &Board, me: &Entity) -> Result<()> {
         // Dump binary data for all animations happening prior to this tick.
         if !self.animation.is_empty() {
-            let filename = format!("{}/animation-{}.bin", self.dir, self.next_tick);
-            let mut file = BufWriter::new(File::create(&filename).unwrap());
+            let filename = format!("{}/animation-{}.bin.gz", self.dir, self.next_tick);
+            let file = BufWriter::new(File::create(&filename).unwrap());
+            let mut file = GzEncoder::new(file, Compression::default());
 
             Self::write_bin(&mut file, &(self.animation.len() as i32))?;
             for frame in &self.animation {
@@ -118,15 +121,13 @@ impl DebugFile {
             }
             file.flush()?;
 
-            std::mem::drop(file);
-            Command::new("gzip").arg(filename).spawn()?;
-
             self.animation.clear();
         }
 
         // Dump binary data for the tick itself.
-        let filename = format!("{}/tick-{}.bin", self.dir, self.next_tick);
-        let mut file = BufWriter::new(File::create(&filename).unwrap());
+        let filename = format!("{}/tick-{}.bin.gz", self.dir, self.next_tick);
+        let file = BufWriter::new(File::create(&filename).unwrap());
+        let mut file = GzEncoder::new(file, Compression::default());
 
         // Dump binary data revealing all of the entities.
         let entities: Vec<_> = board.entities.iter().collect();
@@ -195,23 +196,20 @@ impl DebugFile {
         Self::write_array(&mut file, self.map.data.as_slice())?;
         file.flush()?;
 
-        std::mem::drop(file);
-        Command::new("gzip").arg(filename).spawn()?;
-
         Result::Ok(())
     }
 
-    fn write_array<T>(f: &mut BufWriter<File>, t: &[T]) -> Result<()> {
+    fn write_array<W: Write, T>(f: &mut W, t: &[T]) -> Result<()> {
         let ptr = t.as_ptr() as *const u8;
         let len = t.len() * std::mem::size_of::<T>();
         f.write_all(unsafe { std::slice::from_raw_parts(ptr, len) })
     }
 
-    fn write_bin<T>(f: &mut BufWriter<File>, t: &T) -> Result<()> {
+    fn write_bin<W: Write, T>(f: &mut W, t: &T) -> Result<()> {
         Self::write_array(f, std::slice::from_ref(t))
     }
 
-    fn write_str(f: &mut BufWriter<File>, s: &str) -> Result<()> {
+    fn write_str<W: Write>(f: &mut W, s: &str) -> Result<()> {
         f.write_all(s.as_bytes())?;
         f.write_all(&[b'\0'])
     }

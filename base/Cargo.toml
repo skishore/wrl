@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+flate2 = "1.0"
 fxhash = "0.2.1"
 getrandom = { version = "0.3.4", features = ["wasm_js"] }
 lazy_static = "1.4.0"
