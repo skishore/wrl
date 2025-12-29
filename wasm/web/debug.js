@@ -274,6 +274,10 @@ class DebugTrace {
   }
 
   drawGlyph(x, y, glyph0, glyph1) {
+    const w = this.mapX;
+    const h = this.mapY;
+    if (!(0 <= x && x < w && 0 <= y && y < h)) return;
+
     const map = this.map;
     const index = 2 * (x + y * this.mapX);
     if (map[index] == glyph0 && map[index + 1] == glyph1) {

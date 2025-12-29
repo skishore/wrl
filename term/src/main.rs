@@ -195,13 +195,28 @@ fn input(event: Event, screen: &Screen) -> Option<Input> {
 
 fn main() {
     let args: Vec<_> = std::env::args().collect();
-    if !(args.len() == 1 || (args.len() == 2 && args[1] == "--debug")) {
-        panic!("Usage: wrl-term (--debug)?");
+    if !(args.len() == 1 ||
+         (args.len() == 2 && args[1] == "--debug") ||
+         (args.len() == 3 && args[1] == "--sim")) {
+        panic!("Usage: wrl-term (--debug|--sim $COUNT)?");
     }
 
-    let debug = args.len() == 2;
-    let mode = if debug { GameMode::Debug } else { GameMode::Play };
+    let mode = if args.len() < 2 { GameMode::Play } else {
+        if args[1] == "--debug" { GameMode::Debug } else { GameMode ::Sim }
+    };
     let game = State::new(/*seed=*/None, mode);
+
+    if mode == GameMode::Sim {
+        let mut game = game;
+        let turns = args[2].parse::<usize>().unwrap();
+        for i in 0..turns {
+            println!("Iteration: {}", i);
+            game.add_input(Input::Char('.'));
+            game.update();
+        }
+        return;
+    }
+
     let mut output = Matrix::default();
     game.render(&mut output);
 
