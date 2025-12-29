@@ -1077,7 +1077,7 @@ fn update_state(state: &mut State) {
 // State
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-pub enum GameMode { Play, Test, Debug }
+pub enum GameMode { Debug, Play, Sim, Test }
 
 pub struct UpdateEnv {
     debug: Option<Box<DebugFile>>,
@@ -1120,7 +1120,7 @@ impl State {
         let size = Point(WORLD_SIZE, WORLD_SIZE);
         let rng = seed.map(|x| RNG::seed_from_u64(x));
         let rng = rng.unwrap_or_else(|| RNG::from_os_rng());
-        let debug = mode == GameMode::Debug;
+        let debug = mode == GameMode::Debug || mode == GameMode::Sim;
         let mut env = UpdateEnv {
             debug: if debug { Some(Default::default()) } else { None },
             known: Default::default(),
@@ -1151,9 +1151,10 @@ impl State {
         let args = EntityArgs { pos, player, predator: false, species };
         let player = board.add_entity(&args, &mut env);
 
-        if mode == GameMode::Test {
+        if mode == GameMode::Test || mode == GameMode::Sim {
             board.map.entry_mut(pos).unwrap().eid = None;
             board.entities[player].pos = Point(-9999, -9999);
+            board.entities[player].known = Default::default();
         }
 
         let pos = |board: &Board, rng: &mut RNG| {
