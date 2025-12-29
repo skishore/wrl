@@ -65,6 +65,12 @@ impl Species {
     }
 }
 
+impl std::fmt::Debug for Species {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(self.name)
+    }
+}
+
 impl Eq for &'static Species {}
 
 impl PartialEq for &'static Species {

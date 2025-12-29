@@ -758,11 +758,12 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             ActionResult::success()
         }
         Action::Call(CallAction { call, look }) => {
+            let species = entity.species;
             let noise = Noise { cause: Some(eid), point: source, volume: CALL_VOLUME };
             let sightings = get_sightings(&state.board, &noise, &mut state.env);
 
             // Deliver a CallEvent to each entity that heard the call.
-            let data = EventData::Call(CallEvent { call });
+            let data = EventData::Call(CallEvent { call, species });
             let mut event = state.board.create_event(eid, data, source);
             for Sighting { eid: oid, source_seen: seen, .. } in sightings {
                 event.sense = if seen { Sense::Sight } else { Sense::Sound };
