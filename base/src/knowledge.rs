@@ -142,7 +142,7 @@ pub struct AttackEvent { pub combat: bool, pub target: Option<EID> }
 pub struct ForgetEvent {}
 
 #[derive(Clone, Debug)]
-pub struct CallEvent { pub call: Call }
+pub struct CallEvent { pub call: Call, pub species: &'static Species }
 
 #[derive(Clone, Debug)]
 pub struct MoveEvent { pub from: Point }

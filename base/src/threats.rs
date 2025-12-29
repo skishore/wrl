@@ -454,8 +454,7 @@ impl ThreatState {
     }
 
     fn call_for_us(me: &Entity, x: &CallEvent) -> bool {
-        // TODO(shaunak): Implement a better "this call is for us" check.
-        x.call == Call::Help && !me.predator
+        x.call == Call::Help && x.species == me.species
     }
 
     fn guess_threat_location(&mut self, me: &Entity, event: &Event) {
