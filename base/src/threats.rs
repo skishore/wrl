@@ -5,17 +5,17 @@ use rand::Rng;
 use crate::base::{HashMap, Point, RNG};
 use crate::debug::DebugLog;
 use crate::entity::{Entity, EID};
-use crate::knowledge::{AttackEvent, CallEvent, Event, EventData};
-use crate::knowledge::{Call, EntityKnowledge, Sense, Timedelta, Timestamp, UID};
+use crate::knowledge::{AttackEvent, Call, CallEvent, Event, EventData, Sense};
+use crate::knowledge::{EntityKnowledge, Knowledge, Timestamp, UID};
 use crate::game::CALL_VOLUME;
 use crate::list::{Handle, List};
 
 //////////////////////////////////////////////////////////////////////////////
 
-pub const ACTIVE_THREAT_TIME: Timedelta = Timedelta::from_seconds(96.);
+pub const ACTIVE_THREAT_TURNS: i32 = 72;
 
-pub const CALL_FOR_HELP_LIMIT: Timedelta = Timedelta::from_seconds(4.);
-pub const CALL_FOR_HELP_RETRY: Timedelta = Timedelta::from_seconds(24.);
+pub const CALL_LIMIT_TURNS: i32 = 4;
+pub const CALL_RETRY_TURNS: i32 = 16;
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -79,15 +79,23 @@ impl Threat {
         }
     }
 
-    pub fn debug(&self, debug: &mut DebugLog, time: Timestamp) {
+    pub fn debug(&self, debug: &mut DebugLog, known: &Knowledge) {
         debug.append("Threat:");
         debug.indent(1, |debug| {
-            debug.append(format!("age: {:?}", time - self.time));
-            debug.append(format!("pos: {:?}", self.pos));
-            debug.append(format!("sense: {:?}", self.sense));
-            debug.append(format!("combat: {:?}", time - self.combat));
-            debug.append(format!("status: {:?}:{:?}", self.confidence, self.valence));
-            debug.append(format!("warnings: {}", self.warnings));
+            let warnings = if self.warnings == 0 {
+                " ".into()
+            } else if self.warnings == 1 {
+                " - 1 warning".into()
+            } else {
+                format!(" - {} warnings", self.warnings)
+            };
+            let status = format!("{:?}:{:?}", self.confidence, self.valence);
+
+            debug.append(format!("age: {}", known.debug_time(self.time)));
+            debug.append(format!("pos: {:?}, by {:?}", self.pos, self.sense));
+            debug.append(format!("combat: {}", known.debug_time(self.combat)));
+            debug.append(format!("status: {}{}", status, warnings));
+            debug.append(format!("strength: {} @ {:.2} hp", self.delta, self.hp));
         });
         debug.newline();
     }
@@ -147,8 +155,8 @@ impl Threat {
     //     period is complete.
     //
     //   - Wilds may attack player; however, if they spot a predator, flee
-    //     from it, and then spot a player while the predator's age is still
-    //     within ACTIVE_THREAT_TIME, we'll incorrectly flee from the player.
+    //     from it, and then spot a player within ACTIVE_THREAT_TURNS, we'll
+    //     incorrectly flee from the player because of the other threat.
     //
     //   - Can we make scent just another event type? Can we tie scent to an
     //     EID / TID and disable further updates once we identify it?
@@ -229,7 +237,7 @@ impl Threat {
         let (confidence, valence) = if self.human {
             (Confidence::Low, Valence::Neutral)
         } else if other.delta > 0 {
-            let combat = other.time - self.combat < ACTIVE_THREAT_TIME;
+            let combat = self.combat > me.known.time_at_turn(ACTIVE_THREAT_TURNS);
             let valence = if combat { Valence::Hostile } else { Valence::Menacing };
             (Confidence::High, valence)
         } else if !me.predator && me.species == other.species {
@@ -267,21 +275,21 @@ pub struct ThreatState {
     pub state: FightOrFlight,
 
     // Calling for help.
-    pub called: Timestamp,
     pub call_for_help: bool,
+    pub last_call: Timestamp,
 }
 
 impl ThreatState {
-    pub fn debug(&self, debug: &mut DebugLog, time: Timestamp) {
+    pub fn debug(&self, debug: &mut DebugLog, known: &Knowledge) {
         debug.append("ThreatState:");
         debug.indent(1, |debug| {
             debug.append(format!("state: {:?}", self.state));
-            debug.append(format!("called: {:?}", time - self.called));
             debug.append(format!("call_for_help: {}", self.call_for_help));
+            debug.append(format!("last_call: {}", known.debug_time(self.last_call)));
         });
         debug.newline();
 
-        for threat in &self.threats { threat.debug(debug, time); }
+        for threat in &self.threats { threat.debug(debug, known); }
     }
 
     pub fn on_call_for_help(&mut self, point: Point, time: Timestamp) {
@@ -290,7 +298,7 @@ impl ThreatState {
             if (threat.pos - point).len_nethack() > CALL_VOLUME { continue; }
             threat.combat = time;
         }
-        self.called = time;
+        self.last_call = time;
     }
 
     pub fn update(&mut self, me: &Entity, prev_time: Timestamp) {
@@ -315,6 +323,10 @@ impl ThreatState {
         self.hostile.clear();
         self.unknown.clear();
 
+        let limit = me.known.time_at_turn(ACTIVE_THREAT_TURNS);
+        let call_limit = me.known.time_at_turn(CALL_LIMIT_TURNS);
+        let call_retry = me.known.time_at_turn(CALL_RETRY_TURNS);
+
         let was_active = self.state != FightOrFlight::Safe;
         let mut active = was_active;
         let mut hidden_hostile = 0;
@@ -322,7 +334,7 @@ impl ThreatState {
 
         // List known enemies ("hostile") and potential enemies ("unknown").
         for x in &self.threats {
-            if me.known.time - x.time > ACTIVE_THREAT_TIME { break; }
+            if x.time <= limit { break; }
 
             let menacing = x.menacing();
             let hostile = x.hostile();
@@ -368,7 +380,7 @@ impl ThreatState {
         let mut foes_strength = 0.;
 
         for x in &self.threats {
-            if me.known.time - x.time > ACTIVE_THREAT_TIME { break; }
+            if x.time <= limit { break; }
 
             if x.hostile() || x.menacing() {
                 if !x.seen && hidden_count == 0 { continue; }
@@ -376,13 +388,14 @@ impl ThreatState {
                 foes_strength += strength(x);
             } else if x.friendly() {
                 let base = strength(x);
+                let denom = me.known.time - limit;
                 let delay = me.known.time - x.combat;
-                let ratio = delay.nsec() as f64 / ACTIVE_THREAT_TIME.nsec() as f64;
+                let ratio = delay.nsec() as f64 / max(denom.nsec(), 1) as f64;
                 let decay = if ratio > 1. { 0. } else { 1. - ratio };
                 team_strength += base * decay;
 
+                let recent = x.time > call_limit;
                 let nearby = (me.pos - x.pos).len_nethack() <= CALL_VOLUME;
-                let recent = me.known.time - x.time <= CALL_FOR_HELP_LIMIT;
                 call_strength += if nearby && recent { base } else { base * decay };
             }
         }
@@ -400,8 +413,7 @@ impl ThreatState {
         }
 
         self.call_for_help = false;
-        if self.state == FightOrFlight::Flight && q > 0.6 &&
-           (me.known.time - self.called) > CALL_FOR_HELP_RETRY {
+        if self.state == FightOrFlight::Flight && q > 0.6 && self.last_call <= call_retry {
             self.state = FightOrFlight::Fight;
             self.call_for_help = true;
         }
