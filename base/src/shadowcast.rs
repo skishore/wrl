@@ -349,6 +349,8 @@ impl Vision {
             self.next.items.clear();
             self.next.depth += 2;
         }
+
+        self.points_seen.sort_by_key(|&x| (x - pos).len_l2_squared());
     }
 }
 
