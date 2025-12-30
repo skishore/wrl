@@ -46,15 +46,12 @@ const HUNGER_GAIN: RangeInclusive<i32> = (MAX_HUNGER / 4)..=(MAX_HUNGER / 2);
 const THIRST_GAIN: RangeInclusive<i32> = (MAX_THIRST / 4)..=(MAX_THIRST / 2);
 const RESTED_GAIN: RangeInclusive<i32> = 1..=2;
 
-// TODO: It'd be clearer and simpler to express all limits in turns...
-const WARNING_LIMIT: Timedelta = Timedelta::from_seconds(16.);
-const WARNING_RETRY: Timedelta = Timedelta::from_seconds(1.5);
+const WARNING_LIMIT_TURNS: i32 = 16;
+const WARNING_RETRY_TURNS: i32 = 2;
 
-const MIN_SEARCH_TIME: Timedelta = Timedelta::from_seconds(24.);
-const MAX_SEARCH_TIME: Timedelta = Timedelta::from_seconds(48.);
-
-const MAX_TRACKING_TIME: Timedelta = Timedelta::from_seconds(64.);
-const SCENT_AGE_PENALTY: Timedelta = Timedelta::from_seconds(1.);
+const MIN_SEARCH_TURNS: i32 = 16;
+const MAX_SEARCH_TURNS: i32 = 32;
+const MAX_TRACKING_TURNS: i32 = 48;
 
 const FLIGHT_PATH_TURNS: i32 = 8;
 const MIN_FLIGHT_TURNS: i32 = 16;
@@ -135,11 +132,11 @@ impl Blackboard {
         }
     }
 
-    fn debug(&self, debug: &mut DebugLog) {
+    fn debug(&self, debug: &mut DebugLog, known: &Knowledge) {
         debug.append("Blackboard:");
         debug.indent(1, |debug| {
-            debug.append(format!("prev_turn: {:?}", self.turn_time - self.prev_time));
-            debug.append(format!("last_warning: {:?}", self.turn_time - self.last_warning));
+            debug.append(format!("prev_turn: {}", known.debug_time(self.prev_time)));
+            debug.append(format!("last_warning: {}", known.debug_time(self.last_warning)));
             debug.append(format!("finding_food_: {}", self.finding_food_));
             debug.append(format!("finding_water: {}", self.finding_water));
             debug.append(format!("till_assess: {} / {}", self.till_assess, MAX_ASSESS));
@@ -168,17 +165,17 @@ impl Blackboard {
         if let Some(x) = &self.target {
             debug.append("Target:");
             debug.indent(1, |debug| {
+                let Target { last: pos, sense, time, .. } = x.target;
+                debug.append(format!("age: {}", known.debug_time(time)));
+                debug.append(format!("pos: {:?}, by {:?}", pos, sense));
                 debug.append(format!("bias: {:?}", x.bias));
                 debug.append(format!("fresh: {}", x.fresh));
                 debug.append(format!("steps: {}", x.steps));
-                debug.append(format!("target.age: {:?}", self.turn_time - x.target.time));
-                debug.append(format!("target.last: {:?}", x.target.last));
-                debug.append(format!("target.sense: {:?}", x.target.sense));
             });
             debug.newline();
         }
 
-        self.threats.debug(debug, self.turn_time);
+        self.threats.debug(debug, known);
     }
 }
 
@@ -572,18 +569,20 @@ fn LookForNoises(ctx: &mut Ctx) -> Option<Action> {
 
 #[allow(non_snake_case)]
 fn WarnOffThreats(ctx: &mut Ctx) -> Option<Action> {
-    let (pos, time) = (ctx.pos, ctx.blackboard.turn_time);
-    let (rng, threats) = (&mut *ctx.env.rng, &mut ctx.blackboard.threats);
-    let stare = time - ctx.blackboard.last_warning < WARNING_RETRY;
+    let bb = &mut ctx.blackboard;
+    let (known, pos) = (ctx.known, ctx.pos);
+    let (rng, threats) = (&mut *ctx.env.rng, &mut bb.threats);
+    let stare = bb.last_warning > known.time_at_turn(WARNING_RETRY_TURNS);
+    let limit = known.time_at_turn(WARNING_LIMIT_TURNS);
     let mut result = None;
 
     for threat in &mut threats.threats {
-        if time - threat.time >= WARNING_LIMIT { break; }
+        if threat.time <= limit { break; }
 
         if !threat.uncertain() { continue; }
         if (threat.pos - pos).len_nethack() > CALL_VOLUME { continue; }
 
-        let warn = !stare && threat.time > ctx.blackboard.last_warning;
+        let warn = !stare && threat.time > bb.last_warning;
         if warn { threat.mark_warned(rng); }
 
         if result.is_some() { continue; }
@@ -591,7 +590,7 @@ fn WarnOffThreats(ctx: &mut Ctx) -> Option<Action> {
         let (call, look) = (Call::Warning, threat.pos - pos);
         if warn {
             result = Some(Action::Call(CallAction { call, look }));
-            ctx.blackboard.last_warning = time;
+            bb.last_warning = known.time;
         } else if stare {
             result = Some(Action::Look(look));
         };
@@ -728,8 +727,8 @@ fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
     // when fleeing from an enemy or chasing one down.
     let mut turns = WANDER_TURNS;
     if kind == PathKind::Enemy && let Some(x) = &ctx.blackboard.target {
-        let age = ctx.known.time - x.target.time;
-        if age < MIN_SEARCH_TIME && x.target.sense != Sense::Smell { turns = 1. };
+        let limit = ctx.known.time_at_turn(MIN_SEARCH_TURNS);
+        if x.target.time > limit && x.target.sense != Sense::Smell { turns = 1. };
     } else if kind == PathKind::Flee && !all_threats_asleep(ctx) {
         turns = 1.;
     }
@@ -1034,9 +1033,10 @@ fn MarkSafeIfLostView(ctx: &mut Ctx) -> bool {
 
 macro_rules! check_time {
     ($ctx:ident, $time:expr, $limit:expr) => {{
-        let &mut Blackboard { prev_time, turn_time, .. } = $ctx.blackboard;
-        if prev_time - $time < $limit { $ctx.blackboard.had_target = true; }
-        turn_time - $time < $limit
+        let l0 = $ctx.known.time_at_turn($limit + 0);
+        let l1 = $ctx.known.time_at_turn($limit + 1);
+        if $time > l1 { $ctx.blackboard.had_target = true; }
+        $time > l0
     }}
 }
 
@@ -1044,7 +1044,7 @@ macro_rules! check_time {
 fn ListThreatsBySight(ctx: &mut Ctx) -> bool {
     let initial = ctx.blackboard.options.len();
     for other in &ctx.blackboard.threats.hostile {
-        if !check_time!(ctx, other.time, MIN_SEARCH_TIME) { break; }
+        if !check_time!(ctx, other.time, MIN_SEARCH_TURNS) { break; }
 
         let (last, time, sense) = (other.pos, other.time, other.sense);
         let target = Target { last, time, sense, scent: None };
@@ -1058,7 +1058,7 @@ fn ListPreyBySight(ctx: &mut Ctx) -> bool {
     let initial = ctx.blackboard.options.len();
     for other in &ctx.known.entities {
         if other.delta >= 0 { continue; }
-        if !check_time!(ctx, other.time, MAX_SEARCH_TIME) { break; }
+        if !check_time!(ctx, other.time, MAX_SEARCH_TURNS) { break; }
 
         let (last, time, sense) = (other.pos, other.time, other.sense);
         let target = Target { last, time, sense, scent: None };
@@ -1073,7 +1073,7 @@ fn ListPreyBySound(ctx: &mut Ctx) -> bool {
     for other in &ctx.blackboard.threats.threats {
         if other.seen { continue; }
         if other.delta >= 0 { continue; }
-        if !check_time!(ctx, other.time, MAX_SEARCH_TIME) { break; }
+        if !check_time!(ctx, other.time, MAX_SEARCH_TURNS) { break; }
 
         let (last, time, sense) = (other.pos, other.time, other.sense);
         let target = Target { last, time, sense, scent: None };
@@ -1096,12 +1096,12 @@ fn ListHumansByScent(ctx: &mut Ctx) -> bool {
 fn ListTargetsByScent<F: Fn(&ScentEvent) -> bool>(ctx: &mut Ctx, f: F) -> bool {
     let initial = ctx.blackboard.options.len();
     if let Some(x) = &ctx.blackboard.target && let Some(s) = &x.target.scent && f(s) &&
-       check_time!(ctx, x.target.time, MAX_TRACKING_TIME) {
+       check_time!(ctx, x.target.time, MAX_TRACKING_TURNS) {
         ctx.blackboard.options.push(x.target);
     }
     for event in &ctx.known.scents {
         if !f(event) { continue; }
-        if !check_time!(ctx, event.scent.time, MAX_TRACKING_TIME) { continue; }
+        if !check_time!(ctx, event.scent.time, MAX_TRACKING_TURNS) { continue; }
 
         let (last, time, sense) = (event.scent.pos, event.scent.time, Sense::Smell);
         let target = Target { last, time, sense, scent: Some(*event) };
@@ -1117,9 +1117,7 @@ fn SelectBestTarget(ctx: &mut Ctx) -> bool {
 
     let Ctx { known, pos, .. } = *ctx;
     let score = |x: &Target| {
-        let age = known.time - x.time;
-        let age = if x.sense == Sense::Smell { age + SCENT_AGE_PENALTY } else { age };
-        (age, (pos - x.last).len_l2_squared())
+        (known.time - x.time, (pos - x.last).len_l2_squared())
     };
     let target = *options.select_nth_unstable_by_key(0, score).1;
 
@@ -1648,11 +1646,11 @@ impl AIState {
         &self.blackboard.path.path
     }
 
-    pub fn get_trace(&self) -> Vec<DebugLine> {
+    pub fn get_trace(&self, known: &Knowledge) -> Vec<DebugLine> {
         let mut debug = DebugLog { depth: 0, lines: vec![], verbose: false };
         self.tree.debug(&mut debug);
         debug.newline();
-        self.blackboard.debug(&mut debug);
+        self.blackboard.debug(&mut debug, known);
         debug.lines
     }
 

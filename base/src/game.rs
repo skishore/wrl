@@ -375,7 +375,11 @@ impl Board {
         let cell = self.map.entry_mut(pos).unwrap();
         let prev = replace(&mut cell.eid, Some(eid));
         assert!(prev.is_none());
+
         self.update_known(eid, env);
+        let entity = &mut self.entities[eid];
+        entity.known.mark_turn_boundary(entity.player, entity.speed);
+
         eid
     }
 
@@ -1054,13 +1058,15 @@ fn update_state(state: &mut State) {
 
         let Some(entity) = state.board.entities.get_mut(eid) else { continue };
 
-        state.board.time = state.board.time.bump();
+        let Entity { pos, speed, .. } = *entity;
+        entity.known.mark_turn_boundary(player, speed);
 
-        if player { entity.known.forget_old_sources(); }
+        state.board.time = state.board.time.bump();
+        let time = state.board.time;
 
         let trail = &mut entity.trail;
         if trail.len() == trail.capacity() { trail.pop_back(); }
-        trail.push_front(Scent { pos: entity.pos, time: state.board.time });
+        trail.push_front(Scent { pos, time });
 
         state.board.active_entity = None;
         drain(entity, &result);

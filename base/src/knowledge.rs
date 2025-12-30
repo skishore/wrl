@@ -1,4 +1,5 @@
 use std::cmp::{max, min};
+use std::collections::VecDeque;
 use std::num::NonZeroU64;
 
 use rand::Rng;
@@ -21,10 +22,11 @@ use crate::shadowcast::Vision;
 const MAX_ENTITY_MEMORY: usize = 64;
 const MAX_SOURCE_MEMORY: usize = 64;
 const MAX_TILE_MEMORY: usize = 4096;
+const MAX_TURN_MEMORY: usize = 256;
 
-const SOURCE_TURN_LIMIT: i32 = 2;
-const SOURCE_TRACKING_LIMIT: Timedelta = Timedelta::from_seconds(16.);
-const SOURCE_RETENTION_TIME: Timedelta = Timedelta::from_seconds(96.);
+const SOURCE_LIMIT_PC_: i32 = 2;
+const SOURCE_LIMIT_NPC: i32 = 72;
+const SOURCE_TRACKING_LIMIT: i32 = 16;
 
 fn trophic_level(x: &Entity) -> i32 {
     if x.species.human { 0 } else if !x.predator { 1 } else { 2 }
@@ -73,11 +75,9 @@ impl std::ops::Sub for Timedelta {
 
 impl std::fmt::Debug for Timedelta {
     fn fmt(&self, fmt: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-        let nu = Timedelta::NSEC_PER_MSEC;
         let mu = Timedelta::MSEC_PER_SEC;
-        let (left, nsec) = (self.nsec() / nu, self.nsec() % nu);
-        let (left, msec) = (left / mu, left % mu);
-        write!(fmt, "{}.{:0>3}s (+{})", left, msec, nsec)
+        let ms = self.nsec() / Timedelta::NSEC_PER_MSEC;
+        write!(fmt, "{}.{:0>3}s", ms / mu, ms % mu)
     }
 }
 
@@ -105,6 +105,13 @@ impl std::ops::Sub for Timestamp {
     type Output = Timedelta;
     fn sub(self, other: Timestamp) -> Self::Output {
         Timedelta(self.0.wrapping_sub(other.0) as i64)
+    }
+}
+
+impl std::ops::Sub<Timedelta> for Timestamp {
+    type Output = Timestamp;
+    fn sub(self, other: Timedelta) -> Self::Output {
+        Timestamp((self.0 as i64 - other.0 as i64) as u64)
     }
 }
 
@@ -267,6 +274,7 @@ pub struct Knowledge {
     pub scents: Vec<ScentEvent>,
     pub time: Timestamp,
 
+    turn_times: VecDeque<Timestamp>,
     eid_index: HashMap<EID, EIDState>,
     pos_index: HashMap<Point, PointState>,
     sources: List<SourceKnowledge>,
@@ -324,13 +332,27 @@ impl SourceKnowledge {
     }
 
     pub fn freshness(&self) -> f64 {
-        let limit = max(SOURCE_TURN_LIMIT - 1, 1);
+        let limit = max(SOURCE_LIMIT_PC_ - 1, 1);
         1. - min(self.turns, limit) as f64 / limit as f64
     }
 }
 
 impl Knowledge {
     // Reads
+
+    pub fn debug_time(&self, time: Timestamp) -> String {
+        if time == Timestamp::default() { return "<never>".into(); }
+
+        for i in 0..=MAX_TURN_MEMORY {
+            let prev = self.time_at_turn(i as i32);
+            if time < prev { continue; }
+
+            let label = if time == prev { "" } else { "<" };
+            let turns = if i == 1 { "turn" } else { "turns" };
+            return format!("{:?} - {}{} {} ago", self.time - time, label, i, turns);
+        }
+        return format!("{:?} - >{} turns ago", self.time - time, MAX_TURN_MEMORY);
+    }
 
     pub fn default(&self) -> PointLookup<'_> {
         PointLookup { root: self, spot: None }
@@ -344,7 +366,33 @@ impl Knowledge {
         PointLookup { root: self, spot: self.pos_index.get(&p) }
     }
 
+    pub fn time_at_turn(&self, turn: i32) -> Timestamp {
+        if turn <= 0 { return self.time; }
+        self.turn_times.get((turn - 1) as usize).map(|&x| x).unwrap_or_default()
+    }
+
     // Writes
+
+    pub fn mark_turn_boundary(&mut self, player: bool, speed: f64) {
+        self.forget_old_sources(player);
+
+        if self.turn_times.len() < MAX_TURN_MEMORY {
+            let min = 1e-2;
+            let speed = if speed < min { min } else { speed };
+            let seconds_per_turn = 1. / speed;
+
+            self.turn_times.reserve_exact(MAX_TURN_MEMORY);
+            for i in 0..MAX_TURN_MEMORY {
+                let age = Timedelta::from_seconds(i as f64 * seconds_per_turn);
+                self.turn_times.push_back(self.time - age);
+            }
+        }
+
+        assert!(self.turn_times.len() == MAX_TURN_MEMORY);
+        assert!(self.turn_times.capacity() == MAX_TURN_MEMORY);
+        self.turn_times.pop_back();
+        self.turn_times.push_front(self.time);
+    }
 
     pub fn update(&mut self, me: &Entity, board: &Board, vision: &Vision, rng: &mut RNG) {
         assert!(board.time >= self.time);
@@ -454,13 +502,6 @@ impl Knowledge {
 
     // Events helpers:
 
-    pub fn forget_old_sources(&mut self) {
-        for x in &mut self.sources { x.turns += 1; }
-        while let Some(x) = self.sources.back() && x.turns >= SOURCE_TURN_LIMIT {
-            self.forget_last_source();
-        }
-    }
-
     pub fn observe_event(&mut self, me: &Entity, event: &Event) {
         assert!(event.time >= self.time);
         self.time = event.time;
@@ -478,12 +519,13 @@ impl Knowledge {
             return;
         };
 
+        let limit = self.time_at_turn(SOURCE_TRACKING_LIMIT);
         let entry = self.eid_index.entry(eid).or_default();
 
         // Check if we can link this event to an existing source.
         if let Some(x) = entry.source {
             let source = &mut self.sources[x];
-            if event.time - source.time < SOURCE_TRACKING_LIMIT {
+            if source.time > limit {
                 clone.uid = Some(source.uid);
             } else {
                 entry.source = None;
@@ -494,7 +536,7 @@ impl Knowledge {
         let link_to_entity = |x: &EntityKnowledge| match event.sense {
             Sense::Sight => true,
             Sense::Smell => false,
-            Sense::Sound => event.time - x.time < SOURCE_TRACKING_LIMIT,
+            Sense::Sound => x.time > limit,
         };
         if !me.player && let Some(h) = entry.entity && link_to_entity(&self.entities[h]) {
             let entity = &mut self.entities[h];
@@ -564,12 +606,8 @@ impl Knowledge {
             self.remove_entity(entity.eid, self.time);
         }
 
-        // We clean up all sources, both by count and age.
+        // Clean up sources by count. On turn boundaries, we drop them by age.
         while self.sources.len() > MAX_SOURCE_MEMORY {
-            self.forget_last_source();
-        }
-        while let Some(x) = self.sources.back() &&
-              self.time - x.time >= SOURCE_RETENTION_TIME {
             self.forget_last_source();
         }
     }
@@ -598,6 +636,16 @@ impl Knowledge {
         self.forget_event(None, Some(x.uid), x.pos);
     }
 
+    fn forget_old_sources(&mut self, player: bool) {
+        for x in &mut self.sources { x.turns += 1; }
+
+        let limit = if player { SOURCE_LIMIT_PC_ } else { SOURCE_LIMIT_NPC };
+
+        while let Some(x) = self.sources.back() && x.turns >= limit {
+            self.forget_last_source();
+        }
+    }
+
     fn populate_scents(&mut self, me: &Entity, board: &Board, rng: &mut RNG) {
         if me.asleep { return; }
 
@@ -619,11 +667,11 @@ impl Knowledge {
 
     fn see_entity(&mut self, me: &Entity, other: &Entity) -> EntityHandle {
         let (sense, time) = (Sense::Sight, self.time);
+        let limit = self.time_at_turn(SOURCE_TRACKING_LIMIT);
         let cached = self.eid_index.entry(other.eid).or_default();
 
         // Seeing this entity may let us identify an unknown event source.
-        if let Some(x) = cached.source.take() &&
-           time - self.sources[x].time < SOURCE_TRACKING_LIMIT {
+        if let Some(x) = cached.source.take() && self.sources[x].time > limit {
             let SourceKnowledge { uid, pos, .. } = self.sources.remove(x);
             Self::move_source(&mut self.pos_index, x, Some(pos), None);
 
