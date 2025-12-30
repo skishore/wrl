@@ -165,7 +165,7 @@ impl DebugFile {
 
         // Dump text debug output from behavior trees.
         let color = Color::white();
-        let mut lines = me.ai.get_trace();
+        let mut lines = me.ai.get_trace(&me.known);
         lines.insert(0, DebugLine { color, depth: 0, text: "".into() });
         lines.insert(0, DebugLine { color, depth: 0, text: format!("{:?}", action) });
         Self::write_bin(&mut file, &(lines.len() as i32))?;
