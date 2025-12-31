@@ -22,7 +22,7 @@ pub const CALL_RETRY_TURNS: i32 = 16;
 // Threat
 
 #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-enum Confidence { Zero, Low, Mid, High }
+enum Confidence { Low, Mid, High }
 
 #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Valence { Friendly, Neutral, Menacing, Hostile }
@@ -118,12 +118,8 @@ impl Threat {
         self.confidence == Confidence::High
     }
 
-    pub fn uncertain(&self) -> bool {
-        self.confidence == Confidence::Low
-    }
-
     pub fn unknown(&self) -> bool {
-        self.confidence == Confidence::Zero
+        self.confidence == Confidence::Low
     }
 
     pub fn mark_warned(&mut self, rng: &mut RNG) {

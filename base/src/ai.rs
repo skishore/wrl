@@ -579,7 +579,7 @@ fn WarnOffThreats(ctx: &mut Ctx) -> Option<Action> {
     for threat in &mut threats.threats {
         if threat.time <= limit { break; }
 
-        if !threat.uncertain() { continue; }
+        if !threat.unknown() { continue; }
         if (threat.pos - pos).len_nethack() > CALL_VOLUME { continue; }
 
         let warn = !stare && threat.time > bb.last_warning;
