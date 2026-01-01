@@ -555,8 +555,8 @@ fn hit_entity(board: &mut Board, env: &mut UpdateEnv, attack: &Attack, logged: b
     let Some(target) = board.entities.get_mut(tid) else { return; };
     let (pos, desc) = (target.pos, target.desc());
 
-    let critted = env.rng.gen_range(0..16) == 0;
-    let factor = if critted { 1.5 } else { 1. } * env.rng.gen_range(0.85..=1.);
+    let critted = env.rng.random_range(0..16) == 0;
+    let factor = if critted { 1.5 } else { 1. } * env.rng.random_range(0.85..=1.);
     let damage = (factor * attack.damage as f64).round() as i32;
     let damage = if target.species.name == "Human" { 1 } else { damage };
     let fainted = target.cur_hp <= damage;
@@ -1166,7 +1166,8 @@ impl State {
 
         let pos = |board: &Board, rng: &mut RNG| {
             for _ in 0..100 {
-                let p = Point(rng.gen_range(0..size.0), rng.gen_range(0..size.1));
+                let Point(x, y) = size;
+                let p = Point(rng.random_range(0..x), rng.random_range(0..y));
                 if let Status::Free = board.get_status(p) { return Some(p); }
             }
             None
