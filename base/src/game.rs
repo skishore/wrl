@@ -1232,8 +1232,8 @@ mod tests {
     extern crate test;
 
     const BASE_SEED: u64 = 17;
-    const NUM_SEEDS: u64 = 8;
-    const NUM_STEPS: u64 = 4096;
+    const NUM_SEEDS: u64 = 16;
+    const NUM_STEPS: u64 = 1024;
 
     #[test]
     fn test_state_update() {
