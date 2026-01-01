@@ -1,4 +1,3 @@
-#![feature(let_chains)]
 #![feature(test)]
 
 mod ai;

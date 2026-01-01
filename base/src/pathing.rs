@@ -623,7 +623,7 @@ mod tests {
         let mut rng = RNG::seed_from_u64(17);
         for x in -n..n + 1 {
             for y in -n..n + 1 {
-                let f = rng.gen::<i32>().rem_euclid(100);
+                let f = rng.random::<i32>().rem_euclid(100);
                 let s = if f < 20 { Status::Blocked } else { Status::Free };
                 result.insert(Point(x, y), s);
             }

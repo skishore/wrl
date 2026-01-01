@@ -148,7 +148,7 @@ type Sparkle<'a> = Vec<(i32, &'a str, i32)>;
 fn add_sparkle(effect: &mut Effect, sparkle: &Sparkle, mut frame: i32, point: Point) -> i32 {
     for &(delay, chars, color) in sparkle {
         for _ in 0..delay {
-            let index = rand::random::<usize>() % chars.chars().count();
+            let index = rand::random_range(0..chars.chars().count());
             let glyph = Glyph::wdfg(chars.chars().nth(index).unwrap(), color);
             effect.add_particle(frame, Particle { point, glyph });
             frame += 1;

@@ -11,7 +11,7 @@ fn main() {
     }
 
     let f = if args[1] == "old" { legacy_mapgen } else { mapgen };
-    let mut rng = RNG::from_entropy();
+    let mut rng = RNG::from_os_rng();
     let map = f(&mut rng);
 
     for y in 0..map.size.1 {

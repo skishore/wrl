@@ -85,7 +85,7 @@ fn build_cave(size: Point, config: &MapgenConfig, rng: &mut RNG) -> Matrix<char>
         for y in 1..(h - 1) {
             let p = Point(x, y);
             let wall = config.wall_chance + config.wall_perlin * noise.get(p);
-            result.set(p, if rng.gen::<f64>() < wall { ' ' } else { '.' });
+            result.set(p, if rng.random::<f64>() < wall { ' ' } else { '.' });
         }
     }
 
@@ -283,7 +283,7 @@ fn generate_perlin_noise(
         let mut grid = Matrix::new(Point(gw, gh), 0.0);
         for x in 0..gw {
             for y in 0..gh {
-                grid.set(Point(x, y), rng.gen::<f64>());
+                grid.set(Point(x, y), rng.random::<f64>());
             }
         }
 
@@ -454,7 +454,7 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
     // Place the first room in the center.
     let rc = &config.room_series[0];
     let (min, max) = (rc.min_size, rc.max_size);
-    let dims = Point(rng.gen_range(min..=max), rng.gen_range(min..=max));
+    let dims = Point(rng.random_range(min..=max), rng.random_range(min..=max));
     let room = build_room_cave(dims, config, rng);
 
     let dx = (size - dims).0 / 2;
@@ -471,7 +471,7 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
     for rc in &config.room_series {
         for _ in 0..rc.attempts {
             let (min, max) = (rc.min_size, rc.max_size);
-            let dims = Point(rng.gen_range(min..=max), rng.gen_range(min..=max));
+            let dims = Point(rng.random_range(min..=max), rng.random_range(min..=max));
             let room = build_room_cave(dims, config, rng);
             try_place_room(&mut map, &room, rng);
         }
@@ -505,10 +505,10 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
     let noise = generate_perlin_noise(size, 4.0, 2, 0.65, rng);
 
     // Build the lake...
-    let ls = Point(rng.gen_range(18..=36), rng.gen_range(12..=24));
+    let ls = Point(rng.random_range(18..=36), rng.random_range(12..=24));
     let lz = config.size - ls;
-    let lx = ((0.50 + 0.25 * rng.gen::<f64>()) * lz.0 as f64).round() as i32;
-    let ly = ((0.75 + 0.25 * rng.gen::<f64>()) * lz.1 as f64).round() as i32;
+    let lx = ((0.50 + 0.25 * rng.random::<f64>()) * lz.0 as f64).round() as i32;
+    let ly = ((0.75 + 0.25 * rng.random::<f64>()) * lz.1 as f64).round() as i32;
     let lake = (|| loop {
         let result = build_room_cave(ls, config, rng);
         if find_cardinal_components(&result, '#').len() == 1 { return result; }
@@ -604,7 +604,7 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
         let mut values = vec![];
         for &p in room {
             if can_plant_grass.contains(&map.get(p)) {
-                values.push((p, noise.get(p) + 0.3 * rng.gen::<f64>()));
+                values.push((p, noise.get(p) + 0.3 * rng.random::<f64>()));
             }
         }
         if values.is_empty() { continue; }
@@ -620,7 +620,7 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
         }
 
         let mut weediness = 0.2;
-        let mut grassiness = rng.gen::<f64>();
+        let mut grassiness = rng.random::<f64>();
         if i < l1 {
             generate_blue_noise(24, &trees, &mut blue_noise, rng);
             for &p in &trees {
@@ -655,7 +655,7 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
         let mut values: Vec<_> = values.into_iter().collect();
         values.sort_by_key(|&x| (f64_to_monotonic_u64(x.1), x.0.0, x.0.1));
 
-        let grass = if rng.gen::<f64>() < weediness { ',' } else { '"' };
+        let grass = if rng.random::<f64>() < weediness { ',' } else { '"' };
 
         for (i, &(p, _)) in values.iter().enumerate() {
             if i >= target { break; }
@@ -814,7 +814,7 @@ pub fn legacy_mapgen_with_size(size: Point, rng: &mut RNG) -> Matrix<char> {
 
         for y in 0..size.1 {
             for x in 0..size.0 {
-                let block = rng.gen_range(0..100) < init;
+                let block = rng.random_range(0..100) < init;
                 if block { result.set(Point(x, y),  true); }
             }
         }
@@ -861,7 +861,7 @@ pub fn legacy_mapgen_with_size(size: Point, rng: &mut RNG) -> Matrix<char> {
     let mut river = vec![Point::default()];
     for i in 1..size.1 {
         let last = river.last().unwrap().0;
-        let next = last + rng.gen_range(-1..=1);
+        let next = last + rng.random_range(-1..=1);
         river.push(Point(next, i));
     }
     let target = river[0] + *river.last().unwrap();
@@ -870,7 +870,7 @@ pub fn legacy_mapgen_with_size(size: Point, rng: &mut RNG) -> Matrix<char> {
 
     let mut free_point = |map: &Matrix<char>| {
         for _ in 0..100 {
-            let p = Point(rng.gen_range(0..size.0), rng.gen_range(0..size.1));
+            let p = Point(rng.random_range(0..size.0), rng.random_range(0..size.1));
             let c = map.get(p);
             if c == '.' || c == '"' { return Some(p); }
         }

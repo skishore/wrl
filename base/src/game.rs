@@ -877,7 +877,7 @@ impl State {
     pub fn new(seed: Option<u64>, full: bool) -> Self {
         let size = Point(WORLD_SIZE, WORLD_SIZE);
         let rng = seed.map(|x| RNG::seed_from_u64(x));
-        let mut rng = rng.unwrap_or_else(|| RNG::from_entropy());
+        let mut rng = rng.unwrap_or_else(|| RNG::from_os_rng());
         let mut pos = Point(size.0 / 2, size.1 / 2);
         let mut board = Board::new(size, LIGHT);
 

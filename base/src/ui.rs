@@ -626,37 +626,37 @@ impl UI {
     // Update helpers
 
     fn update_weather(&mut self, pos: Point, rng: &mut RNG) {
-        let Some(rainfall) = &mut self.rainfall else { return; };
+        let Some(r) = &mut self.rainfall else { return; };
 
         let frame = self.frame;
-        while let Some(x) = rainfall.drops.front() && x.frame < frame {
-            rainfall.drops.pop_front();
+        while let Some(x) = r.drops.front() && x.frame < frame {
+            r.drops.pop_front();
         }
-        let total = rainfall.drops.capacity();
-        let denom = max(rainfall.delta.1, 1);
+        let total = r.drops.capacity();
+        let denom = max(r.delta.1, 1);
         let delta = denom as usize;
         let extra = (frame + 1) * total / delta - (frame * total) / delta;
-        for _ in 0..min(extra, total - rainfall.drops.len()) {
-            let x = rng.gen_range(0..denom);
-            let y = rng.gen_range(0..denom);
-            let target_frame = frame + rainfall.path.len() - 1;
+        for _ in 0..min(extra, total - r.drops.len()) {
+            let x = rng.random_range(0..denom);
+            let y = rng.random_range(0..denom);
+            let target_frame = frame + r.path.len() - 1;
             let target_point = Point(x - denom / 2, y - denom / 2) + pos;
-            rainfall.drops.push_back(RainDrop { frame: target_frame, point: target_point });
+            r.drops.push_back(RainDrop { frame: target_frame, point: target_point });
         }
 
-        assert!(rainfall.lightning >= -1);
-        if rainfall.lightning == -1 {
-            if rng.gen::<f32>() < 0.002 { rainfall.lightning = 10; }
-        } else if rainfall.lightning > 0 {
-            rainfall.lightning -= 1;
+        assert!(r.lightning >= -1);
+        if r.lightning == -1 {
+            if rng.random::<f32>() < 0.002 { r.lightning = 10; }
+        } else if r.lightning > 0 {
+            r.lightning -= 1;
         }
 
-        assert!(rainfall.thunder >= 0);
-        if rainfall.thunder == 0 {
-            if rainfall.lightning == 0 && rng.gen::<f32>() < 0.02 { rainfall.thunder = 16; }
+        assert!(r.thunder >= 0);
+        if r.thunder == 0 {
+            if r.lightning == 0 && rng.random::<f32>() < 0.02 { r.thunder = 16; }
         } else {
-            rainfall.thunder -= 1;
-            if rainfall.thunder == 0 { rainfall.lightning = -1; }
+            r.thunder -= 1;
+            if r.thunder == 0 { r.lightning = -1; }
         }
     }
 

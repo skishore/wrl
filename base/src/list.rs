@@ -93,7 +93,7 @@ impl<T> std::ops::IndexMut<Handle<T>> for List<T> {
 impl<T> Handle<T> {
     unsafe fn unchecked(x: Index) -> Self {
         debug_assert!(!x.is_dummy());
-        Self(NonZeroU32::new_unchecked(x.0), PhantomData)
+        Self(unsafe { NonZeroU32::new_unchecked(x.0) }, PhantomData)
     }
 
     fn index(self) -> Index { Index(self.0.get()) }

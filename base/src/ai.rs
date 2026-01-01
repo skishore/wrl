@@ -182,10 +182,10 @@ impl SharedAIState {
     fn new(predator: bool, rng: &mut RNG) -> Self {
         let max_hunger = if predator { MAX_HUNGER_CARNIVORE } else { MAX_HUNGER_HERBIVORE };
         Self {
-            till_assess: rng.gen_range(0..MAX_ASSESS),
-            till_hunger: rng.gen_range(0..max_hunger),
-            till_rested: rng.gen_range(0..MAX_RESTED),
-            till_thirst: rng.gen_range(0..MAX_THIRST),
+            till_assess: rng.random_range(0..MAX_ASSESS),
+            till_hunger: rng.random_range(0..max_hunger),
+            till_rested: rng.random_range(0..MAX_RESTED),
+            till_thirst: rng.random_range(0..MAX_THIRST),
             prev_time: Timestamp::default(),
             turn_time: Timestamp::default(),
         }
@@ -475,7 +475,7 @@ impl Strategy for AssessStrategy {
 
         let target = self.dirs.pop()?;
         if self.dirs.is_empty() {
-            ctx.shared.till_assess = rng.gen_range(0..MAX_ASSESS);
+            ctx.shared.till_assess = rng.random_range(0..MAX_ASSESS);
         }
         Some(Action::Look(target))
     }
@@ -748,7 +748,7 @@ impl FlightStrategy {
         }
 
         if self.dirs.is_empty() {
-            ctx.shared.till_assess = rng.gen_range(0..MAX_ASSESS);
+            ctx.shared.till_assess = rng.random_range(0..MAX_ASSESS);
             self.turn_limit = MIN_FLIGHT_TURNS;
             self.stage = FlightStage::Done;
         }
@@ -1055,7 +1055,7 @@ fn assess_directions(dirs: &[Point], turns: i32, rng: &mut RNG) -> Vec<Point> {
         let distance = dir.len_l2();
         let scale = 100. / if distance > 0. { dir.len_l2() } else { 1. };
 
-        let steps = rng.gen_range(0..turns) + 1;
+        let steps = rng.random_range(0..turns) + 1;
         let angle = Normal::new(0., ASSESS_ANGLE).unwrap().sample(rng);
         let (sin, cos) = (angle.sin(), angle.cos());
 

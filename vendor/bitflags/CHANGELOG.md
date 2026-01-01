@@ -1,3 +1,86 @@
+# 2.10.0
+
+## What's Changed
+* Implement iterator for all named flags by @ssrlive in https://github.com/bitflags/bitflags/pull/465
+* Depend on serde_core instead of serde by @KodrAus in https://github.com/bitflags/bitflags/pull/467
+
+## New Contributors
+* @ssrlive made their first contribution in https://github.com/bitflags/bitflags/pull/465
+
+**Full Changelog**: https://github.com/bitflags/bitflags/compare/2.9.4...2.10.0
+
+# 2.9.4
+
+## What's Changed
+* Add Cargo features to readme by @KodrAus in https://github.com/bitflags/bitflags/pull/460
+
+**Full Changelog**: https://github.com/bitflags/bitflags/compare/2.9.3...2.9.4
+
+# 2.9.3
+
+## What's Changed
+* Streamline generated code by @nnethercote in https://github.com/bitflags/bitflags/pull/458
+
+## New Contributors
+* @nnethercote made their first contribution in https://github.com/bitflags/bitflags/pull/458
+
+**Full Changelog**: https://github.com/bitflags/bitflags/compare/2.9.2...2.9.3
+
+# 2.9.2
+
+## What's Changed
+* Fix difference in the spec by @KodrAus in https://github.com/bitflags/bitflags/pull/446
+* Fix up inaccurate docs on bitflags_match by @KodrAus in https://github.com/bitflags/bitflags/pull/453
+* Remove rustc internal crate feature by @KodrAus in https://github.com/bitflags/bitflags/pull/454
+
+
+**Full Changelog**: https://github.com/bitflags/bitflags/compare/2.9.1...2.9.2
+
+# 2.9.1
+
+## What's Changed
+* Document Cargo features by @KodrAus in https://github.com/bitflags/bitflags/pull/444
+
+
+**Full Changelog**: https://github.com/bitflags/bitflags/compare/2.9.0...2.9.1
+
+# 2.9.0
+
+## What's Changed
+* `Flags` trait: add `clear(&mut self)` method by @wysiwys in https://github.com/bitflags/bitflags/pull/437
+* Fix up UI tests by @KodrAus in https://github.com/bitflags/bitflags/pull/438
+
+
+**Full Changelog**: https://github.com/bitflags/bitflags/compare/2.8.0...2.9.0
+
+# 2.8.0
+
+## What's Changed
+* feat(core): Add bitflags_match macro for bitflag matching by @YuniqueUnic in https://github.com/bitflags/bitflags/pull/423
+* Finalize bitflags_match by @KodrAus in https://github.com/bitflags/bitflags/pull/431
+
+## New Contributors
+* @YuniqueUnic made their first contribution in https://github.com/bitflags/bitflags/pull/423
+
+**Full Changelog**: https://github.com/bitflags/bitflags/compare/2.7.0...2.8.0
+
+# 2.7.0
+
+## What's Changed
+* Fix `clippy::doc_lazy_continuation` lints by @waywardmonkeys in https://github.com/bitflags/bitflags/pull/414
+* Run clippy on extra features in CI. by @waywardmonkeys in https://github.com/bitflags/bitflags/pull/415
+* Fix CI: trybuild refresh, allow some clippy restrictions. by @waywardmonkeys in https://github.com/bitflags/bitflags/pull/417
+* Update zerocopy version in example by @KodrAus in https://github.com/bitflags/bitflags/pull/422
+* Add method to check if unknown bits are set by @wysiwys in https://github.com/bitflags/bitflags/pull/426
+* Update error messages by @KodrAus in https://github.com/bitflags/bitflags/pull/427
+* Add `truncate(&mut self)` method to unset unknown bits by @wysiwys in https://github.com/bitflags/bitflags/pull/428
+* Update error messages by @KodrAus in https://github.com/bitflags/bitflags/pull/429
+
+## New Contributors
+* @wysiwys made their first contribution in https://github.com/bitflags/bitflags/pull/426
+
+**Full Changelog**: https://github.com/bitflags/bitflags/compare/2.6.0...2.7.0
+
 # 2.6.0
 
 ## What's Changed

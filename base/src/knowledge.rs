@@ -202,7 +202,7 @@ impl CellKnowledge {
 impl Knowledge {
     // Reads
 
-    pub fn default(&self) -> CellResult {
+    pub fn default(&self) -> CellResult<'_> {
         CellResult { root: self, cell: None }
     }
 
@@ -210,7 +210,7 @@ impl Knowledge {
         self.entity_by_eid.get(&eid).map(|&x| &self.entities[x])
     }
 
-    pub fn get(&self, p: Point) -> CellResult {
+    pub fn get(&self, p: Point) -> CellResult<'_> {
         let cell_handle = self.cell_by_point.get(&p);
         CellResult { root: self, cell: cell_handle.map(|&x| &self.cells[x]) }
     }
@@ -438,7 +438,8 @@ impl Knowledge {
 
         for (oid, other) in &board.entities {
             if oid == me.eid || (other.player || other.predator) { continue; }
-            let mut remainder = rng.gen::<f64>();
+            let mut remainder = rng.random::<f64>();
+
             for age in 0..other.trail.capacity() {
                 remainder -= other.get_historical_scent_at(me.pos, age);
                 if remainder >= 0. { continue; }
