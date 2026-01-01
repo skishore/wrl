@@ -4,7 +4,7 @@ use std::num::NonZeroU64;
 use std::ops::{Index, IndexMut};
 
 use slotmap::{DefaultKey, Key, KeyData};
-use slotmap::hop::HopSlotMap;
+use slotmap::dense::DenseSlotMap;
 
 use crate::static_assert_size;
 use crate::ai::AIState;
@@ -127,7 +127,7 @@ fn to_eid(key: DefaultKey) -> EID {
 
 // EntityMap
 
-type BaseMap = HopSlotMap<DefaultKey, Entity>;
+type BaseMap = DenseSlotMap<DefaultKey, Entity>;
 
 #[derive(Default)]
 pub struct EntityMap(BaseMap);
@@ -182,9 +182,9 @@ impl<'a> IntoIterator for &'a mut EntityMap {
 
 // EntityMap iterators
 
-pub struct Iter<'a>(slotmap::hop::Iter<'a, DefaultKey, Entity>);
+pub struct Iter<'a>(slotmap::dense::Iter<'a, DefaultKey, Entity>);
 
-pub struct IterMut<'a>(slotmap::hop::IterMut<'a, DefaultKey, Entity>);
+pub struct IterMut<'a>(slotmap::dense::IterMut<'a, DefaultKey, Entity>);
 
 impl<'a> FusedIterator for Iter<'a> {}
 
