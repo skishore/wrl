@@ -872,7 +872,7 @@ mod tests {
             let mut rng = crate::base::RNG::seed_from_u64(17);
             b.iter(|| {
                 let Point(x, y) = map.size;
-                let target = Point(rng.gen_range(0..x), rng.gen_range(0..y));
+                let target = Point(rng.random_range(0..x), rng.random_range(0..y));
                 vision.check_point(&args, target);
             });
         } else {
@@ -897,7 +897,7 @@ mod tests {
         let mut map = Matrix::new(size, '#');
         for x in 0..size.0 {
             for y in 0..size.1 {
-                let sample = rng.gen_range(0..100);
+                let sample = rng.random_range(0..100);
                 let c = if sample < 1 { '#' } else if sample < 5 { ',' } else { '.' };
                 map.set(Point(x, y), c);
             }
