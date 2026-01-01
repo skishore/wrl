@@ -128,7 +128,7 @@ impl Blackboard {
 
             hunger: false,
             thirst: false,
-            weary_: rng.gen_bool(0.5),
+            weary_: rng.random_bool(0.5),
         }
     }
 
@@ -504,7 +504,7 @@ fn FollowDirs(ctx: &mut Ctx, kind: DirsKind) -> Option<Action> {
     let dir = bb.dirs.dirs.pop()?;
 
     if bb.dirs.dirs.is_empty() {
-        let gain = rng.gen_range(ASSESS_GAIN);
+        let gain = rng.random_range(ASSESS_GAIN);
         bb.till_assess = min(bb.till_assess + gain, MAX_ASSESS);
     } else {
         bb.dirs.used = true;
@@ -946,7 +946,7 @@ fn EatBerryNearby(ctx: &mut Ctx) -> Option<Action> {
     let target = ChooseNeighbor(ctx, PathKind::Berry, HasBerry)?;
     if !known.get(target).visible() { return Some(Action::Look(target - pos)); }
 
-    let gain = ctx.env.rng.gen_range(HUNGER_GAIN);
+    let gain = ctx.env.rng.random_range(HUNGER_GAIN);
     ctx.blackboard.till_hunger = min(ctx.blackboard.till_hunger + gain, MAX_HUNGER);
     Some(Action::Eat(EatAction { target, item: Some(Item::Berry) }))
 }
@@ -957,7 +957,7 @@ fn DrinkWaterNearby(ctx: &mut Ctx) -> Option<Action> {
     let target = ChooseNeighbor(ctx, PathKind::Water, HasWater)?;
     if !known.get(target).visible() { return Some(Action::Look(target - pos)); }
 
-    let gain = ctx.env.rng.gen_range(THIRST_GAIN);
+    let gain = ctx.env.rng.random_range(THIRST_GAIN);
     ctx.blackboard.till_thirst = min(ctx.blackboard.till_thirst + gain, MAX_THIRST);
     Some(Action::Drink(target))
 }
@@ -980,7 +980,7 @@ fn FindNearbyBerryTree(ctx: &mut Ctx) -> Option<Action> {
 fn RestHere(ctx: &mut Ctx) -> Option<Action> {
     if !CanRestAt(ctx, ctx.pos) { return None; }
 
-    let gain = ctx.env.rng.gen_range(RESTED_GAIN);
+    let gain = ctx.env.rng.random_range(RESTED_GAIN);
     ctx.blackboard.till_weary_ = min(ctx.blackboard.till_weary_ + gain, MAX_WEARY_);
     Some(Action::Rest)
 }
