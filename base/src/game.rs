@@ -685,11 +685,12 @@ fn plan(state: &mut State, eid: EID) -> Action {
     if player { return replace(&mut state.input, Action::WaitForInput); }
 
     let State { ai, board, env, .. } = state;
+    let debug = env.debug.as_deref_mut();
     let vision = &mut env.fov.npc_vision;
     let entity = &mut board.entities[eid];
     swap(ai, &mut entity.ai);
 
-    let env = AIEnv { fov: vision, rng: &mut env.rng };
+    let env = AIEnv { debug, fov: vision, rng: &mut env.rng };
     let action = ai.plan(&entity, env);
 
     swap(ai, &mut entity.ai);
