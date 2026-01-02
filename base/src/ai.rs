@@ -9,7 +9,7 @@ use rand_distr::num_traits::Pow;
 use crate::{act, cb, cond, pri, run, seq, util};
 use crate::base::{LOS, Point, RNG, dirs, sample, weighted};
 use crate::bhv::{Bhv, Result};
-use crate::debug::{DebugLine, DebugLog};
+use crate::debug::{DebugFile, DebugLine, DebugLog};
 use crate::entity::Entity;
 use crate::game::{FOV_RADIUS_NPC, CALL_VOLUME, MOVE_VOLUME, Item, move_ready};
 use crate::game::{Action, AttackAction, CallAction, EatAction, MoveAction};
@@ -309,6 +309,8 @@ fn select_target(scores: &[(Point, f64)], env: &mut AIEnv) -> Option<Point> {
     }).collect();
     if values.is_empty() { return None; }
 
+    if let Some(x) = &mut env.debug { x.record_utility(&values) };
+
     Some(*weighted(&values, env.rng))
 }
 
@@ -324,6 +326,8 @@ fn select_target_softmax(scores: &[(Point, f64)], env: &mut AIEnv, temp: f64) ->
         assert!(0 <= value && value < (1 << 16));
         (value, p)
     }).collect();
+
+    if let Some(x) = &mut env.debug { x.record_utility(&values) };
 
     Some(*weighted(&values, env.rng))
 }
@@ -1628,6 +1632,7 @@ fn Root() -> impl Bhv {
 // Entry point:
 
 pub struct AIEnv<'a> {
+    pub debug: Option<&'a mut DebugFile>,
     pub fov: &'a mut Vision,
     pub rng: &'a mut RNG,
 }
@@ -1657,7 +1662,7 @@ impl AIState {
     pub fn plan(&mut self, entity: &Entity, env: AIEnv) -> Action {
         let known = &*entity.known;
         let blackboard = &mut self.blackboard;
-        let mut env = AIEnv { fov: env.fov, rng: env.rng };
+        let mut env = AIEnv { ..env };
 
         let mut ctx = Ctx {
             entity,

@@ -56,6 +56,7 @@ impl DebugLog {
 
 pub struct DebugFile {
     animation: Vec<Frame>,
+    utilities: Vec<(i32, Point)>,
     dir: &'static str,
     file: BufWriter<File>,
     map: Matrix<Glyph>,
@@ -69,7 +70,7 @@ impl Default for DebugFile {
         std::fs::create_dir_all(dir).unwrap();
         let file = BufWriter::new(File::create(format!("{}/ticks.txt", dir)).unwrap());
         let map = Matrix::new(Point(WORLD_SIZE, WORLD_SIZE), Glyph::wide(' '));
-        Self { animation: vec![], dir, file, map, next_tick: 0 }
+        Self { animation: vec![], utilities: vec![], dir, file, map, next_tick: 0 }
     }
 }
 
@@ -82,8 +83,15 @@ impl DebugFile {
         self.try_record_frame(time, frame).unwrap();
     }
 
+    pub fn record_utility(&mut self, utilities: &[(i32, Point)]) {
+        self.utilities = utilities.into()
+    }
+
     fn try_record(&mut self, action: &Action, board: &Board, me: &Entity) -> Result<()> {
         self.record_tick(action, board, me)?;
+
+        self.animation.clear();
+        self.utilities.clear();
         self.next_tick += 1;
 
         write!(self.file, "{{")?;
@@ -120,8 +128,6 @@ impl DebugFile {
                 Self::write_array(&mut file, frame.as_slice())?;
             }
             file.flush()?;
-
-            self.animation.clear();
         }
 
         // Dump binary data for the tick itself.
@@ -175,6 +181,10 @@ impl DebugFile {
             Self::write_bin(&mut file, &line.depth)?;
             Self::write_str(&mut file, &line.text)?;
         }
+
+        // Dump a utility map, if this behavior tree tick used one.
+        Self::write_bin(&mut file, &(self.utilities.len() as i32))?;
+        Self::write_array(&mut file, self.utilities.as_slice())?;
 
         // Anything we scribble on the map shows up in the debug UI.
         for y in 0..self.map.size.1 {
