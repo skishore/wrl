@@ -367,9 +367,9 @@ fn select_explore_target(ctx: &mut Ctx) -> Option<Point> {
 
 fn select_chase_target(
         ctx: &mut Ctx, age: Timedelta, bias: Point, center: Point) -> Option<Point> {
-    let Ctx { known, pos, dir, .. } = *ctx;
-    let inv_dir_l2 = safe_inv_l2(dir);
-    let inv_bias_l2 = safe_inv_l2(bias);
+    let Ctx { known, pos, .. } = *ctx;
+
+    let scale = 1. / DijkstraLength(Point(1, 0)) as f64;
 
     let is_search_candidate = |p: Point| {
         if p == pos { return false; }
@@ -378,23 +378,20 @@ fn select_chase_target(
     };
     if is_search_candidate(center) { return Some(center); }
 
-    let score = |p: Point| -> f64 {
-        if !is_search_candidate(p) { return 0.; }
+    let score = |p: Point, distance: i32| -> Option<f64> {
+        if !is_search_candidate(p) { return None; }
 
-        let delta = p - pos;
-        let inv_delta_l2 = safe_inv_l2(delta);
-        let cos0 = delta.dot(dir) as f64 * inv_delta_l2 * inv_dir_l2;
-        let cos1 = delta.dot(bias) as f64 * inv_delta_l2 * inv_bias_l2;
-        let angle = ((cos0 + 1.) * (cos1 + 1.)).pow(4);
-
-        angle / (((p - center).len_l2_squared() + 1) as f64).pow(2)
+        let source_l2 = (scale * distance as f64).powi(2);
+        let target_l2 = (p - center).len_l2_squared() as f64;
+        let flight_l2 = (p - center - bias).len_l2_squared() as f64;
+        Some(-0. * source_l2 + -1. * target_l2 + -1. * flight_l2)
     };
 
     ensure_neighborhood(ctx);
 
-    let scores: Vec<_> = ctx.neighborhood.visited.iter().map(
-        |&(p, _)| (p, score(p))).collect();
-    select_target(&scores, ctx.env)
+    let scores: Vec<_> = ctx.neighborhood.visited.iter().filter_map(
+        |&(p, distance)| Some((p, score(p, distance)?))).collect();
+    select_target_softmax(&scores, ctx.env, 10.)
 }
 
 fn select_flight_target(ctx: &mut Ctx, hiding: bool) -> Option<Point> {
