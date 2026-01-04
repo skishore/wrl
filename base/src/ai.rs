@@ -13,7 +13,7 @@ use crate::debug::{DebugFile, DebugLine, DebugLog};
 use crate::entity::Entity;
 use crate::game::{FOV_RADIUS_NPC, CALL_VOLUME, MOVE_VOLUME, Item, move_ready};
 use crate::game::{Action, AttackAction, CallAction, EatAction, MoveAction};
-use crate::knowledge::{Call, Knowledge, ScentEvent, Sense, Timedelta, Timestamp};
+use crate::knowledge::{Call, Knowledge, ScentEvent, Sense, Timestamp};
 use crate::pathing::{AStar, AStarHeuristic, Status};
 use crate::pathing::{BFS, DijkstraLength, DijkstraMap, Neighborhood};
 use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
@@ -365,10 +365,17 @@ fn select_explore_target(ctx: &mut Ctx) -> Option<Point> {
     select_target(&scores, ctx.env)
 }
 
-fn select_chase_target(
-        ctx: &mut Ctx, age: Timedelta, bias: Point, center: Point) -> Option<Point> {
-    let Ctx { known, pos, .. } = *ctx;
+fn select_chase_target(ctx: &mut Ctx) -> Option<Point> {
+    let Ctx { known, pos, dir, .. } = *ctx;
+    let target = ctx.blackboard.target.as_ref()?;
+    let (bias, steps, target) = (target.bias, target.steps, &target.target);
 
+    let age = known.time - target.time;
+    let bias = if target.sense == Sense::Smell { Point(0, 0) } else { bias };
+    let center = target.last;
+
+    let inv_dir_l2 = safe_inv_l2(dir);
+    let inv_bias_l2 = safe_inv_l2(bias);
     let scale = 1. / DijkstraLength(Point(1, 0)) as f64;
 
     let is_search_candidate = |p: Point| {
@@ -381,17 +388,22 @@ fn select_chase_target(
     let score = |p: Point, distance: i32| -> Option<f64> {
         if !is_search_candidate(p) { return None; }
 
-        let source_l2 = (scale * distance as f64).powi(2);
-        let target_l2 = (p - center).len_l2_squared() as f64;
-        let flight_l2 = (p - center - bias).len_l2_squared() as f64;
-        Some(-0. * source_l2 + -1. * target_l2 + -1. * flight_l2)
+        let delta = p - pos;
+        let inv_delta_l2 = safe_inv_l2(delta);
+        let cos0 = delta.dot(dir) as f64 * inv_delta_l2 * inv_dir_l2;
+        let cos1 = delta.dot(bias) as f64 * inv_delta_l2 * inv_bias_l2;
+
+        let d0 = (scale * distance as f64).powi(2);
+        let d1 = (p - center).len_l2_squared() as f64;
+
+        Some(-0.25 * d0 + -1. * d1 / (1. + steps as f64) + 8. * cos0 + 8. * cos1)
     };
 
     ensure_neighborhood(ctx);
 
     let scores: Vec<_> = ctx.neighborhood.visited.iter().filter_map(
         |&(p, distance)| Some((p, score(p, distance)?))).collect();
-    select_target_softmax(&scores, ctx.env, 10.)
+    select_target_softmax(&scores, ctx.env, 4.)
 }
 
 fn select_flight_target(ctx: &mut Ctx, hiding: bool) -> Option<Point> {
@@ -1158,19 +1170,12 @@ fn TrackEnemyByScent(ctx: &mut Ctx) -> Option<Action> {
 
 #[allow(non_snake_case)]
 fn SearchForEnemy(ctx: &mut Ctx) -> Option<Action> {
-    let &ChaseTarget { bias, steps, target, .. } = ctx.blackboard.target.as_ref()?;
     let Ctx { known, pos, .. } = *ctx;
-    let age = known.time - target.time;
-
-    let target = if target.sense == Sense::Smell {
-        select_chase_target(ctx, age, Point(0, 0), target.last)?
-    } else {
-        let center = if steps > bias.len_l1() { pos } else { target.last };
-        select_chase_target(ctx, age, bias, center)?
-    };
+    let target = select_chase_target(ctx)?;
 
     if (target - pos).len_l1() == 1 {
-        let look = matches!(known.get(target).status(), Status::Blocked | Status::Occupied);
+        let status = known.get(target).status();
+        let look = matches!(status, Status::Blocked | Status::Occupied);
         if look { return Some(Action::Look(target - pos)); }
     }
 
