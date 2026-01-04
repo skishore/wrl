@@ -277,6 +277,7 @@ class DebugTrace {
       this.tickState.aiOutput.push({color, depth, text});
     }
 
+    const {mapX, mapY} = this;
     const numUtilityEntries = reader.readInt();
     this.tickState.utility.clear();
     for (let i = 0; i < numUtilityEntries; i++) {
@@ -284,19 +285,27 @@ class DebugTrace {
       const x = reader.readInt();
       const y = reader.readInt();
 
-      if (!(0 <= x && x < this.mapX && 0 <= y && y < this.mapY)) continue;
-      const index = x + y * this.mapX;
+      if (!(0 <= x && x < mapX && 0 <= y && y < mapY)) continue;
+      const index = x + y * mapX;
       this.tickState.utility.set(index, value);
     }
 
     const w = reader.readInt();
     const h = reader.readInt();
-    if (w !== this.mapX || h !== this.mapY) {
-      throw Error(`Expected: ${this.mapX} x ${this.mapY} map; got: ${w} x ${h}`);
+    if (w > mapX || h > mapY) {
+      throw Error(`Expected: max ${mapX} x ${mapY} map; got: ${w} x ${h}`);
     }
     this.tickState.map.length = 0;
-    for (let i = 0; i < 2 * w * h; i++) {
-      this.tickState.map.push(reader.readInt());
+    for (let y = 0; y < mapY; y++) {
+      for (let x = 0; x < mapX; x++) {
+        if (x < w && y < h) {
+          this.tickState.map.push(reader.readInt());
+          this.tickState.map.push(reader.readInt());
+        } else {
+          this.tickState.map.push(0xff00);
+          this.tickState.map.push(0);
+        }
+      }
     }
   }
 
