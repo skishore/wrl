@@ -159,8 +159,6 @@ impl Threat {
     //
     //   - Can we make call-for-help carry information about target EID(s)?
     //     Seems hard - we can call based on unknown threats.
-    //
-    //   - Hunting behavior should focus more on where the entity was last seen.
 
     // State updates:
 
