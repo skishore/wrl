@@ -378,6 +378,9 @@ fn select_chase_target(ctx: &mut Ctx) -> Option<Point> {
     let inv_bias_l2 = safe_inv_l2(bias);
     let scale = 1. / DijkstraLength(Point(1, 0)) as f64;
 
+    let k = 0.5 * MIN_SEARCH_TURNS as f64;
+    let decay = k / (k + steps as f64);
+
     let is_search_candidate = |p: Point| {
         if p == pos { return false; }
         let cell = known.get(p);
@@ -393,10 +396,14 @@ fn select_chase_target(ctx: &mut Ctx) -> Option<Point> {
         let cos0 = delta.dot(dir) as f64 * inv_delta_l2 * inv_dir_l2;
         let cos1 = delta.dot(bias) as f64 * inv_delta_l2 * inv_bias_l2;
 
-        let d0 = (scale * distance as f64).powi(2);
-        let d1 = (p - center).len_l2_squared() as f64;
+        let d0 = scale * distance as f64;
+        let d1 = (p - center).len_l2();
 
-        Some(-0.25 * d0 + -1. * d1 / (1. + steps as f64) + 8. * cos0 + 8. * cos1)
+        let n = if known.get(p).unknown() { 0 } else {
+            dirs::ALL.iter().filter(|&&x| is_search_candidate(p + x)).count()
+        };
+
+        Some(-0.5 * d0 + -2. * d1 * decay + 16. * cos0 + 16. * cos1 + 2. * n as f64)
     };
 
     ensure_neighborhood(ctx);
