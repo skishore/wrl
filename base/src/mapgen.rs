@@ -786,12 +786,7 @@ pub fn mapgen_with_size(size: Point, rng: &mut RNG) -> Matrix<char> {
 
 // Legacy code
 
-pub fn legacy_mapgen(rng: &mut RNG) -> Matrix<char> {
-    let config = MapgenConfig::default();
-    legacy_mapgen_with_size(config.size, rng)
-}
-
-pub fn legacy_mapgen_with_size(size: Point, rng: &mut RNG) -> Matrix<char> {
+pub fn legacy_mapgen_attempt(size: Point, rng: &mut RNG) -> Option<Matrix<char>> {
     let mut map = Matrix::new(size, '.');
 
     let automata = |rng: &mut RNG, init: u32| -> Matrix<bool> {
@@ -872,7 +867,30 @@ pub fn legacy_mapgen_with_size(size: Point, rng: &mut RNG) -> Matrix<char> {
     for _ in 0..5 {
         if let Some(p) = free_point(&map) { map.set(p, 'B'); }
     }
-    map
+
+    // Split the final map into components that are reachable by walking.
+    let walkable = ['.', ',', '"', '|', '+', '=', 'R', 'S'];
+    let mapping: HashMap<_, _> = walkable.into_iter().map(|x| (x, '.')).collect();
+    let mut copy = map.clone();
+    for x in 0..size.0 {
+        for y in 0..size.1 {
+            let p = Point(x, y);
+            if let Some(&c) = mapping.get(&copy.get(p)) { copy.set(p, c); }
+        }
+    }
+    let components = find_diagonal_components(&copy, '.');
+    if components.len() != 1 { return None; }
+
+    Some(map)
+}
+
+pub fn legacy_mapgen(rng: &mut RNG) -> Matrix<char> {
+    let config = MapgenConfig::default();
+    legacy_mapgen_with_size(config.size, rng)
+}
+
+pub fn legacy_mapgen_with_size(size: Point, rng: &mut RNG) -> Matrix<char> {
+    loop { if let Some(x) = legacy_mapgen_attempt(size, rng) { return x; } }
 }
 
 //////////////////////////////////////////////////////////////////////////////
