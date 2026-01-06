@@ -195,25 +195,28 @@ fn input(event: Event, screen: &Screen) -> Option<Input> {
 
 fn main() {
     let args: Vec<_> = std::env::args().collect();
-    if !(args.len() == 1 ||
-         (args.len() == 2 && args[1] == "--debug") ||
-         (args.len() == 3 && args[1] == "--sim")) {
-        panic!("Usage: wrl-term (--debug|--sim $COUNT)?");
-    }
+    let count = args.len();
 
-    let mode = if args.len() < 2 { GameMode::Play } else {
-        if args[1] == "--debug" { GameMode::Debug } else { GameMode ::Sim }
+    let mode = if count < 2 { GameMode::Play } else {
+        match args[1].as_str() {
+            "--debug" if count == 2 => GameMode::Debug,
+            "--gym"   if count == 3 => GameMode::Gym,
+            "--sim"   if count == 3 => GameMode::Sim,
+            _ => panic!("Usage: wrl-term (--debug|--gym $COUNT|--sim $COUNT)?"),
+        }
     };
     let game = State::new(/*seed=*/None, mode);
 
-    if mode == GameMode::Sim {
+    if matches!(mode, GameMode::Gym | GameMode::Sim) {
         let mut game = game;
         let turns = args[2].parse::<usize>().unwrap();
+        let gym = mode == GameMode::Gym;
         for i in 0..turns {
-            println!("Iteration: {}", i);
+            if gym && game.complete() { println!("{}", i); return; }
             game.add_input(Input::Char('.'));
             game.update();
         }
+        if gym { println!("{}", turns); }
         return;
     }
 

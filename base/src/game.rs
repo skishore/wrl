@@ -38,7 +38,7 @@ const VISIBILITY_LOSS: i32 = VISIBILITY_LOSSES[FOV_RADIUS_IN_TALL_GRASS - 1];
 const LIGHT: Light = Light::Sun(Point(2, 0));
 const WEATHER: Weather = Weather::None;
 const NUM_PREDATORS: i32 = 1;
-const NUM_PREY: i32 = 0;
+const NUM_PREY: i32 = 1;
 
 const UI_FLASH: i32 = 4;
 const UI_DAMAGE_FLASH: i32 = 6;
@@ -1085,7 +1085,7 @@ fn update_state(state: &mut State) {
 // State
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-pub enum GameMode { Debug, Play, Sim, Test }
+pub enum GameMode { Debug, Gym, Play, Sim, Test }
 
 pub struct UpdateEnv {
     debug: Option<Box<DebugFile>>,
@@ -1128,7 +1128,7 @@ impl State {
         let size = Point(WORLD_SIZE, WORLD_SIZE);
         let rng = seed.map(|x| RNG::seed_from_u64(x));
         let rng = rng.unwrap_or_else(|| RNG::from_os_rng());
-        let debug = mode == GameMode::Debug || mode == GameMode::Sim;
+        let debug = matches!(mode, GameMode::Debug | GameMode::Sim);
         let mut env = UpdateEnv {
             debug: if debug { Some(Default::default()) } else { None },
             known: Default::default(),
@@ -1159,7 +1159,7 @@ impl State {
         let args = EntityArgs { pos, player, predator: false, species };
         let player = board.add_entity(&args, &mut env);
 
-        if mode == GameMode::Test || mode == GameMode::Sim {
+        if matches!(mode, GameMode::Gym | GameMode::Sim | GameMode::Test) {
             board.map.entry_mut(pos).unwrap().eid = None;
             board.entities[player].pos = Point(-9999, -9999);
             board.entities[player].known = Default::default();
@@ -1195,6 +1195,10 @@ impl State {
         ui.log.log("Welcome to WildsRL! Use vikeys (h/j/k/l/y/u/b/n) to move.");
 
         Self { board, input, inputs, player, env, ai }
+    }
+
+    pub fn complete(&self) -> bool {
+        self.board.entities.iter().count() == 2
     }
 
     pub fn add_effect(&mut self, x: Effect) { self.board.add_effect(x, &mut self.env) }

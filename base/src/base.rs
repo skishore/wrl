@@ -8,12 +8,15 @@ use rand::Rng;
 // Basics
 
 #[macro_export]
+macro_rules! gene {
+    ($x:expr) => { $x }
+}
+
+#[macro_export]
 macro_rules! static_assert_size {
     ($x:ty, $y:expr) => {
-        const _: fn() = || {
-            let _ = std::mem::transmute::<$x, [u8; $y]>;
-        };
-    };
+        const _: fn() = || { let _ = std::mem::transmute::<$x, [u8; $y]>; };
+    }
 }
 
 pub type RNG = rand::rngs::StdRng;
