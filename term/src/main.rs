@@ -211,8 +211,10 @@ fn main() {
         let mut game = game;
         let turns = args[2].parse::<usize>().unwrap();
         let gym = mode == GameMode::Gym;
+        let mut started = None;
         for i in 0..turns {
-            if gym && game.complete() { println!("{}", i); return; }
+            if gym && started.is_none() && game.started() { started = Some(i); }
+            if gym && game.complete() { println!("{}", i - started.unwrap_or(0)); return; }
             game.add_input(Input::Char('.'));
             game.update();
         }
