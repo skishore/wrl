@@ -378,7 +378,7 @@ fn select_chase_target(ctx: &mut Ctx) -> Option<Point> {
     let inv_bias_l2 = safe_inv_l2(bias);
     let scale = 1. / DijkstraLength(Point(1, 0)) as f64;
 
-    let k = 0.5 * MIN_SEARCH_TURNS as f64;
+    let k = 1.25 * MIN_SEARCH_TURNS as f64;
     let decay = k / (k + steps as f64);
 
     let is_search_candidate = |p: Point| {
@@ -403,7 +403,7 @@ fn select_chase_target(ctx: &mut Ctx) -> Option<Point> {
             dirs::ALL.iter().filter(|&&x| is_search_candidate(p + x)).count()
         };
 
-        Some(-0.5 * d0 + -2. * d1 * decay + 16. * cos0 + 16. * cos1 + 2. * n as f64)
+        Some(-1.0 * d0 + -6.0 * d1 * decay + 12.0 * cos0 + 15.0 * cos1 + 4.0 * n as f64)
     };
 
     ensure_neighborhood(ctx);
