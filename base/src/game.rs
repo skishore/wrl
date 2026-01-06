@@ -27,7 +27,7 @@ use crate::ui::{UI, get_direction};
 
 pub const MOVE_TIMER: i32 = 960;
 pub const TURN_TIMER: i32 = 120;
-pub const WORLD_SIZE: i32 = 30;
+pub const WORLD_SIZE: i32 = 60;
 
 pub const FOV_RADIUS_NPC: i32 = 12;
 pub const FOV_RADIUS_PC_: i32 = 21;
@@ -1195,6 +1195,11 @@ impl State {
         ui.log.log("Welcome to WildsRL! Use vikeys (h/j/k/l/y/u/b/n) to move.");
 
         Self { board, input, inputs, player, env, ai }
+    }
+
+    pub fn started(&self) -> bool {
+        let Some((_, entity)) = self.board.entities.iter().skip(1).next() else { return false };
+        entity.known.entities.len() > 1
     }
 
     pub fn complete(&self) -> bool {
