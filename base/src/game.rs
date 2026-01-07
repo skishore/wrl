@@ -16,7 +16,7 @@ use crate::effect::{CB, Effect, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
 use crate::knowledge::{Call, Knowledge, Scent, Sense, Timedelta, Timestamp};
 use crate::knowledge::{AttackEvent, CallEvent, Event, EventData, MoveEvent};
-use crate::mapgen::legacy_mapgen_with_size as mapgen;
+use crate::mapgen::mapgen_with_size as mapgen;
 use crate::pathing::Status;
 use crate::shadowcast::{INITIAL_VISIBILITY, VISIBILITY_LOSSES, Vision, VisionArgs};
 use crate::ui::{UI, get_direction};
@@ -27,7 +27,7 @@ use crate::ui::{UI, get_direction};
 
 pub const MOVE_TIMER: i32 = 960;
 pub const TURN_TIMER: i32 = 120;
-pub const WORLD_SIZE: i32 = 60;
+pub const WORLD_SIZE: i32 = 100;
 
 pub const FOV_RADIUS_NPC: i32 = 12;
 pub const FOV_RADIUS_PC_: i32 = 21;
@@ -37,8 +37,8 @@ const VISIBILITY_LOSS: i32 = VISIBILITY_LOSSES[FOV_RADIUS_IN_TALL_GRASS - 1];
 
 const LIGHT: Light = Light::Sun(Point(2, 0));
 const WEATHER: Weather = Weather::None;
-const NUM_PREDATORS: i32 = 1;
-const NUM_PREY: i32 = 1;
+const NUM_PREDATORS: i32 = 2;
+const NUM_PREY: i32 = 18;
 
 const UI_FLASH: i32 = 4;
 const UI_DAMAGE_FLASH: i32 = 6;
@@ -1195,15 +1195,6 @@ impl State {
         ui.log.log("Welcome to WildsRL! Use vikeys (h/j/k/l/y/u/b/n) to move.");
 
         Self { board, input, inputs, player, env, ai }
-    }
-
-    pub fn started(&self) -> bool {
-        let Some((_, entity)) = self.board.entities.iter().skip(1).next() else { return false };
-        entity.known.entities.len() > 1
-    }
-
-    pub fn complete(&self) -> bool {
-        self.board.entities.iter().count() == 2
     }
 
     pub fn add_effect(&mut self, x: Effect) { self.board.add_effect(x, &mut self.env) }
