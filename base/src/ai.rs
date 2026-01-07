@@ -6,7 +6,6 @@ use rand::Rng;
 use rand_distr::{Distribution, Normal};
 use rand_distr::num_traits::Pow;
 
-use crate::gene;
 use crate::{act, cb, cond, pri, run, seq, util};
 use crate::base::{LOS, Point, RNG, dirs, sample, weighted};
 use crate::bhv::{Bhv, Result};
@@ -379,7 +378,7 @@ fn select_chase_target(ctx: &mut Ctx) -> Option<Point> {
     let inv_bias_l2 = safe_inv_l2(bias);
     let scale = 1. / DijkstraLength(Point(1, 0)) as f64;
 
-    let k = gene!(0.5) * MIN_SEARCH_TURNS as f64;
+    let k = 0.5 * MIN_SEARCH_TURNS as f64;
     let decay = k / (k + steps as f64);
 
     let is_search_candidate = |p: Point| {
@@ -404,11 +403,7 @@ fn select_chase_target(ctx: &mut Ctx) -> Option<Point> {
             dirs::ALL.iter().filter(|&&x| is_search_candidate(p + x)).count()
         };
 
-        Some(gene!(-0.5) * d0 +
-             gene!(-2.0) * d1 * decay +
-             gene!(16.0) * cos0 +
-             gene!(16.0) * cos1 +
-             gene!(2.0) * n as f64)
+        Some(-0.5 * d0 + -2. * d1 * decay + 16. * cos0 + 16. * cos1 + 2. * n as f64)
     };
 
     ensure_neighborhood(ctx);
@@ -858,7 +853,7 @@ fn PathToTarget<F: Fn(Point) -> bool>(
 
 #[allow(non_snake_case)]
 fn HungryForMeat(ctx: &Ctx) -> bool {
-    ctx.entity.predator
+    ctx.entity.predator && ctx.blackboard.till_hunger < MAX_HUNGER / 2
 }
 
 #[allow(non_snake_case)]
@@ -1468,12 +1463,12 @@ fn Wander() -> impl Bhv {
     pri![
         "Wander",
         act!("Follow(Assess)", |x| FollowDirs(x, DirsKind::Assess)),
-        //util![
-        //    "AddressBasicNeeds",
-        //    (Hunger, EatFood()),
-        //    (Thirst, DrinkWater()),
-        //    (Weariness, GetRest()),
-        //],
+        util![
+            "AddressBasicNeeds",
+            (Hunger, EatFood()),
+            (Thirst, DrinkWater()),
+            (Weariness, GetRest()),
+        ],
         act!("Follow(Explore)", |x| FollowPath(x, PathKind::Explore)),
         act!("Search(Assess)", Assess),
         act!("Search(Explore)", Explore),
@@ -1630,10 +1625,10 @@ fn Root() -> impl Bhv {
         cb!("RunCombatAnalysis", RunCombatAnalysis),
         FightOrFlight(),
         HuntForMeat(),
-        //LookForTarget(),
-        //act!("WarnOffThreats", WarnOffThreats),
+        LookForTarget(),
+        act!("WarnOffThreats", WarnOffThreats),
         //InvestigateNoises(),
-        //InvestigateScents(),
+        InvestigateScents(),
         Wander(),
     ]
     .post_tick(CleanupChaseState)

@@ -82,8 +82,8 @@ impl PartialEq for &'static Species {
 lazy_static! {
     static ref SPECIES: HashMap<&'static str, Species> = {
         let items = vec![
-            ("Human",   ('@', 0xffffff), 0.9, 30,  vec![]),
-            ("Pidgey",  ('P', 0xd0a070), 1.0, 2000, vec!["Tackle"]),
+            ("Human",   ('@', 0xffffff), 0.9, 3,   vec![]),
+            ("Pidgey",  ('P', 0xd0a070), 1.0, 200, vec!["Tackle"]),
             ("Rattata", ('R', 0xa060ff), 1.0, 200, vec!["Tackle", "Headbutt"]),
         ];
         let mut result = HashMap::default();
