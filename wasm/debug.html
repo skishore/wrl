@@ -84,6 +84,7 @@
       background-color: white;
       border: 1px solid black;
       border-radius: 4px;
+      cursor: pointer;
       margin: 8px 16px;
       padding: 8px 16px;
     }
@@ -101,6 +102,24 @@
     div#view #entities > .entity:hover {
       background-color: yellow;
       color: black;
+    }
+
+    div#view #map {
+      position: relative;
+    }
+
+    div#view #map #selection {
+      border: 1px solid yellow;
+      border-radius: 48px;
+      pointer-events: none;
+      position: absolute;
+      width: 48px;
+      height: 48px;
+      z-index: 1;
+    }
+
+    div#view #map #selection.hidden {
+      visibility: hidden;
     }
 
     div#timeline {
@@ -136,7 +155,7 @@
         <label><input type="checkbox" id="show-utility" />Show utility</label>
       </div>
     </div>
-    <div id="map"></div>
+    <div id="map"><div id="selection" class="hidden"></div></div>
     <div class="sidebar">
       <div id="ai-trace"></div>
     </div>
