@@ -31,12 +31,14 @@ class DebugTrace {
     this.lastAnimIndex = -1;
     this.lastTickIndex = -1;
     this.lastTicks = '';
+    this.lastMouseMove = null;
 
     this.terminal = new Terminal();
     this.ui = {
       aiOutput: document.getElementById('ai-trace'),
       entities: document.getElementById('entities'),
       map: document.getElementById('map'),
+      selection: document.getElementById('selection'),
       showAll: document.getElementById('show-all-entities'),
       showSeen: document.getElementById('show-sightings'),
       showUtility: document.getElementById('show-utility'),
@@ -77,6 +79,19 @@ class DebugTrace {
     const key = keyEvent.key;
     const code = key.length === 1 ? key.charCodeAt(0) : keyEvent.keyCode;
 
+    if (key === 'q' || key === 'w') {
+      const entities = Array.from(this.ui.entities.children);
+      const current = entities.map((x, i) => [x, i]).filter(x => x[0].dataEID == this.eid)[0];
+      if (current === null && entities.length > 0) {
+        this.selectEID(entities[0].dataEID);
+      } else if (current !== null) {
+        const count = entities.length;
+        const i = (current[1] + count + (key === 'q' ? -1 : 1)) % count;
+        this.selectEID(entities[i].dataEID);
+      }
+      return;
+    }
+
     if (key === 'r') {
       this.ui.showSeen.checked = !this.ui.showSeen.checked;
       this.onShowSeenChange();
@@ -108,7 +123,65 @@ class DebugTrace {
   }
 
   onmousedown(mouseEvent) {
-    const eid = this.getEID(mouseEvent);
+    this.selectEID(this.getEID(mouseEvent));
+  }
+
+  onmousemove(mouseEvent) {
+    this.lastMouseMove = mouseEvent;
+    this.highlightEID(this.getEID(mouseEvent));
+  }
+
+  getEID(mouseEvent) {
+    for (const element of this.ui.entities.children) {
+      if (mouseEvent.target === element) return element.dataEID;
+    }
+
+    if (mouseEvent.target !== this.terminal.app.canvas) return null;
+
+    // Non-integral - we use distance-to-center to match to an entity.
+    const x = mouseEvent.layerX / (2 * this.terminal.unitX);
+    const y = mouseEvent.layerY / this.terminal.unitY;
+
+    const unit = this.terminal.unitY;
+    const cell = this.ui.selection.offsetWidth;
+    const minDistance = 0.5 * cell / unit;
+
+    let [bestEntity, bestDistance] = [null, minDistance];
+    for (const entity of this.tickState.entities) {
+      const {posX, posY} = entity.particle;
+      const [dx, dy] = [x - posX - 0.5, y - posY - 0.5];
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      if (distance < bestDistance) [bestEntity, bestDistance] = [entity, distance];
+    }
+    return bestEntity?.eid ?? null;
+  }
+
+  highlightEID(eid) {
+    const {map, selection} = this.ui;
+
+    if (eid === null) {
+      map.style.cursor = null;
+      selection.classList.add('hidden');
+    } else {
+      map.style.cursor = 'pointer';
+      selection.classList.remove('hidden');
+      for (const entity of this.tickState.entities) {
+        if (entity.eid !== eid) continue;
+        const unit = this.terminal.unitY;
+        const cell = selection.offsetWidth;
+        const {posX, posY} = entity.particle;
+        selection.style.left = `${Math.floor((posX + 1.5) * unit - 0.5 * cell)}px`;
+        selection.style.top  = `${Math.floor((posY + 1.5) * unit - 0.5 * cell)}px`;
+      }
+    }
+
+    for (const element of this.ui.entities.children) {
+      if (element.dataEID !== eid) element.classList.remove('mouseover');
+      if (element.dataEID === eid) element.classList.add('mouseover');
+    }
+  }
+
+  selectEID(eid) {
     if (eid === null) return;
 
     const options = this.ticks.map((x, i) => [x, i]).filter(
@@ -122,28 +195,6 @@ class DebugTrace {
     this.tickIndex = next[1];
     this.animIndex = this.tickIndex;
     this.markDirty();
-  }
-
-  onmousemove(mouseEvent) {
-    const eid = this.getEID(mouseEvent);
-    const id = eid ? `entity-${eid}` : '';
-
-    for (const entity of this.tickState.entities) {
-      for (const element of this.ui.entities.children) {
-        if (element.id !== id) element.classList.remove('mouseover');
-        if (element.id === id) element.classList.add('mouseover');
-      }
-    }
-  }
-
-  getEID(mouseEvent) {
-    const skip = mouseEvent.target !== this.terminal.app.canvas;
-    const x = skip ? -1 : Math.floor(mouseEvent.layerX / (2 * this.terminal.unitX));
-    const y = skip ? -1 : Math.floor(mouseEvent.layerY / this.terminal.unitY);
-
-    const entity = this.tickState.entities.filter(
-      e => e.particle.posX === x && e.particle.posY === y)[0];
-    return entity ? entity.eid : null;
   }
 
   async init() {
@@ -341,6 +392,9 @@ class DebugTrace {
     this.redrawEntities();
     this.redrawMap();
     this.redrawTimeline();
+
+    const last = this.lastMouseMove;
+    if (last) this.onmousemove(last);
   }
 
   redrawAITrace() {
@@ -359,7 +413,7 @@ class DebugTrace {
   redrawEntities() {
     const entityElements = this.tickState.entities.map(x => {
       const element = document.createElement('div');
-      element.id = `entity-${x.eid}`;
+      element.dataEID = x.eid;
       element.textContent = `${x.name} - ${Math.max(Math.floor(100 * x.health), 1)}%`;
       element.classList.add('entity');
       if (x.eid === this.eid) element.classList.add('highlighted');
