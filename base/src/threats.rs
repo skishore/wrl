@@ -141,9 +141,6 @@ impl Threat {
 
     // TODO list for player interactions:
     //
-    //   - Wilds are not appropriately hostile, except on this branch. They
-    //     spend too much time warning or scanning unknown noises.
-    //
     //   - We can turn the "scan unknown noise" subtree into just the first
     //     watch period for the first warning. ("auto-warn" unknown threats.)
     //

@@ -1373,7 +1373,11 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
 //
 //  - Make the our-team-strength logic quadratic in team size.
 //
-//  - Drop "unknown" targets earlier if we're chasing down enemies.
+//  - Drop "unknown" targets earlier if we're chasing down enemies...
+//    Many weird effects here. For example, if we see an entity but we don't
+//    know its valence (confidence == Low), we lump it into "threats.hostile"
+//    and purse and even attack it on sight. We actually want to extend
+//    hostile with unseen enemies, not unknown ones...
 //
 //  - Include potentially-matching scents when chasing down enemies.
 //
@@ -1381,12 +1385,18 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
 //
 //  - Only run InvestigateNoises for recent unknown sources.
 //
+//  - Only warn seen-but-unknown-valence sources. As is, we can have long
+//    chains of warnings over nothing. Investigate unseen sources instead.
+//
 //  - Push "if nowhere to look, look ahead" logic into assess_directions.
 //
 //  - Predators should never be satiated by just berries.
 //
 //  - If we can't path to a valid target, we repeatedly run the "scan last
 //    target direction" logic.
+//
+//  - In game.rs, render entities that slip out of view with flashes instead
+//    of with question marks, so question marks always imply sound.
 
 #[allow(non_snake_case)]
 fn AttackOrFollowPath(kind: PathKind) -> impl Bhv {
