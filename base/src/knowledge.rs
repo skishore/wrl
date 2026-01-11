@@ -244,11 +244,11 @@ static_assert_size!(EntityKnowledge, 72);
 // Minimal knowledge about an entity that we're tracking by scent or sound.
 // Used to tag events with a UID such that same UID => same event source.
 pub struct SourceKnowledge {
-    uid: UID,
-    pos: Point,
-    eid: Option<EID>,
-    time: Timestamp,
-    turns: i32,
+    pub uid: UID,
+    pub pos: Point,
+    pub eid: Option<EID>,
+    pub time: Timestamp,
+    pub turns: i32,
 }
 #[cfg(target_pointer_width = "64")]
 static_assert_size!(SourceKnowledge, 40);
@@ -270,6 +270,7 @@ struct PointState {
 pub struct Knowledge {
     pub cells: List<CellKnowledge>,
     pub entities: List<EntityKnowledge>,
+    pub sources: List<SourceKnowledge>,
     pub events: Vec<Event>,
     pub scents: Vec<ScentEvent>,
     pub time: Timestamp,
@@ -277,7 +278,6 @@ pub struct Knowledge {
     turn_times: VecDeque<Timestamp>,
     eid_index: HashMap<EID, EIDState>,
     pos_index: HashMap<Point, PointState>,
-    sources: List<SourceKnowledge>,
     last_uid: u64,
 }
 
@@ -761,10 +761,6 @@ impl Knowledge {
 
     // Debug helpers:
 
-    pub fn debug_noise_sources(&self) -> Vec<Point> {
-        self.sources.iter().map(|x| x.pos).collect()
-    }
-
     fn check_invariants(&self) -> bool {
         let check_sorted = |xs: Vec<Timestamp>| {
             let mut last = Timestamp::default();
@@ -860,6 +856,11 @@ impl<'a> PointLookup<'a> {
     }
 
     // Predicates
+
+    pub fn occupied(&self) -> bool {
+        let Some(spot) = self.spot else { return false };
+        spot.entity.is_some() || spot.source.is_some()
+    }
 
     pub fn blocked(&self) -> bool {
         self.cell().map(|x| x.tile.blocks_movement()).unwrap_or(false)
