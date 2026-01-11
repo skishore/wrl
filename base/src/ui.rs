@@ -9,7 +9,7 @@ use crate::effect::{Frame, self};
 use crate::entity::{EID, Entity};
 use crate::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_};
 use crate::game::{Board, Input, Tile, show_item};
-use crate::knowledge::{EntityKnowledge, Knowledge, SourceKnowledge};
+use crate::knowledge::{Call, EntityKnowledge, Knowledge, Sound, SourceKnowledge};
 use crate::pathing::Status;
 use crate::shadowcast::{Vision, VisionArgs};
 
@@ -60,6 +60,15 @@ pub fn get_direction(ch: char) -> Option<Point> {
         'n' => Some(dirs::SE),
         '.' => Some(dirs::NONE),
         _ => None,
+    }
+}
+
+fn describe_sound(sound: Sound) -> &'static str {
+    match sound {
+        Sound::Attack              => "something attack!",
+        Sound::Call(Call::Help)    => "a call for help",
+        Sound::Call(Call::Warning) => "a warning",
+        Sound::Move                => "something move",
     }
 }
 
@@ -327,7 +336,7 @@ fn process_ui_input(ui: &mut UI, entity: &Entity, input: Input) -> bool {
     let get_updated_target = |target: Point| -> Option<Point> {
         if tab {
             let old_eid = known.get(target).entity().map(|x| x.eid);
-            let new_eid = apply_tab( old_eid, false);
+            let new_eid = apply_tab(old_eid, false);
             return Some(known.entity(new_eid?)?.pos);
         }
 
@@ -869,11 +878,12 @@ impl UI {
             return;
         }
 
-        let (tile, view, header, seen) = match &self.target {
+        let (tile, view, source, header, seen) = match &self.target {
             Some(x) => {
                 let cell = known.get(x.target);
                 let tile = cell.tile();
                 let seen = cell.visible();
+                let source = cell.source();
                 let view = if cell.can_see_entity_at() { cell.entity() } else { None };
                 let header = match &x.data {
                     TargetData::FarLook => "Examining...".into(),
@@ -886,18 +896,19 @@ impl UI {
                         format!("Sending out {}...", name)
                     }
                 };
-                (tile, view, header, seen)
+                (tile, view, source, header, seen)
             }
             None => {
                 let tile = self.focused.tile;
                 let view = self.focus.and_then(|x| known.entity(x));
                 let seen = view.map(|x| x.visible).unwrap_or(false);
+                let source = None;
                 let header = if seen {
                     "Last target:"
                 } else {
                     "Last target: (remembered)"
                 }.into();
-                (tile, view, header, seen)
+                (tile, view, source, header, seen)
             },
         };
 
@@ -919,6 +930,11 @@ impl UI {
             slice.write_chr('(').write_str(x.description).write_chr(')').newline();
         } else {
             slice.write_str("(unseen location)").newline();
+        }
+
+        if view.is_none() && let Some(x) = source {
+            let desc = x.sound.map(describe_sound).unwrap_or("an unknown sound");
+            slice.newline().write_str("You heard: ").write_str(desc).newline().newline();
         }
     }
 

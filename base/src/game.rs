@@ -1214,6 +1214,7 @@ impl State {
         let ai = Box::new(AIState::new(/*predator=*/false, &mut env.rng));
 
         let ui = &mut env.ui;
+        std::mem::drop(Weather::Rain(Point(0, 64), 32));
         match WEATHER {
             Weather::Rain(angle, count) => ui.start_rain(angle, count),
             Weather::None => (),
