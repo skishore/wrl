@@ -432,10 +432,15 @@ impl Board {
         Event { eid, uid, data, time: self.time, point, sense: Sense::Sight }
     }
 
-    fn observe_event(&mut self, eid: EID, event: &Event, env: &mut UpdateEnv) {
+    fn observe_event(&mut self, eid: EID, s: &Senses, e: &mut Event, env: &mut UpdateEnv) {
         let known = &mut env.known;
-        swap(known, &mut self.entities[eid].known);
-        known.observe_event(&mut self.entities[eid], event);
+        let entity = &mut self.entities[eid];
+        let (heard, seen) = (s.heard(), s.seen() && !entity.player);
+        if !heard && !seen { return; }
+
+        swap(known, &mut entity.known);
+        e.sense = if seen { Sense::Sight } else { Sense::Sound };
+        known.observe_event(&mut self.entities[eid], e);
         swap(known, &mut self.entities[eid].known);
     }
 
@@ -484,6 +489,24 @@ impl Board {
 
 // Event delivery
 
+const SENSE_SEEN: u8 = 1 << 0;
+const SENSE_HEARD: u8 = 1 << 1;
+
+#[derive(Clone, Copy, Default)]
+struct Senses(u8);
+
+impl Senses {
+    fn seen(&self) -> bool { self.0 & SENSE_SEEN != 0 }
+    fn heard(&self) -> bool { self.0 & SENSE_HEARD != 0 }
+}
+
+impl std::ops::BitOr for Senses {
+    type Output = Senses;
+    fn bitor(self, other: Self) -> Self::Output {
+        Self(self.0 | other.0)
+    }
+}
+
 struct Noise {
     cause: Option<EID>,
     point: Point,
@@ -492,47 +515,50 @@ struct Noise {
 
 struct Sighting {
     eid: EID,
-    source_seen: bool,
-    target_seen: bool,
+    merged: Senses,
+    source: Senses,
+    target: Senses,
 }
 
-type Senses = HashMap<EID, Sense>;
+type SenseMap = HashMap<EID, Senses>;
 
-fn detect(board: &Board, noise: &Noise, env: &mut UpdateEnv) -> Senses {
+fn detect(board: &Board, noise: &Noise, env: &mut UpdateEnv) -> SenseMap {
     let Noise { cause, point, volume } = *noise;
-    let mut result = Senses::default();
+    let mut result = SenseMap::default();
 
     for (eid, entity) in &board.entities {
         if cause == Some(eid) { continue; }
         if entity.asleep && volume == 1 && point != entity.pos { continue; }
 
         let seen = env.fov.can_see_entity_at(board, entity, point);
-        let heard = !seen && (point - entity.pos).len_nethack() <= volume;
+        let heard = (point - entity.pos).len_nethack() <= volume;
         if !seen && !heard { continue; }
 
-        let sense = if seen { Sense::Sight } else { Sense::Sound };
-        result.insert(eid, sense);
+        let seen = if seen { SENSE_SEEN } else { 0 };
+        let heard = if heard { SENSE_HEARD } else { 0 };
+        result.insert(eid, Senses(seen | heard));
     }
     result
 }
 
-fn combine_views(board: &Board, saw_source: &Senses, saw_target: &Senses) -> Vec<Sighting> {
+fn merge_views(board: &Board, saw_source: &SenseMap, saw_target: &SenseMap) -> Vec<Sighting> {
     let mut result = vec![];
-    for (eid, _) in &board.entities {
-        let ss = saw_source.get(&eid).copied();
-        let st = saw_target.get(&eid).copied();
-        if ss.is_none() && st.is_none() { continue; }
 
-        let source_seen = ss == Some(Sense::Sight);
-        let target_seen = st == Some(Sense::Sight);
-        result.push(Sighting { eid, source_seen, target_seen });
+    for (eid, _) in &board.entities {
+        let source = saw_source.get(&eid).copied();
+        let target = saw_target.get(&eid).copied();
+        if source.is_none() && target.is_none() { continue; }
+
+        let source = source.unwrap_or_default();
+        let target = target.unwrap_or_default();
+        result.push(Sighting { eid, merged: source | target, source, target })
     }
     result
 }
 
 fn get_sightings(board: &Board, noise: &Noise, env: &mut UpdateEnv) -> Vec<Sighting> {
     let seen = detect(board, noise, env);
-    combine_views(board, &seen, &Default::default())
+    merge_views(board, &seen, &Default::default())
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -572,9 +598,10 @@ fn hit_entity(board: &mut Board, env: &mut UpdateEnv, attack: &Attack, logged: b
     let noise = Noise { cause: Some(tid), point: pos, volume };
     let sightings = get_sightings(board, &noise, env);
 
-    for Sighting { eid: oid, source_seen: seen, .. } in sightings {
+    for s in &sightings {
+        let oid = s.eid;
         if fainted { board.remove_known_entity(oid, tid); }
-        if !seen || !board.entities[oid].player { continue; }
+        if !s.source.seen() || !board.entities[oid].player { continue; }
 
         let log = &mut env.ui.log;
         if !logged { log.log(format!("Something attacked {}!", desc)); }
@@ -769,10 +796,9 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
             // Deliver a CallEvent to each entity that heard the call.
             let data = EventData::Call(CallEvent { call, species });
-            let mut event = state.board.create_event(eid, data, source);
-            for Sighting { eid: oid, source_seen: seen, .. } in sightings {
-                event.sense = if seen { Sense::Sight } else { Sense::Sound };
-                state.board.observe_event(oid, &event, &mut state.env);
+            let event = &mut state.board.create_event(eid, data, source);
+            for s in &sightings {
+                state.board.observe_event(s.eid, &s.merged, event, &mut state.env);
             }
 
             // Use a different color for different call types.
@@ -837,18 +863,16 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
                     let noise = Noise { cause: Some(eid), point: target, volume };
                     let saw_target = detect(&state.board, &noise, &mut state.env);
-                    let sightings = combine_views(&state.board, &saw_source, &saw_target);
+                    let sightings = merge_views(&state.board, &saw_source, &saw_target);
 
                     // Deliver a MoveEvent to each entity that saw the move.
                     let data = EventData::Move(MoveEvent { from: source });
-                    let mut event = state.board.create_event(eid, data, target);
-                    for Sighting { eid: oid, source_seen, target_seen } in sightings {
-                        let seen = source_seen || target_seen;
-                        event.sense = if seen { Sense::Sight } else { Sense::Sound };
-                        state.board.observe_event(oid, &event, &mut state.env);
-                        if oid != state.player { continue; }
+                    let event = &mut state.board.create_event(eid, data, target);
+                    for s in &sightings {
+                        state.board.observe_event(s.eid, &s.merged, event, &mut state.env);
+                        if s.eid != state.player { continue; }
 
-                        let color = if seen { color } else { Color::white() };
+                        let color = if s.merged.seen() { color } else { Color::white() };
                         state.ui.animate_move(color, source);
                     }
                     ActionResult::success_turns(turns)
@@ -875,23 +899,23 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
             let noise = Noise { cause: Some(eid), point: target, volume };
             let saw_target = detect(&state.board, &noise, &mut state.env);
-            let sightings = combine_views(&state.board, &saw_source, &saw_target);
+            let sightings = merge_views(&state.board, &saw_source, &saw_target);
 
             // Deliver the AttackEvent to each entity in the list.
             let combat = tid.is_some();
             let data = EventData::Attack(AttackEvent { combat, target: None });
-            let mut event = state.board.create_event(eid, data, source);
+            let event = &mut state.board.create_event(eid, data, source);
             let mut logged = false;
-            for Sighting { eid: oid, source_seen, target_seen } in sightings {
-                let target = if target_seen { tid } else { None };
+            for s in &sightings {
+                let oid = s.eid;
+                let target = if s.target.seen() { tid } else { None };
                 event.data = EventData::Attack(AttackEvent { combat, target });
-                event.sense = if source_seen { Sense::Sight } else { Sense::Sound };
-                state.board.observe_event(oid, &event, &mut state.env);
+                state.board.observe_event(oid, &s.source, event, &mut state.env);
                 if oid != state.player { continue; }
 
                 let entities = &state.board.entities;
-                let attacker = if source_seen { Some(&entities[eid]) } else { None };
-                let attacked = if target_seen { tid.map(|x| &entities[x]) } else { None };
+                let attacker = if s.source.seen() { Some(&entities[eid]) } else { None };
+                let attacked = if s.target.seen() { tid.map(|x| &entities[x]) } else { None };
                 logged = true;
 
                 let line = if let Some(a) = attacker && let Some(b) = attacked {
