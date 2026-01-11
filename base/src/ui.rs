@@ -520,8 +520,9 @@ impl UI {
 
     // Update entry points:
 
-    pub fn animate_move(&mut self, color: Color, point: Point) {
-        let manim = MoveAnimation { color, frame: 0, limit: UI_MOVE_FRAMES };
+    pub fn animate_move(&mut self, color: Color, point: Point, delta: i32) {
+        let frame = -delta * UI_MOVE_FRAMES / 2;
+        let manim = MoveAnimation { color, frame, limit: UI_MOVE_FRAMES };
         self.moves.insert(point, manim);
     }
 
@@ -564,6 +565,11 @@ impl UI {
         } else {
             self.focused.active = false;
         }
+    }
+
+    pub fn update_moves(&mut self, entity: &Entity) {
+        let known = &entity.known;
+        self.moves.retain(|&pos, _| !known.get(pos).occupied())
     }
 
     pub fn update_target(&mut self, entity: &Entity) -> bool {
@@ -1108,7 +1114,9 @@ impl UI {
     }
 
     fn hp_color(hp: f64) -> Color {
-        (if hp <= 0.25 { 0xff0000 } else if hp <= 0.50 { 0xffff00 } else { 0x00a800 }).into()
+        if hp <= 0.25 { return 0xff0000.into(); }
+        if hp <= 0.50 { return 0xffff00.into(); }
+        0x00a800.into()
     }
 
     fn render_key(key: char) -> String {

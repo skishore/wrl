@@ -873,7 +873,8 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                         if s.eid != state.player { continue; }
 
                         let color = if s.merged.seen() { color } else { Color::white() };
-                        state.ui.animate_move(color, source);
+                        state.ui.animate_move(color, source, 0);
+                        state.ui.animate_move(color, target, 1);
                     }
                     ActionResult::success_turns(turns)
                 }
@@ -1036,6 +1037,7 @@ fn update_player_knowledge(state: &mut State) {
     state.board.update_known(state.player, &mut state.env);
     let player = &state.board.entities[state.player];
     state.env.ui.update_focus(player);
+    state.env.ui.update_moves(player);
 }
 
 fn update_state(state: &mut State) {

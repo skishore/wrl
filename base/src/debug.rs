@@ -153,14 +153,19 @@ impl DebugFile {
 
         // Dump info about our view of other entities.
         let mut sightings = vec![];
-        for pos in me.known.debug_noise_sources() {
-            let glyph = Glyph::wdfg('?', Color::black()).with_bg(0xffff00);
-            sightings.push((pos, glyph));
+        for other in &me.known.sources {
+            let color = {
+                let current = me.known.get(other.pos).source();
+                let moved = current.map(|x| x.uid) != Some(other.uid);
+                if moved { 0xff0000 } else { 0xffff00 }
+            };
+            let glyph = Glyph::wdfg('?', Color::black()).with_bg(color);
+            sightings.push((other.pos, glyph));
         }
         for other in &me.known.entities {
             let color = if other.visible { 0x00ff00 } else {
-                let entity_at_pos = me.known.get(other.pos).entity();
-                let moved = entity_at_pos.map(|x| x.eid) != Some(other.eid);
+                let current = me.known.get(other.pos).entity();
+                let moved = current.map(|x| x.eid) != Some(other.eid);
                 if moved { 0xff0000 } else { 0xffff00 }
             };
             let glyph = Self::knowledge_glyph(other).with_fg(Color::black()).with_bg(color);
