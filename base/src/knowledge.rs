@@ -142,6 +142,9 @@ pub enum Sense { Sight, Sound, Smell }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Call { Help, Warning }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Sound { Attack, Call(Call), Move }
+
 #[derive(Clone, Debug)]
 pub struct AttackEvent { pub combat: bool, pub target: Option<EID> }
 
@@ -174,6 +177,19 @@ pub struct Event {
     pub time: Timestamp,
     pub point: Point,
     pub sense: Sense,
+}
+
+impl Event {
+    fn sound(&self) -> Option<Sound> {
+        if self.sense != Sense::Sound { return None; }
+        match &self.data {
+            EventData::Attack(_) => Some(Sound::Attack),
+            EventData::Forget(_) => None,
+            EventData::Call(x) => Some(Sound::Call(x.call)),
+            EventData::Move(_) => Some(Sound::Move),
+            EventData::Spot(_) => None,
+        }
+    }
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -247,6 +263,7 @@ pub struct SourceKnowledge {
     pub uid: UID,
     pub pos: Point,
     pub eid: Option<EID>,
+    pub sound: Option<Sound>,
     pub time: Timestamp,
     pub turns: i32,
 }
@@ -328,7 +345,7 @@ impl EntityKnowledge {
 
 impl SourceKnowledge {
     fn new(uid: UID, event: &Event) -> Self {
-        Self { uid, pos: event.point, eid: None, time: event.time, turns: 0 }
+        Self { uid, pos: event.point, eid: None, sound: None, time: event.time, turns: 0 }
     }
 
     pub fn freshness(&self) -> f64 {
@@ -573,6 +590,7 @@ impl Knowledge {
 
         source.eid = Some(eid);
         source.pos = event.point;
+        source.sound = event.sound();
         source.time = event.time;
         source.turns = 0;
 

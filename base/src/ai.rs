@@ -1394,9 +1394,6 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
 //
 //  - If we can't path to a valid target, we repeatedly run the "scan last
 //    target direction" logic.
-//
-//  - In game.rs, render entities that slip out of view with flashes instead
-//    of with question marks, so question marks always imply sound.
 
 #[allow(non_snake_case)]
 fn AttackOrFollowPath(kind: PathKind) -> impl Bhv {
