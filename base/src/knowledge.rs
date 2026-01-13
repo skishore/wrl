@@ -143,13 +143,10 @@ pub enum Sense { Sight, Sound, Smell }
 pub enum Call { Help, Warning }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Sound { Attack, Call(Call), Move }
+pub enum Sound { Attack, Call(Call), Move, Sniff }
 
 #[derive(Clone, Debug)]
 pub struct AttackEvent { pub combat: bool, pub target: Option<EID> }
-
-#[derive(Clone, Debug, Default)]
-pub struct ForgetEvent {}
 
 #[derive(Clone, Debug)]
 pub struct CallEvent { pub call: Call, pub species: &'static Species }
@@ -157,16 +154,14 @@ pub struct CallEvent { pub call: Call, pub species: &'static Species }
 #[derive(Clone, Debug)]
 pub struct MoveEvent { pub from: Point }
 
-#[derive(Clone, Debug, Default)]
-pub struct SpotEvent {}
-
 #[derive(Clone, Debug)]
 pub enum EventData {
     Attack(AttackEvent),
-    Forget(ForgetEvent),
     Call(CallEvent),
     Move(MoveEvent),
-    Spot(SpotEvent),
+    Forget,
+    Sniff,
+    Spot,
 }
 
 #[derive(Clone, Debug)]
@@ -184,10 +179,11 @@ impl Event {
         if self.sense != Sense::Sound { return None; }
         match &self.data {
             EventData::Attack(_) => Some(Sound::Attack),
-            EventData::Forget(_) => None,
-            EventData::Call(x) => Some(Sound::Call(x.call)),
-            EventData::Move(_) => Some(Sound::Move),
-            EventData::Spot(_) => None,
+            EventData::Call(x)   => Some(Sound::Call(x.call)),
+            EventData::Move(_)   => Some(Sound::Move),
+            EventData::Sniff     => Some(Sound::Sniff),
+            EventData::Forget    => None,
+            EventData::Spot      => None,
         }
     }
 }
@@ -631,7 +627,7 @@ impl Knowledge {
     }
 
     fn forget_event(&mut self, eid: Option<EID>, uid: Option<UID>, point: Point) {
-        let data = EventData::Forget(ForgetEvent::default());
+        let data = EventData::Forget;
         let event = Event { eid, uid, data, time: self.time, point, sense: Sense::Sight };
         self.events.push(event);
     }
@@ -694,7 +690,7 @@ impl Knowledge {
             Self::move_source(&mut self.pos_index, x, Some(pos), None);
 
             let (eid, uid) = (Some(other.eid), Some(uid));
-            let data = EventData::Spot(SpotEvent::default());
+            let data = EventData::Spot;
             let event = Event { eid, uid, data, time, point: other.pos, sense };
             self.events.push(event);
         }
