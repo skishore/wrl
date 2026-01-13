@@ -69,6 +69,7 @@ fn describe_sound(sound: Sound) -> &'static str {
         Sound::Call(Call::Help)    => "a call for help",
         Sound::Call(Call::Warning) => "a warning",
         Sound::Move                => "something move",
+        Sound::Sniff               => "something sniff",
     }
 }
 

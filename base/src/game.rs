@@ -48,7 +48,8 @@ const SLOWED_TURNS: f64 = 1.5;
 
 pub const ATTACK_VOLUME: i32 = FOV_RADIUS_NPC;
 pub const CALL_VOLUME: i32 = FOV_RADIUS_NPC;
-pub const MOVE_VOLUME: i32 = 4;
+pub const MOVE_VOLUME: i32 = 8;
+pub const SNIFF_VOLUME: i32 = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Input { Escape, BackTab, Char(char), Click(Point) }
@@ -739,6 +740,16 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
         Action::SniffAround => {
             let (pos, color) = (entity.pos, 0xffff00);
             let board = &mut state.board;
+            let noise = Noise { cause: Some(eid), point: source, volume: SNIFF_VOLUME };
+            let sightings = get_sightings(board, &noise, &mut state.env);
+
+            // Deliver a SniffEvent to each entity that heard the sniff.
+            let data = EventData::Sniff;
+            let event = &mut board.create_event(eid, data, source);
+            for s in &sightings {
+                board.observe_event(s.eid, &s.merged, event, &mut state.env);
+            }
+
             let effect = apply_flash(board, pos, color, None);
             board.add_effect(effect, &mut state.env);
             ActionResult::success()
@@ -791,14 +802,15 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
         }
         Action::Call(CallAction { call, look }) => {
             let species = entity.species;
+            let board = &mut state.board;
             let noise = Noise { cause: Some(eid), point: source, volume: CALL_VOLUME };
-            let sightings = get_sightings(&state.board, &noise, &mut state.env);
+            let sightings = get_sightings(board, &noise, &mut state.env);
 
             // Deliver a CallEvent to each entity that heard the call.
             let data = EventData::Call(CallEvent { call, species });
-            let event = &mut state.board.create_event(eid, data, source);
+            let event = &mut board.create_event(eid, data, source);
             for s in &sightings {
-                state.board.observe_event(s.eid, &s.merged, event, &mut state.env);
+                board.observe_event(s.eid, &s.merged, event, &mut state.env);
             }
 
             // Use a different color for different call types.

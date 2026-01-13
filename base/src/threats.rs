@@ -207,9 +207,10 @@ impl Threat {
                 if x.call == Call::Help { self.mark_combat(event.time); }
             },
             EventData::Attack(_) => {},
-            EventData::Forget(_) => {},
             EventData::Move(_) => {},
-            EventData::Spot(_) => {},
+            EventData::Forget => {},
+            EventData::Sniff => {},
+            EventData::Spot => {},
         }
     }
 
@@ -425,7 +426,7 @@ impl ThreatState {
     fn get_by_event(&mut self, me: &Entity, event: &Event) -> Option<&mut Threat> {
         let tid = event.eid.map(|x| TID::EID(x)).or(event.uid.map(|x| TID::UID(x)))?;
 
-        if let EventData::Forget(_) = &event.data {
+        if matches!(event.data, EventData::Forget) {
             self.forget_tid(tid);
             return None;
         }
