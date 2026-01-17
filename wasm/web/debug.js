@@ -42,6 +42,7 @@ class DebugTrace {
       showAll: document.getElementById('show-all-entities'),
       showSeen: document.getElementById('show-sightings'),
       showUtility: document.getElementById('show-utility'),
+      timelineWrapper: document.getElementById('timeline-wrapper'),
       timeline: document.getElementById('timeline'),
       view: document.getElementById('view'),
     };
@@ -124,11 +125,44 @@ class DebugTrace {
 
   onmousedown(mouseEvent) {
     this.selectEID(this.getEID(mouseEvent));
+    this.selectTick(this.getTick(mouseEvent));
   }
 
   onmousemove(mouseEvent) {
     this.lastMouseMove = mouseEvent;
     this.highlightEID(this.getEID(mouseEvent));
+    this.highlightTick(this.getTick(mouseEvent));
+  }
+
+  getTick(mouseEvent) {
+    if (mouseEvent.target !== this.ui.timelineWrapper) return null;
+
+    let [best, bestDiff] = [null, 48];
+    const {clientX, clientY} = mouseEvent;
+
+    for (const element of this.ui.timeline.children) {
+      const diff = Math.abs(element.getBoundingClientRect().x - clientX);
+      if (diff < bestDiff) [best, bestDiff] = [element, diff];
+    }
+    return best ? best.dataTickIndex : null;
+  }
+
+  highlightTick(tickIndex) {
+    if (tickIndex === null) this.ui.timelineWrapper.classList.remove('mouseover');
+    if (tickIndex !== null) this.ui.timelineWrapper.classList.add('mouseover');
+
+    for (const element of this.ui.timeline.children) {
+      if (element.dataTickIndex !== tickIndex) element.classList.remove('mouseover');
+      if (element.dataTickIndex === tickIndex) element.classList.add('mouseover');
+    }
+  }
+
+  selectTick(tickIndex) {
+    if (tickIndex === null) return;
+
+    this.animIndex = tickIndex;
+    this.tickIndex = tickIndex;
+    this.markDirty();
   }
 
   getEID(mouseEvent) {
@@ -416,7 +450,7 @@ class DebugTrace {
       element.dataEID = x.eid;
       element.textContent = `${x.name} - ${Math.max(Math.floor(100 * x.health), 1)}%`;
       element.classList.add('entity');
-      if (x.eid === this.eid) element.classList.add('highlighted');
+      if (x.eid === this.eid) element.classList.add('selected');
       return element;
     });
     this.ui.entities.replaceChildren(...entityElements);
@@ -477,9 +511,10 @@ class DebugTrace {
         const value = BigInt(x.time);
         return Number(10000n * (value - min) / (max - min)) / 100;
       })();
+      element.dataTickIndex = i;
       element.style = `left: ${fraction}%`;
       element.classList.add('tick');
-      if (i === this.tickIndex) element.classList.add('highlighted');
+      if (i === this.tickIndex) element.classList.add('selected');
       return element;
     });
     this.ui.timeline.replaceChildren(...elements.filter(x => !!x));

@@ -89,7 +89,7 @@
       padding: 8px 16px;
     }
 
-    div#view #entities > .entity.highlighted {
+    div#view #entities > .entity.selected {
       background-color: blue;
       color: white;
     }
@@ -122,10 +122,21 @@
       visibility: hidden;
     }
 
+    div#timeline-wrapper {
+      position: absolute;
+      inset: auto 48px 8px 48px;
+      height: 44px;
+    }
+
+    div#timeline-wrapper.mouseover {
+      cursor: pointer;
+    }
+
     div#timeline {
       background-color: white;
+      pointer-events: none;
       position: absolute;
-      inset: auto 64px 32px 64px;
+      inset: auto 16px 20px 16px;
       height: 4px;
     }
 
@@ -136,9 +147,14 @@
       top: -4px;
     }
 
-    div#timeline > .tick.highlighted {
+    div#timeline > .tick.mouseover {
+      border-left: 4px solid yellow;
+      height: 40px;
+      top: -18px;
+    }
+
+    div#timeline > .tick.selected {
       border-left: 4px solid blue;
-      position: absolute;
       height: 24px;
       top: -10px;
     }
@@ -160,5 +176,7 @@
       <div id="ai-trace"></div>
     </div>
   </div>
-  <div id="timeline"></div>
+  <div id="timeline-wrapper">
+    <div id="timeline"></div>
+  </div>
 </body>
