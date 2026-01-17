@@ -60,23 +60,24 @@
     div#view #controls {
       background-color: #ccc;
       border-top: 1px solid black;
-      inset: 1248px 0 0 0;
+      inset: 1048px 0 0 0;
       padding: 16px;
       position: absolute;
     }
 
     div#view #controls input {
-      margin: 8px 16px;
+      margin-right: 16px;
     }
 
     div#view #controls label {
       display: block;
+      margin: 24px 12px;
       user-select: none;
     }
 
     div#view #entities {
       overflow-y: scroll;
-      height: 1232px;
+      height: 1032px;
       padding: 8px 0;
     }
 
@@ -165,10 +166,24 @@
     <div class="sidebar">
       <div id="entities"></div>
       <div id="controls">
-        <div>Controls</div>
+        <div>Controls:</div>
         <label><input type="checkbox" id="show-all-entities" />Show all entities</label>
         <label><input type="checkbox" id="show-sightings" />Show sightings</label>
         <label><input type="checkbox" id="show-utility" />Show utility</label>
+        <label>
+          Click on an entity (either in the list above, or on the map)
+          to see its view of the world.
+        </label>
+        <label>
+          The entity's chosen action and its behavior tree debug
+          are shown on the right.
+        </label>
+        <label>
+          Use J/K to step through the entity's turns.
+        </label>
+        <label>
+          Click on the timeline at the bottom to jump straight to a turn.
+        </label>
       </div>
     </div>
     <div id="map"><div id="selection" class="hidden"></div></div>
