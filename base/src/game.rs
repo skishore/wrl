@@ -986,7 +986,7 @@ fn apply_flash<T: Into<Color>>(board: &Board, target: Point, color: T, cb: Optio
     };
 
     let flash = glyph.with_fg(Color::black()).with_bg(color);
-    let particle = effect::Particle { glyph: flash, point: target };
+    let particle = effect::Particle::new(target, flash);
     let mut effect = Effect::constant(particle, UI_FLASH);
     if let Some(x) = cb { effect.sub_on_finished(x); }
     effect
@@ -998,8 +998,8 @@ fn apply_damage(board: &Board, target: Point, callback: CB) -> Effect {
 
     let glyph = board.entities[eid].species.glyph;
     let flash = glyph.with_fg(Color::black()).with_bg(0xff0000);
-    let particle = effect::Particle { glyph: flash, point: target };
-    let restored = effect::Particle { glyph, point: target };
+    let particle = effect::Particle::new(target, flash);
+    let restored = effect::Particle::new(target, glyph);
     let mut effect = Effect::serial(vec![
         Effect::constant(particle, UI_DAMAGE_FLASH),
         Effect::constant(restored, UI_DAMAGE_TICKS),

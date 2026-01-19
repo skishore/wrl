@@ -21,6 +21,12 @@ pub struct Particle {
     pub glyph: Glyph,
 }
 
+impl Particle {
+    pub fn new(point: Point, glyph: Glyph) -> Self {
+        Self { point, glyph }
+    }
+}
+
 pub type Frame = Vec<Particle>;
 
 #[derive(Default)]
@@ -157,7 +163,7 @@ fn add_sparkle(effect: &mut Effect, sparkle: &Sparkle, mut frame: i32, point: Po
         for _ in 0..delay {
             let index = rand::random_range(0..chars.chars().count());
             let glyph = Glyph::wdfg(chars.chars().nth(index).unwrap(), color);
-            effect.add_particle(frame, Particle { point, glyph });
+            effect.add_particle(frame, Particle::new(point, glyph));
             frame += 1;
         }
     }
@@ -205,23 +211,23 @@ fn UnderlayEffect(effect: Effect, particle: Particle) -> Effect {
 fn ExplosionEffect(point: Point) -> Effect {
     let glyph = |ch: char| Glyph::wdfg(ch, 0xff0000);
     let base = vec![
-        vec![Particle { point, glyph: glyph('*') }],
+        vec![Particle::new(point, glyph('*'))],
         vec![
-            Particle { point, glyph: glyph('+') },
-            Particle { point: point + dirs::N,  glyph: glyph('|') },
-            Particle { point: point + dirs::S,  glyph: glyph('|') },
-            Particle { point: point + dirs::E,  glyph: glyph('-') },
-            Particle { point: point + dirs::W,  glyph: glyph('-') },
+            Particle::new(point, glyph('+')),
+            Particle::new(point + dirs::N, glyph('|')),
+            Particle::new(point + dirs::S, glyph('|')),
+            Particle::new(point + dirs::E, glyph('-')),
+            Particle::new(point + dirs::W, glyph('-')),
         ],
         vec![
-            Particle { point: point + dirs::N,  glyph: glyph('-') },
-            Particle { point: point + dirs::S,  glyph: glyph('-') },
-            Particle { point: point + dirs::E,  glyph: glyph('|') },
-            Particle { point: point + dirs::W,  glyph: glyph('|') },
-            Particle { point: point + dirs::NE, glyph: glyph('\\') },
-            Particle { point: point + dirs::SW, glyph: glyph('\\') },
-            Particle { point: point + dirs::NW, glyph: glyph('/') },
-            Particle { point: point + dirs::SE, glyph: glyph('/') },
+            Particle::new(point + dirs::N,  glyph('-')),
+            Particle::new(point + dirs::S,  glyph('-')),
+            Particle::new(point + dirs::E,  glyph('|')),
+            Particle::new(point + dirs::W,  glyph('|')),
+            Particle::new(point + dirs::NE, glyph('\\')),
+            Particle::new(point + dirs::SW, glyph('\\')),
+            Particle::new(point + dirs::NW, glyph('/')),
+            Particle::new(point + dirs::SE, glyph('/')),
         ],
     ];
     Effect::new(base).scale(4.0)
@@ -232,21 +238,21 @@ fn ImplosionEffect(point: Point) -> Effect {
     let glyph = |ch: char| Glyph::wdfg(ch, 0xff0000);
     let base = vec![
         vec![
-            Particle { point, glyph: glyph('*') },
-            Particle { point: point + dirs::NE, glyph: glyph('/') },
-            Particle { point: point + dirs::SW, glyph: glyph('/') },
-            Particle { point: point + dirs::NW, glyph: glyph('\\') },
-            Particle { point: point + dirs::SE, glyph: glyph('\\') },
+            Particle::new(point, glyph('*')),
+            Particle::new(point + dirs::NE, glyph('/')),
+            Particle::new(point + dirs::SW, glyph('/')),
+            Particle::new(point + dirs::NW, glyph('\\')),
+            Particle::new(point + dirs::SE, glyph('\\')),
         ],
         vec![
-            Particle { point, glyph: glyph('#') },
-            Particle { point: point + dirs::NE, glyph: glyph('/') },
-            Particle { point: point + dirs::SW, glyph: glyph('/') },
-            Particle { point: point + dirs::NW, glyph: glyph('\\') },
-            Particle { point: point + dirs::SE, glyph: glyph('\\') },
+            Particle::new(point, glyph('#')),
+            Particle::new(point + dirs::NE, glyph('/')),
+            Particle::new(point + dirs::SW, glyph('/')),
+            Particle::new(point + dirs::NW, glyph('\\')),
+            Particle::new(point + dirs::SE, glyph('\\')),
         ],
-        vec![Particle { point, glyph: glyph('*') }],
-        vec![Particle { point, glyph: glyph('#') }],
+        vec![Particle::new(point, glyph('*'))],
+        vec![Particle::new(point, glyph('#'))],
     ];
     Effect::new(base).scale(3.0)
 }
@@ -261,7 +267,7 @@ fn RayEffect(source: Point, target: Point, speed: i32) -> Effect {
     let denom = ((line.len() - 2 + speed as usize) % speed as usize) as i32;
     let start = if denom == 0 { speed } else { denom } as usize;
     for i in (start..line.len() - 1).step_by(speed as usize) {
-        result.push((0..i).map(|j| Particle { point: line[j + 1], glyph }).collect());
+        result.push((0..i).map(|j| Particle::new(line[j + 1], glyph)).collect());
     }
     Effect::new(result)
 }
@@ -272,7 +278,7 @@ pub fn SummonEffect(source: Point, target: Point) -> Effect {
     let line = LOS(source, target);
     let ball = Glyph::wdfg('*', 0xff0000);
     for i in 1..line.len() - 1 {
-        effect.frames.push(vec![Particle { point: line[i], glyph: ball }]);
+        effect.frames.push(vec![Particle::new(line[i], ball)]);
     }
     let frame = effect.frames.len() as i32 + 8;
     effect.add_event(Event::Other { frame, point: target, what: FT::Summon });
@@ -436,7 +442,7 @@ pub fn HeadbuttEffect(board: &Board, _: &mut RNG, source: Point, target: Point) 
         let mut effect = Effect::default();
         for i in 1..line.len() as i32 - 1 {
             let point = line[i as usize];
-            effect.add_particle(i - 1, Particle { point, glyph });
+            effect.add_particle(i - 1, Particle::new(point, glyph));
             add_sparkle(&mut effect, &trail, i, point);
         }
         effect
@@ -445,22 +451,31 @@ pub fn HeadbuttEffect(board: &Board, _: &mut RNG, source: Point, target: Point) 
     let line = LOS(source, target);
     let back = line.iter().rev().cloned().collect::<Vec<_>>();
 
+    // WARNING: The length of the hold effect must be greater than the length
+    // of the trail, or else two things will break here:
+    //
+    //   - We'll incorrectly compute back_delays as hold.frames.len() instead
+    //     of max(to.frames.len(), hold.frames.len()) and we'll show the entity
+    //     back at their source square too early.
+    //
+    //   - The trail will obscure the entity while it's at the hold spot.
+    //
     let move_length = std::cmp::max(line.len() as i32 - 2, 0);
     let hold_point  = line[move_length as usize];
-    let hold_effect = Effect::constant(Particle { point: hold_point, glyph }, 32);
+    let hold_effect = Effect::constant(Particle::new(hold_point, glyph), 32);
 
     let to   = move_along_line(&line, glyph);
     let hold = hold_effect.delay(move_length);
     let from = move_along_line(&back, glyph);
 
-    let back_length = hold.frames.len() as i32 + move_length;
-    let back_effect = Effect::constant(Particle { point: source, glyph },
-                                       from.frames.len() as i32 - move_length);
-    let back = back_effect.delay(back_length);
+    let back_delays = hold.frames.len() as i32 + move_length;
+    let back_length = from.frames.len() as i32 - move_length;
+    let back_effect = Effect::constant(Particle::new(source, glyph), back_length);
+    let back = back_effect.delay(back_delays);
 
     let hit  = move_length;
     let mut effect = UnderlayEffect(to.and(hold).then(from).and(back),
-                                    Particle { point: source, glyph: underlying });
+                                    Particle::new(source, underlying));
     effect.add_event(Event::Other { frame: hit, point: target, what: FT::Hit });
     effect.scale(0.5)
 }
