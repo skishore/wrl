@@ -440,33 +440,30 @@ pub fn HeadbuttEffect(board: &Board, _: &mut RNG, source: Point, target: Point) 
 
     let move_along_line = |line: &[Point], glyph: Glyph| {
         let mut effect = Effect::default();
-        for i in 1..line.len() as i32 - 1 {
-            let point = line[i as usize];
-            effect.add_particle(i - 1, Particle::new(point, glyph));
-            add_sparkle(&mut effect, &trail, i, point);
+        for i in 1..line.len() {
+            let tick = i as i32 - 1;
+            let (prev, next) = (line[i - 1], line[i]);
+            effect.add_particle(tick, Particle::new(next, glyph));
+            add_sparkle(&mut effect, &trail, tick, prev);
         }
         effect
     };
 
-    let line = LOS(source, target);
-    let back = line.iter().rev().cloned().collect::<Vec<_>>();
+    // Move to the "neighbor" cell next to the target, but not onto it.
+    let mut line = LOS(source, target);
+    line.pop();
+    let line_to = line.clone();
+    line.reverse();
+    let line_from = line;
 
-    // WARNING: The length of the hold effect must be greater than the length
-    // of the trail, or else two things will break here:
-    //
-    //   - We'll incorrectly compute back_delays as hold.frames.len() instead
-    //     of max(to.frames.len(), hold.frames.len()) and we'll show the entity
-    //     back at their source square too early.
-    //
-    //   - The trail will obscure the entity while it's at the hold spot.
-    //
-    let move_length = std::cmp::max(line.len() as i32 - 2, 0);
-    let hold_point  = line[move_length as usize];
-    let hold_effect = Effect::constant(Particle::new(hold_point, glyph), 32);
+    // Once we reach the neighbor, pause for a second to do the attack.
+    let neighbor    = line_from.first().cloned().unwrap_or(source);
+    let hold_effect = Effect::constant(Particle::new(neighbor, glyph), 32);
+    let move_length = std::cmp::max(line_to.len() as i32 - 1, 0);
 
-    let to   = move_along_line(&line, glyph);
+    let to   = move_along_line(&line_to, glyph);
     let hold = hold_effect.delay(move_length);
-    let from = move_along_line(&back, glyph);
+    let from = move_along_line(&line_from, glyph);
 
     let back_delays = hold.frames.len() as i32 + move_length;
     let back_length = from.frames.len() as i32 - move_length;
@@ -474,7 +471,7 @@ pub fn HeadbuttEffect(board: &Board, _: &mut RNG, source: Point, target: Point) 
     let back = back_effect.delay(back_delays);
 
     let hit  = move_length;
-    let mut effect = UnderlayEffect(to.and(hold).then(from).and(back),
+    let mut effect = UnderlayEffect(to.and(hold.then(from).and(back)),
                                     Particle::new(source, underlying));
     effect.add_event(Event::Other { frame: hit, point: target, what: FT::Hit });
     effect.scale(0.5)
