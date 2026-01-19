@@ -55,6 +55,7 @@ pub struct Species {
     pub attacks: Vec<&'static Attack>,
     pub glyph: Glyph,
     pub human: bool,
+    pub light: i32,
     pub speed: f64,
     pub hp: i32,
 }
@@ -82,16 +83,17 @@ impl PartialEq for &'static Species {
 lazy_static! {
     static ref SPECIES: HashMap<&'static str, Species> = {
         let items = vec![
-            ("Human",   ('@', 0xffffff), 0.9, 3,   vec![]),
-            ("Pidgey",  ('P', 0xd0a070), 1.0, 200, vec!["Tackle"]),
-            ("Rattata", ('R', 0xa060ff), 1.0, 200, vec!["Tackle", "Headbutt"]),
+            ("Human",      ('@', 0xffffff), 0, 0.9, 3,   vec![]),
+            ("Pidgey",     ('P', 0xd0a070), 0, 1.0, 200, vec!["Tackle"]),
+            ("Rattata",    ('R', 0xa060ff), 0, 1.0, 200, vec!["Tackle", "Headbutt"]),
+            ("Charmander", ('C', 0xea8b24), 4, 1.0, 200, vec!["Tackle", "Ember"]),
         ];
         let mut result = HashMap::default();
-        for (name, glyph, speed, hp, attacks) in items {
+        for (name, glyph, light, speed, hp, attacks) in items {
             let human = name == "Human";
             let glyph = Glyph::wdfg(glyph.0, glyph.1);
             let attacks = attacks.into_iter().map(&Attack::get).collect();
-            result.insert(name, Species { name, attacks, glyph, human, speed, hp });
+            result.insert(name, Species { name, attacks, glyph, human, light, speed, hp });
         }
         result
     };

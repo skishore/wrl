@@ -445,10 +445,10 @@ impl Knowledge {
             let (eid, items, tile) = (cell.eid, &cell.items, cell.tile);
 
             let nearby = (point - pos).len_l1() <= 1;
-            if dark && !nearby { continue; }
+            if dark && cell.light == 0 && !nearby { continue; }
 
             let visible = true;
-            let shade = dark || cell.shadow > 0;
+            let shade = (dark || cell.shadow > 0) && cell.light == 0;
             let see_big_entities = nearby || !shade;
             let see_all_entities = nearby || !(shade || tile.limits_vision());
 
