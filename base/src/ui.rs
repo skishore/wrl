@@ -684,17 +684,17 @@ impl UI {
             highlight(slice, point, Color::gray(UI_TARGET_SHADE));
         }
 
-        // Render any animation that's currently running.
+        // Render any animation that's currently running. Otherwise, if we're
+        // still alive, render arrows showing NPC facing.
         if let Some(frame) = frame {
             for &effect::Particle { point, glyph } in frame {
                 if !known.get(point).visible() { continue; }
                 let Point(x, y) = point - offset;
                 slice.set(Point(2 * x, y), glyph);
             }
+        } else if entity.cur_hp > 0 {
+            self.render_arrows(known, offset, slice);
         }
-
-        // If we're still playing, render arrows showing NPC facing.
-        if entity.cur_hp > 0 { self.render_arrows(known, offset, slice); }
 
         // Render the targeting UI on the map.
         if let Some(target) = &self.target {
