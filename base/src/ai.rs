@@ -97,7 +97,7 @@ struct Blackboard {
 }
 
 impl Blackboard {
-    fn new(_predator: bool, rng: &mut RNG) -> Self {
+    fn new(rng: &mut RNG) -> Self {
         Self {
             dirs: Default::default(),
             path: Default::default(),
@@ -858,7 +858,7 @@ fn PathToTarget<F: Fn(Point) -> bool>(
 
 #[allow(non_snake_case)]
 fn HungryForMeat(ctx: &Ctx) -> bool {
-    ctx.entity.predator && ctx.blackboard.till_hunger < MAX_HUNGER / 2
+    ctx.entity.species.predator() && ctx.blackboard.till_hunger < MAX_HUNGER / 2
 }
 
 #[allow(non_snake_case)]
@@ -1114,7 +1114,7 @@ fn ListPreyByScent(ctx: &mut Ctx) -> bool {
 
 #[allow(non_snake_case)]
 fn ListHumansByScent(ctx: &mut Ctx) -> bool {
-    ListTargetsByScent(ctx, |x| x.species.human)
+    ListTargetsByScent(ctx, |x| x.species.human())
 }
 
 #[allow(non_snake_case)]
@@ -1671,8 +1671,8 @@ pub struct AIState {
 }
 
 impl AIState {
-    pub fn new(predator: bool, rng: &mut RNG) -> Self {
-        Self { blackboard: Blackboard::new(predator, rng), tree: Box::new(Root()) }
+    pub fn new(rng: &mut RNG) -> Self {
+        Self { blackboard: Blackboard::new(rng), tree: Box::new(Root()) }
     }
 
     pub fn get_path(&self) -> &[Point] {

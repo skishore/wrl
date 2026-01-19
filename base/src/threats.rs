@@ -54,6 +54,7 @@ pub struct Threat {
 
 impl Threat {
     fn prior(me: &Entity) -> Self {
+        let predator = me.species.predator();
         Self {
             pos: Default::default(),
             time: Default::default(),
@@ -62,7 +63,7 @@ impl Threat {
 
             // Stats:
             hp: 0.,
-            delta: if me.predator { -1 } else { 1 },
+            delta: if predator { -1 } else { 1 },
 
             // Flags:
             asleep: false,
@@ -70,7 +71,7 @@ impl Threat {
             seen: false,
 
             // Warnings:
-            timid: !me.predator,
+            timid: !predator,
             warnings: 0,
 
             // See status accessors:
@@ -223,7 +224,7 @@ impl Threat {
         self.delta = other.delta;
 
         self.asleep = other.asleep;
-        self.human = other.species.human;
+        self.human = other.species.human();
         self.seen = true;
 
         let (confidence, valence) = if self.human {
@@ -232,7 +233,7 @@ impl Threat {
             let combat = self.combat > me.known.time_at_turn(ACTIVE_THREAT_TURNS);
             let valence = if combat { Valence::Hostile } else { Valence::Menacing };
             (Confidence::High, valence)
-        } else if !me.predator && me.species == other.species {
+        } else if !me.species.predator() && me.species == other.species {
             (Confidence::High, Valence::Friendly)
         } else {
             (Confidence::High, Valence::Neutral)

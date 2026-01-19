@@ -1247,7 +1247,7 @@ impl State {
 
         let input = Action::WaitForInput;
         let (player, species) = (true, Species::get("Human"));
-        let args = EntityArgs { pos, player, predator: false, species };
+        let args = EntityArgs { pos, player, species };
         let player = board.add_entity(&args, &mut env);
 
         if matches!(mode, GameMode::Gym | GameMode::Sim | GameMode::Test) {
@@ -1273,7 +1273,7 @@ impl State {
                     (false, _) => "Pidgey",
                 };
                 let species = Species::get(species);
-                let args = EntityArgs { pos: x, player: false, predator, species };
+                let args = EntityArgs { pos: x, player: false, species };
                 board.add_entity(&args, &mut env);
             }
         }
@@ -1281,7 +1281,7 @@ impl State {
         board.update_known(player, &mut env);
 
         let inputs = Default::default();
-        let ai = Box::new(AIState::new(/*predator=*/false, &mut env.rng));
+        let ai = Box::new(AIState::new(&mut env.rng));
 
         let ui = &mut env.ui;
         std::mem::drop(Weather::Rain(Point(0, 64), 32));

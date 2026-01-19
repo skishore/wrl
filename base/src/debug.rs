@@ -230,12 +230,12 @@ impl DebugFile {
     }
 
     fn entity_glyph(entity: &Entity) -> Glyph {
-        let sneaking = entity.species.human && entity.sneaking;
+        let sneaking = entity.species.human() && entity.sneaking;
         if sneaking { Glyph::wide('e') } else { entity.species.glyph }
     }
 
     fn knowledge_glyph(entity: &EntityKnowledge) -> Glyph {
-        let sneaking = entity.species.human && entity.sneaking;
+        let sneaking = entity.species.human() && entity.sneaking;
         if sneaking { Glyph::wide('e') } else { entity.species.glyph }
     }
 }

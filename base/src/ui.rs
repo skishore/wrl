@@ -1031,7 +1031,7 @@ impl UI {
         slice.newline();
         let (hp, pp) = (entity.hp, entity.pp);
         let (hp_color, pp_color) = (Self::hp_color(hp), 0x54a8fc.into());
-        let name = if entity.species.human { "skishore" } else { entity.species.name };
+        let name = if entity.species.human() { "skishore" } else { entity.species.name };
         slice.set_fg(fg).write_str(&prefix).write_str(name).newline();
         status_bar_line("HP: ", hp, hp_color, slice);
         status_bar_line("PP: ", pp, pp_color, slice);
@@ -1121,7 +1121,7 @@ impl UI {
     // Static helpers
 
     fn knowledge_glyph(entity: &EntityKnowledge) -> Glyph {
-        let sneaking = entity.species.human && entity.sneaking;
+        let sneaking = entity.species.human() && entity.sneaking;
         if sneaking { Glyph::wide('e') } else { entity.species.glyph }
     }
 

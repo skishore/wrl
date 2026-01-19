@@ -29,7 +29,7 @@ const SOURCE_LIMIT_NPC: i32 = 72;
 const SOURCE_TRACKING_LIMIT: i32 = 16;
 
 fn trophic_level(x: &Entity) -> i32 {
-    if x.species.human { 0 } else if !x.predator { 1 } else { 2 }
+    if x.species.human() { 0 } else if !x.species.predator() { 1 } else { 2 }
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -337,7 +337,7 @@ impl EntityKnowledge {
     }
 
     pub fn too_big_to_hide(&self) -> bool {
-        self.species.human && !self.sneaking
+        self.species.human() && !self.sneaking
     }
 }
 
