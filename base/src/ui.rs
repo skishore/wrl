@@ -1150,7 +1150,8 @@ impl UI {
         if entity.is_none() && source.is_some() { return Self::source_glyph(source) };
 
         let obscured = tile.limits_vision();
-        let shadowed = cell.shade();
+        let light = cell.light();
+        let shade = cell.shade();
 
         let glyph = if let Some(x) = entity {
             let big = x.too_big_to_hide();
@@ -1167,8 +1168,11 @@ impl UI {
         let mut color = glyph.fg();
         if !cell.visible() {
             color = Color::white().fade(UI_REMEMBERED);
-        } else if shadowed {
+        } else if shade && !light {
             color = color.fade(UI_SHADE_FADE);
+        } else if light && entity.is_none() {
+            if shade { color = color.fade(UI_SHADE_FADE); }
+            color = color.interpolate(0.50, 0xffa040);
         }
         glyph.with_fg(color)
     }

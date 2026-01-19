@@ -223,6 +223,7 @@ pub struct CellKnowledge {
     pub tile: &'static Tile,
 
     // Flags:
+    pub light: bool,
     pub shade: bool,
     pub visible: bool,
     pub see_entity_at: bool,
@@ -304,6 +305,7 @@ impl CellKnowledge {
             tile,
 
             // Flags:
+            light: false,
             shade: false,
             visible: false,
             see_entity_at: false,
@@ -444,13 +446,15 @@ impl Knowledge {
             let cell = board.get_cell(point);
             let (eid, items, tile) = (cell.eid, &cell.items, cell.tile);
 
+            let light = cell.light > 0;
             let nearby = (point - pos).len_l1() <= 1;
-            if dark && cell.light == 0 && !nearby { continue; }
+            if dark && !light && !nearby { continue; }
 
             let visible = true;
-            let shade = (dark || cell.shadow > 0) && cell.light == 0;
-            let see_big_entities = nearby || !shade;
-            let see_all_entities = nearby || !(shade || tile.limits_vision());
+            let shade = dark || cell.shadow > 0;
+            let is_shadow_cover = shade && !light;
+            let see_big_entities = nearby || !is_shadow_cover;
+            let see_all_entities = nearby || !(is_shadow_cover || tile.limits_vision());
 
             let entity = (|| {
                 if !see_big_entities { return None; }
@@ -473,6 +477,7 @@ impl Knowledge {
             cell.tile = tile;
 
             // Update the cell's flags.
+            cell.light = light;
             cell.shade = shade;
             cell.visible = visible;
             cell.see_entity_at = see_all_entities;
@@ -839,6 +844,10 @@ impl<'a> PointLookup<'a> {
         self.cell().map(|x| x.items.as_slice()).unwrap_or(&[])
     }
 
+    pub fn light(&self) -> bool {
+        self.cell().map(|x| x.light).unwrap_or(false)
+    }
+
     pub fn shade(&self) -> bool {
         self.cell().map(|x| x.shade).unwrap_or(false)
     }
@@ -894,5 +903,9 @@ impl<'a> PointLookup<'a> {
 
     pub fn can_see_entity_at(&self) -> bool {
         self.cell().map(|x| x.see_entity_at).unwrap_or(false)
+    }
+
+    pub fn is_shadow_cover(&self) -> bool {
+        self.cell().map(|x| x.shade && !x.light).unwrap_or(false)
     }
 }

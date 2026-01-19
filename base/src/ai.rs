@@ -220,7 +220,7 @@ fn is_hiding_place(ctx: &Ctx, point: Point) -> bool {
     if ctx.blackboard.threats.menacing.iter().any(
         |x| (x.pos - point).len_l1() <= 1) { return false; }
     let cell = ctx.known.get(point);
-    cell.shade() || matches!(cell.tile(), Some(x) if x.limits_vision())
+    (cell.is_shadow_cover()) || matches!(cell.tile(), Some(x) if x.limits_vision())
 }
 
 fn get_basic_check<'a>(ctx: &'a Ctx) -> impl Fn(Point) -> Status + use<'a> {
@@ -814,11 +814,16 @@ fn PathToTarget<F: Fn(Point) -> bool>(
     let pick = |dirs: &Vec<Point>, rng: &mut RNG| {
         let cell = known.get(target);
         let (shade, tile) = (cell.shade(), cell.tile());
-        let obscured = shade || match tile {
+        let cover = match tile {
             Some(x) => x.limits_vision() && !x.blocks_movement(),
             None => false,
         };
-        let distance = if obscured { 1 } else { min(range, MOVE_VOLUME) };
+
+        // Check for any of several reasons to stay close to a target.
+        let mut distance = min(range, MOVE_VOLUME);
+        if shade { distance = min(distance, max(ctx.entity.species.light - 1, 1)); }
+        if cover { distance = min(distance, 1); }
+        let distance = distance;
 
         assert!(!dirs.is_empty());
         let scores: Vec<_> = dirs.iter().map(
