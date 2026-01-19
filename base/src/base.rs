@@ -73,16 +73,16 @@ impl Color {
     pub fn gray(n: u8) -> Self { Self(0x010101 * n as u32) }
 
     pub fn brighten(&self, alpha: f64) -> Self {
-        self.interpolate(1. - alpha, 0xffffff)
+        self.interpolate(alpha, 0xffffff)
     }
 
     pub fn fade(&self, alpha: f64) -> Self {
-        self.interpolate(alpha, 0x000000)
+        self.interpolate(1. - alpha, 0x000000)
     }
 
-    fn interpolate(&self, alpha: f64, target: u32) -> Self {
+    pub fn interpolate(&self, alpha: f64, target: u32) -> Self {
         let (s, b) = (self.0, target);
-        let (x, y) = (alpha, 1. - alpha);
+        let (x, y) = (1. - alpha, alpha);
         let (sr, sg, sb) = (s >> 16, (s >> 8) & 0xff, s & 0xff);
         let (br, bg, bb) = (b >> 16, (b >> 8) & 0xff, b & 0xff);
         let r = (x * sr as f64 + y * br as f64) as i32;
