@@ -26,7 +26,6 @@ const SCENT_BASE: f64 = 0.25;
 pub struct EntityArgs {
     pub pos: Point,
     pub player: bool,
-    pub predator: bool,
     pub species: &'static Species,
 }
 
@@ -49,7 +48,6 @@ pub struct Entity {
     // Flags:
     pub asleep: bool,
     pub player: bool,
-    pub predator: bool,
     pub sneaking: bool,
 }
 
@@ -59,7 +57,7 @@ impl Entity {
             eid,
             species: args.species,
             known: Default::default(),
-            ai: Box::new(AIState::new(args.predator, rng)),
+            ai: Box::new(AIState::new(rng)),
             cur_hp: args.species.hp,
             speed: args.species.speed,
             max_hp: args.species.hp,
@@ -74,7 +72,6 @@ impl Entity {
             // Flags:
             asleep: false,
             player: args.player,
-            predator: args.predator,
             sneaking: false,
         }
     }

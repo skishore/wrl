@@ -50,11 +50,15 @@ lazy_static! {
 
 // Species
 
+const FLAGS_NONE: u32 = 0;
+const FLAGS_HUMAN: u32 = 1 << 0;
+const FLAGS_PREDATOR: u32 = 1 << 1;
+
 pub struct Species {
     pub name: &'static str,
     pub attacks: Vec<&'static Attack>,
+    pub flags: u32,
     pub glyph: Glyph,
-    pub human: bool,
     pub light: i32,
     pub speed: f64,
     pub hp: i32,
@@ -64,6 +68,10 @@ impl Species {
     pub fn get(name: &str) -> &'static Species {
         SPECIES.get(name).unwrap_or_else(|| panic!("Unknown species: {}", name))
     }
+
+    // Raw flags-based predicates.
+    pub fn human(&self) -> bool { self.flags & FLAGS_HUMAN != 0 }
+    pub fn predator(&self) -> bool { self.flags & FLAGS_PREDATOR != 0 }
 }
 
 impl std::fmt::Debug for Species {
@@ -83,17 +91,19 @@ impl PartialEq for &'static Species {
 lazy_static! {
     static ref SPECIES: HashMap<&'static str, Species> = {
         let items = vec![
-            ("Human",      ('@', 0xffffff), 0, 0.9, 3,   vec![]),
-            ("Pidgey",     ('P', 0xd0a070), 0, 1.0, 200, vec!["Tackle"]),
-            ("Rattata",    ('R', 0xa060ff), 0, 1.0, 200, vec!["Tackle", "Headbutt"]),
-            ("Charmander", ('C', 0xea8b24), 4, 1.0, 200, vec!["Tackle", "Ember"]),
+            ("Human",      ('@', 0xffffff), 0, 0, 0.9, 3,   vec![]),
+            ("Pidgey",     ('P', 0xd0a070), 0, 0, 1.0, 200, vec!["Tackle"]),
+            ("Rattata",    ('R', 0xa060ff), 1, 0, 1.0, 200, vec!["Tackle", "Headbutt"]),
+            ("Charmander", ('C', 0xea8b24), 1, 4, 1.0, 200, vec!["Tackle", "Ember"]),
         ];
         let mut result = HashMap::default();
-        for (name, glyph, light, speed, hp, attacks) in items {
-            let human = name == "Human";
-            let glyph = Glyph::wdfg(glyph.0, glyph.1);
+        for (name, glyph, predator, light, speed, hp, attacks) in items {
             let attacks = attacks.into_iter().map(&Attack::get).collect();
-            result.insert(name, Species { name, attacks, glyph, human, light, speed, hp });
+            let f0 = if name == "Human" { FLAGS_HUMAN } else { FLAGS_NONE };
+            let f1 = if predator != 0 { FLAGS_PREDATOR } else { FLAGS_NONE };
+            let flags = f0 | f1;
+            let glyph = Glyph::wdfg(glyph.0, glyph.1);
+            result.insert(name, Species { name, attacks, flags, glyph, light, speed, hp });
         }
         result
     };
