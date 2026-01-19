@@ -69,6 +69,11 @@ impl Species {
         SPECIES.get(name).unwrap_or_else(|| panic!("Unknown species: {}", name))
     }
 
+    pub fn light_r2_limit(&self) -> i64 {
+        let r = self.light as i64;
+        r * r + r
+    }
+
     // Raw flags-based predicates.
     pub fn human(&self) -> bool { self.flags & FLAGS_HUMAN != 0 }
     pub fn predator(&self) -> bool { self.flags & FLAGS_PREDATOR != 0 }

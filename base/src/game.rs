@@ -391,7 +391,7 @@ impl Board {
         let entity = &mut self.entities[eid];
         entity.known.mark_turn_boundary(entity.player, entity.speed);
 
-        let light = args.species.light;
+        let light = args.species.light_r2_limit();
         self.update_light(pos, light, 1);
 
         eid
@@ -400,7 +400,7 @@ impl Board {
     fn move_entity(&mut self, eid: EID, target: Point) {
         let entity = &mut self.entities[eid];
         let source = replace(&mut entity.pos, target);
-        let light = entity.species.light;
+        let light = entity.species.light_r2_limit();
 
         let old = replace(&mut self.map.entry_mut(source).unwrap().eid, None);
         assert!(old == Some(eid));
@@ -414,11 +414,11 @@ impl Board {
     fn remove_entity(&mut self, eid: EID) {
         // The player entity is not removed, since it's the player's POV.
         let entity = &mut self.entities[eid];
-        entity.cur_hp = 0;
-        if entity.player { return; }
+        let &mut Entity { pos, player, .. } = entity;
+        if player { return; }
 
         // Remove the entity's light source.
-        let (pos, light) = (entity.pos, entity.species.light);
+        let light = entity.species.light_r2_limit();
         self.update_light(pos, light, -1);
 
         // Remove the entity from the spatial map.
@@ -443,12 +443,11 @@ impl Board {
     fn set_tile(&mut self, point: Point, tile: &'static Tile) {
         let mut lights = vec![];
         for (_, entity) in self.entities.iter() {
-            let r = entity.species.light as i64;
-            let r2_limit = r * r + r;
-            if (entity.pos - point).len_l2_squared() > r2_limit { continue; }
-            lights.push((entity.pos, entity.species.light));
+            let light = entity.species.light_r2_limit();
+            if (entity.pos - point).len_l2_squared() > light { continue; }
+            lights.push((entity.pos, light));
         }
-        for &(point, range) in &lights { self.update_light(point, range, -1); }
+        for &(point, light) in &lights { self.update_light(point, light, -1); }
 
         let Some(cell) = self.map.entry_mut(point) else { return; };
         let old_shadow = if cell.tile.casts_shadow() { 1 } else { 0 };
@@ -456,7 +455,7 @@ impl Board {
         cell.tile = tile;
         self.update_shadow(point, new_shadow - old_shadow);
 
-        for &(point, range) in &lights { self.update_light(point, range, 1); }
+        for &(point, light) in &lights { self.update_light(point, light, 1); }
     }
 
     // Knowledge
@@ -495,20 +494,18 @@ impl Board {
 
     // Lighting
 
-    fn update_light(&mut self, point: Point, range: i32, delta: i32) {
-        if range == 0 { return; }
+    fn update_light(&mut self, point: Point, light: i64, delta: i32) {
+        if light == 0 { return; }
 
-        let r = range as i64;
-        let r2_limit = r * r + r;
         let (pos, dir) = (point, Point::default());
         let opacity_lookup = |p: Point| {
-            if (p - point).len_l2_squared() > r2_limit { return INITIAL_VISIBILITY; }
+            if (p - point).len_l2_squared() > light { return INITIAL_VISIBILITY; }
             self.map.get(p).tile.opacity()
         };
         self.vision.compute(&VisionArgs { pos, dir, opacity_lookup });
 
         for &p in self.vision.get_points_seen() {
-            if (p - point).len_l2_squared() > r2_limit { continue; }
+            if (p - point).len_l2_squared() > light { continue; }
             let Some(cell) = self.map.entry_mut(p) else { continue };
             assert!(cell.light + delta >= 0);
             cell.light += delta;
@@ -639,13 +636,13 @@ fn hit_entity(board: &mut Board, env: &mut UpdateEnv, attack: &Attack, logged: b
     let factor = if critted { 1.5 } else { 1. } * env.rng.random_range(0.85..=1.);
     let damage = (factor * attack.damage as f64).round() as i32;
     let damage = if target.species.name == "Human" { 1 } else { damage };
-    let fainted = target.cur_hp <= damage;
+
+    target.cur_hp = std::cmp::max(target.cur_hp - damage, 0);
+    let fainted = target.cur_hp == 0;
 
     if fainted {
         board.remove_entity(tid);
         board.add_item(pos, Item::Corpse);
-    } else {
-        target.cur_hp -= damage;
     }
 
     let volume = ATTACK_VOLUME;
