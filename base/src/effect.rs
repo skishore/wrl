@@ -341,10 +341,10 @@ pub fn EmberEffect(_: &Board, _: &mut RNG, source: Point, target: Point) -> Effe
     }
 
     let mut hit: i32 = 0;
-    for direction in vec![dirs::NONE].into_iter().chain(dirs::ALL) {
-        let norm = direction.len_taxicab();
+    for &dir in [dirs::NONE].iter().chain(&dirs::ALL) {
+        let norm = dir.len_taxicab();
         let frame = 2 * norm + (line.len() as i32 - 1) / 2;
-        let finish = add_sparkle(&mut effect, &flame(), frame, target + direction);
+        let finish = add_sparkle(&mut effect, &flame(), frame, target + dir);
         if norm == 0 { hit = finish; }
     }
     effect.add_event(Event::Other { frame: hit, point: target, what: FT::Hit });

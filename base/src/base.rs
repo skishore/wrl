@@ -1,4 +1,4 @@
-use std::cmp::{max, min};
+use std::cmp::max;
 use std::fmt::Debug;
 
 use rand::Rng;
@@ -152,7 +152,29 @@ impl Glyph {
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Point and Direction
+// Bound, Point, dirs
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct Bound {
+    pub cutoff: i32,
+    pub radius: i32,
+}
+
+impl Bound {
+    pub const fn new(r: i32) -> Self {
+        if r < 0 { return Self { cutoff: 0, radius: -1 }; }
+        let cutoff = r * r + r + if r == 4 { 0 } else if r == 5 { -1 } else { 1 };
+        Self { cutoff, radius: r }
+    }
+
+    pub fn contains(&self, point: Point) -> bool {
+        point.len_l2_squared() < self.cutoff as i64
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.cutoff == 0
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct Point(pub i32, pub i32);
@@ -163,14 +185,9 @@ impl Point {
         (self.0 as i64 * other.0 as i64) + (self.1 as i64 * other.1 as i64)
     }
 
-    pub fn in_l2_range(&self, range: i32) -> bool {
-        self.len_l2() <= range as f64 - 0.5
-    }
-
-    pub fn len_nethack(&self) -> i32 {
-        let (ax, ay) = (self.0.abs() as i64, self.1.abs() as i64);
-        let (min, max) = (min(ax, ay), max(ax, ay));
-        ((46 * min + 95 * max + 25) / 100) as i32
+    pub fn bound_radius(&self) -> i32 {
+        let r = self.len_l2() as i32;
+        if Bound::new(r).contains(*self) { r } else { r + 1 }
     }
 
     pub fn len_taxicab(&self) -> i32 {
@@ -433,4 +450,29 @@ pub fn LOS(a: Point, b: Point) -> Vec<Point> {
 
     assert!(result.len() == size);
     result
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    extern crate test;
+
+    #[test]
+    fn test_bound_radius() {
+        let expected_bound_radius = |p: Point| {
+            for r in 0..=p.len_taxicab() {
+                if Bound::new(r).contains(p) { return r; }
+            }
+            panic!("Failed to get true bound_radius: {:?}", p);
+        };
+        let radius = 10;
+        for x in -radius..=radius {
+            for y in -radius..=radius {
+                let p = Point(x, y);
+                assert!(p.bound_radius() == expected_bound_radius(p));
+            }
+        }
+    }
 }
