@@ -1,6 +1,6 @@
 use lazy_static::lazy_static;
 
-use crate::base::{Glyph, HashMap, Point, RNG};
+use crate::base::{Bound, Glyph, HashMap, Point, RNG};
 use crate::effect::*;
 use crate::game::Board;
 
@@ -12,7 +12,7 @@ type AttackEffect = fn(&Board, &mut RNG, Point, Point) -> Effect;
 
 pub struct Attack {
     pub name: &'static str,
-    pub range: i32,
+    pub range: Bound,
     pub damage: i32,
     pub effect: AttackEffect,
 }
@@ -40,6 +40,7 @@ lazy_static! {
         ];
         let mut result = HashMap::default();
         for (name, range, damage, effect) in items {
+            let range = Bound::new(range);
             result.insert(name, Attack { name, range, damage, effect });
         }
         result
@@ -59,7 +60,7 @@ pub struct Species {
     pub attacks: Vec<&'static Attack>,
     pub flags: u32,
     pub glyph: Glyph,
-    pub light: i32,
+    pub light: Bound,
     pub speed: f64,
     pub hp: i32,
 }
@@ -67,11 +68,6 @@ pub struct Species {
 impl Species {
     pub fn get(name: &str) -> &'static Species {
         SPECIES.get(name).unwrap_or_else(|| panic!("Unknown species: {}", name))
-    }
-
-    pub fn light_r2_limit(&self) -> i64 {
-        let r = self.light as i64;
-        r * r + r
     }
 
     // Raw flags-based predicates.
@@ -108,6 +104,7 @@ lazy_static! {
             let f1 = if predator != 0 { FLAGS_PREDATOR } else { FLAGS_NONE };
             let flags = f0 | f1;
             let glyph = Glyph::wdfg(glyph.0, glyph.1);
+            let light = Bound::new(if light == 0 { -1 } else { light });
             result.insert(name, Species { name, attacks, flags, glyph, light, speed, hp });
         }
         result

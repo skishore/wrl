@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use rand::Rng;
 
 use crate::base::{HashMap, LOS, Point, RNG, dirs};
-use crate::base::{Buffer, Color, Glyph, Matrix, Rect, Slice};
+use crate::base::{Bound, Buffer, Color, Glyph, Matrix, Rect, Slice};
 use crate::effect::{Frame, self};
 use crate::entity::{EID, Entity};
 use crate::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_};
@@ -188,7 +188,7 @@ struct Rainfall {
 
 enum TargetData {
     FarLook,
-    Summon { index: usize, range: i32 },
+    Summon { index: usize, range: Bound },
 }
 
 pub struct Target {
@@ -275,7 +275,7 @@ fn update_target(known: &Knowledge, target: &mut Target, update: Point) {
                 let status = cell.status();
                 if status != Status::Free && status != Status::Unknown {
                     target.error = "There's something in the way.".into();
-                } else if !(x - target.source).in_l2_range(*range) {
+                } else if !range.contains(x - target.source) {
                     target.error = "You can't throw that far.".into();
                 } else if !cell.visible() {
                     target.error = "You can't see a clear path there.".into();

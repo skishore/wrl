@@ -8,7 +8,7 @@ use thin_vec::{ThinVec, thin_vec};
 
 use crate::static_assert_size;
 use crate::ai::{AIEnv, AIState};
-use crate::base::{Buffer, Color, Glyph};
+use crate::base::{Bound, Buffer, Color, Glyph};
 use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs, sample, weighted};
 use crate::dex::{Attack, Species};
 use crate::debug::DebugFile;
@@ -47,10 +47,11 @@ const UI_DAMAGE_TICKS: i32 = 6;
 
 const SLOWED_TURNS: f64 = 1.5;
 
-pub const ATTACK_VOLUME: i32 = FOV_RADIUS_NPC;
-pub const CALL_VOLUME: i32 = FOV_RADIUS_NPC;
-pub const MOVE_VOLUME: i32 = 8;
-pub const SNIFF_VOLUME: i32 = 8;
+pub const ATTACK_VOLUME: Bound = Bound::new(FOV_RADIUS_NPC);
+pub const CALL_VOLUME: Bound = Bound::new(FOV_RADIUS_NPC);
+pub const MOVE_VOLUME: Bound = Bound::new(8);
+pub const SNEAK_VOLUME: Bound = Bound::new(1);
+pub const SNIFF_VOLUME: Bound = Bound::new(8);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Input { Escape, BackTab, Char(char), Click(Point) }
@@ -391,7 +392,7 @@ impl Board {
         let entity = &mut self.entities[eid];
         entity.known.mark_turn_boundary(entity.player, entity.speed);
 
-        let light = args.species.light_r2_limit();
+        let light = args.species.light;
         self.update_light(pos, light, 1);
 
         eid
@@ -400,7 +401,7 @@ impl Board {
     fn move_entity(&mut self, eid: EID, target: Point) {
         let entity = &mut self.entities[eid];
         let source = replace(&mut entity.pos, target);
-        let light = entity.species.light_r2_limit();
+        let light = entity.species.light;
 
         let old = replace(&mut self.map.entry_mut(source).unwrap().eid, None);
         assert!(old == Some(eid));
@@ -418,7 +419,7 @@ impl Board {
         if player { return; }
 
         // Remove the entity's light source.
-        let light = entity.species.light_r2_limit();
+        let light = entity.species.light;
         self.update_light(pos, light, -1);
 
         // Remove the entity from the spatial map.
@@ -443,8 +444,8 @@ impl Board {
     fn set_tile(&mut self, point: Point, tile: &'static Tile) {
         let mut lights = vec![];
         for (_, entity) in self.entities.iter() {
-            let light = entity.species.light_r2_limit();
-            if (entity.pos - point).len_l2_squared() > light { continue; }
+            let light = entity.species.light;
+            if !light.contains(entity.pos - point) { continue; }
             lights.push((entity.pos, light));
         }
         for &(point, light) in &lights { self.update_light(point, light, -1); }
@@ -494,18 +495,18 @@ impl Board {
 
     // Lighting
 
-    fn update_light(&mut self, point: Point, light: i64, delta: i32) {
-        if light == 0 { return; }
+    fn update_light(&mut self, point: Point, light: Bound, delta: i32) {
+        if light.is_empty() { return; }
 
         let (pos, dir) = (point, Point::default());
         let opacity_lookup = |p: Point| {
-            if (p - point).len_l2_squared() > light { return INITIAL_VISIBILITY; }
+            if !light.contains(p - point) { return INITIAL_VISIBILITY; }
             self.map.get(p).tile.opacity()
         };
         self.vision.compute(&VisionArgs { pos, dir, opacity_lookup });
 
         for &p in self.vision.get_points_seen() {
-            if (p - point).len_l2_squared() > light { continue; }
+            if !light.contains(p - point) { continue; }
             let Some(cell) = self.map.entry_mut(p) else { continue };
             assert!(cell.light + delta >= 0);
             cell.light += delta;
@@ -561,7 +562,7 @@ impl std::ops::BitOr for Senses {
 struct Noise {
     cause: Option<EID>,
     point: Point,
-    volume: i32,
+    volume: Bound,
 }
 
 struct Sighting {
@@ -579,10 +580,10 @@ fn detect(board: &Board, noise: &Noise, env: &mut UpdateEnv) -> SenseMap {
 
     for (eid, entity) in &board.entities {
         if cause == Some(eid) { continue; }
-        if entity.asleep && volume == 1 && point != entity.pos { continue; }
+        if entity.asleep && volume.radius == 1 && point != entity.pos { continue; }
 
         let seen = env.fov.can_see_entity_at(board, entity, point);
-        let heard = (point - entity.pos).len_nethack() <= volume;
+        let heard = volume.contains(point - entity.pos);
         if !seen && !heard { continue; }
 
         let seen = if seen { SENSE_SEEN } else { 0 };
@@ -746,7 +747,7 @@ impl ActionResult {
 fn can_attack(board: &Board, entity: &Entity, action: &AttackAction) -> bool {
     let (known, source) = (&entity.known, entity.pos);
     let (range, target) = (action.attack.range, action.target);
-    if (source - target).len_nethack() > range { return false; }
+    if !range.contains(source - target) { return false; }
     if !known.get(target).visible() { return false; }
     if source == target { return false; }
 
@@ -917,7 +918,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 Status::Free => {
                     state.board.time = state.board.time.bump();
 
-                    let volume = if noisy { MOVE_VOLUME } else { 1 };
+                    let volume = if noisy { MOVE_VOLUME } else { SNEAK_VOLUME };
                     let noise = Noise { cause: Some(eid), point: source, volume };
                     let saw_source = detect(&state.board, &noise, &mut state.env);
 

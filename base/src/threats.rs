@@ -288,7 +288,7 @@ impl ThreatState {
     pub fn on_call_for_help(&mut self, point: Point, time: Timestamp) {
         for threat in &mut self.threats {
             if !threat.friendly() { continue; }
-            if (threat.pos - point).len_nethack() > CALL_VOLUME { continue; }
+            if !CALL_VOLUME.contains(threat.pos - point) { continue; }
             threat.combat = time;
         }
         self.last_call = time;
@@ -388,7 +388,7 @@ impl ThreatState {
                 team_strength += base * decay;
 
                 let recent = x.time > call_limit;
-                let nearby = (me.pos - x.pos).len_nethack() <= CALL_VOLUME;
+                let nearby = CALL_VOLUME.contains(me.pos - x.pos);
                 call_strength += if nearby && recent { base } else { base * decay };
             }
         }

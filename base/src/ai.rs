@@ -7,7 +7,7 @@ use rand_distr::{Distribution, Normal};
 use rand_distr::num_traits::Pow;
 
 use crate::{act, cb, cond, pri, run, seq, util};
-use crate::base::{LOS, Point, RNG, dirs, sample, weighted};
+use crate::base::{Bound, LOS, Point, RNG, dirs, sample, weighted};
 use crate::bhv::{Bhv, Result};
 use crate::debug::{DebugFile, DebugLine, DebugLog};
 use crate::entity::Entity;
@@ -600,7 +600,7 @@ fn WarnOffThreats(ctx: &mut Ctx) -> Option<Action> {
         if threat.time <= limit { break; }
 
         if !threat.unknown() { continue; }
-        if (threat.pos - pos).len_nethack() > CALL_VOLUME { continue; }
+        if !CALL_VOLUME.contains(threat.pos - pos) { continue; }
 
         let warn = !stare && threat.time > bb.last_warning;
         if warn { threat.mark_warned(rng); }
@@ -781,7 +781,7 @@ fn AttackTarget(ctx: &mut Ctx, target: Point) -> Option<Action> {
     let attacks = &ctx.entity.species.attacks;
     if attacks.is_empty() { return None; }
 
-    let attack = sample(attacks, ctx.env.rng);
+    let attack = *sample(attacks, ctx.env.rng);
     let valid = |x| CanAttackTarget(x, target, known, attack.range);
     if move_ready(entity) && valid(source) {
         return Some(Action::Attack(AttackAction { attack, target }));
@@ -790,8 +790,8 @@ fn AttackTarget(ctx: &mut Ctx, target: Point) -> Option<Action> {
 }
 
 #[allow(non_snake_case)]
-fn CanAttackTarget(source: Point, target: Point, known: &Knowledge, range: i32) -> bool {
-    if (source - target).len_nethack() > range { return false; }
+fn CanAttackTarget(source: Point, target: Point, known: &Knowledge, range: Bound) -> bool {
+    if !range.contains(source - target) { return false; }
     if source == target { return false; }
 
     let los = LOS(source, target);
@@ -800,7 +800,7 @@ fn CanAttackTarget(source: Point, target: Point, known: &Knowledge, range: i32) 
 
 #[allow(non_snake_case)]
 fn PathToTarget<F: Fn(Point) -> bool>(
-        ctx: &mut Ctx, target: Point, range: i32, valid: F) -> Option<Action> {
+        ctx: &mut Ctx, target: Point, range: Bound, valid: F) -> Option<Action> {
     let Ctx { known, pos: source, .. } = *ctx;
     let rng = &mut ctx.env.rng;
     let check = |p: Point| known.get(p).status();
@@ -814,20 +814,21 @@ fn PathToTarget<F: Fn(Point) -> bool>(
     let pick = |dirs: &Vec<Point>, rng: &mut RNG| {
         let cell = known.get(target);
         let (shade, tile) = (cell.shade(), cell.tile());
+        let light = ctx.entity.species.light.radius;
         let cover = match tile {
             Some(x) => x.limits_vision() && !x.blocks_movement(),
             None => false,
         };
 
         // Check for any of several reasons to stay close to a target.
-        let mut distance = min(range, MOVE_VOLUME);
-        if shade { distance = min(distance, max(ctx.entity.species.light - 1, 1)); }
-        if cover { distance = min(distance, 1); }
-        let distance = distance;
+        let mut radius = min(range.radius, MOVE_VOLUME.radius);
+        if shade { radius = min(radius, max(light - 1, 1)); }
+        if cover { radius = min(radius, 1); }
+        let radius = radius;
 
         assert!(!dirs.is_empty());
         let scores: Vec<_> = dirs.iter().map(
-            |&x| ((x + source - target).len_nethack() - distance).abs()).collect();
+            |&x| ((x + source - target).bound_radius() - radius).abs()).collect();
         let best = *scores.iter().reduce(|acc, x| min(acc, x)).unwrap();
         let opts: Vec<_> = (0..dirs.len()).filter(|&i| scores[i] == best).collect();
         step(dirs[*sample(&opts, rng)])
