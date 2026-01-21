@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use crate::base::{Matrix, Point};
+use crate::base::{Bound, Matrix, Point};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -121,8 +121,7 @@ pub struct VisionArgs<F: Fn(Point) -> i32> {
 }
 
 pub struct Vision {
-    radius: i32,
-    r2_limit: i64,
+    range: Bound,
     initial_visibility: i32,
     offset: Point,
     points_seen: Vec<Point>,
@@ -141,10 +140,8 @@ impl Vision {
     pub fn new_with_visibility(radius: i32, initial_visibility: i32) -> Self {
         let side = 2 * radius + 1;
         let size = Point(side, side);
-        let r = radius as i64;
         Self {
-            radius,
-            r2_limit: r * r + r,
+            range: Bound::new(radius),
             initial_visibility,
             offset: Point::default(),
             points_seen: vec![],
@@ -179,7 +176,7 @@ impl Vision {
             debug_assert!(self.visibility.data.iter().all(|&x| x == -1));
         }
 
-        let radius = self.radius;
+        let radius = self.range.radius;
         let center = Point(radius, radius);
         let visibility = self.initial_visibility;
 
@@ -200,7 +197,7 @@ impl Vision {
         if args.pos == target { return true; }
 
         let delta = target - args.pos;
-        if delta.len_l2_squared() > self.r2_limit { return false; }
+        if !self.range.contains(delta) { return false; }
 
         let Point(x, y) = delta;
         let limit = std::cmp::max(x.abs(), y.abs());
@@ -214,7 +211,7 @@ impl Vision {
     pub fn compute<F: Fn(Point) -> i32>(&mut self, args: &VisionArgs<F>) {
         self.clear(args.pos);
         self.seed_ranges(args.dir, None);
-        self.execute(args.pos, self.radius, &args.opacity_lookup);
+        self.execute(args.pos, self.range.radius, &args.opacity_lookup);
     }
 
     fn seed_ranges(&mut self, dir: Point, target: Option<Point>) {
@@ -283,9 +280,8 @@ impl Vision {
 
     fn execute<F: Fn(Point) -> i32>(
             &mut self, pos: Point, limit: i32, opacity_lookup: F) {
-        let radius = self.radius;
+        let radius = self.range.radius;
         let center = Point(radius, radius);
-        let r2_limit = self.r2_limit;
 
         let push = |next: &mut SlopeRanges, s: SlopeRange| {
             if let Some(x) = next.items.last_mut() &&
@@ -308,7 +304,7 @@ impl Vision {
 
                 for width in start..=limit {
                     let source = Point(depth, width);
-                    let nearby = source.len_l2_squared() <= r2_limit;
+                    let nearby = self.range.contains(source);
                     let point = *transform * source;
 
                     let next_visibility = (|| {
