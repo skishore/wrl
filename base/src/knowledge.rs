@@ -666,13 +666,13 @@ impl Knowledge {
         for (_, other) in &board.entities {
             let mut remainder = rng.random::<f64>();
 
-            for age in 0..other.trail.capacity() {
-                remainder -= other.get_historical_scent_at(me.pos, age);
+            for (scent, value) in other.get_scent_trail(me.pos) {
+                remainder -= value;
                 if remainder >= 0. { continue; }
 
-                let scent = other.trail[age];
+                let species = other.species;
                 let delta = trophic_level(other) - trophic_level(me);
-                let event = ScentEvent { delta, scent, species: other.species };
+                let event = ScentEvent { delta, scent: *scent, species };
                 self.scents.push(event);
                 break;
             }
