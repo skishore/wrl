@@ -92,23 +92,26 @@ impl Entity {
 
     pub fn get_scent_at(&self, p: Point) -> f64 {
         let mut total = 0.;
-        for age in 0..self.trail.capacity() {
-            total += self.get_historical_scent_at(p, age);
-        }
+        for (_, scent) in self.get_scent_trail(p) { total += scent; }
         if total > 1. { 1. } else { total }
     }
 
-    pub fn get_historical_scent_at(&self, p: Point, age: usize) -> f64 {
-        let Some(&Scent { pos, .. }) = self.trail.get(age) else { return 0. };
-
+    pub fn get_scent_trail(&self, p: Point) -> impl Iterator<Item = (&Scent, f64)> {
         let base = SCENT_BASE;
         let dropoff = 1. - SCENT_DECAY / (SCENT_TRAIL_SIZE as f64);
-        let variance = SCENT_SPREAD * (1. + 1. * age as f64);
+        let mut scale = 1.;
 
-        let l2_squared = (pos - p).len_l2_squared() as f64;
-        let num = (-l2_squared / (2. * variance)).exp();
-        let den = (std::f64::consts::TAU * variance).sqrt();
-        base * num / den * dropoff.powi(age as i32)
+        self.trail.iter().enumerate().map(move |(i, scent)| {
+            let variance = SCENT_SPREAD * (1. + 1. * i as f64);
+            let l2_squared = (scent.pos - p).len_l2_squared() as f64;
+            let num = (-l2_squared / (2. * variance)).exp();
+            let den = (std::f64::consts::TAU * variance).sqrt();
+            let value = base * num / den * scale;
+
+            scale *= dropoff;
+
+            (scent, value)
+        })
     }
 
     pub fn too_big_to_hide(&self) -> bool {
