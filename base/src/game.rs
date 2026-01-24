@@ -221,6 +221,7 @@ impl FOV {
             let dir = if player { Point::default() } else { dir };
             let opacity_lookup = |x| map.get(x).tile.opacity();
             vision.compute(&VisionArgs { pos, dir, opacity_lookup });
+            if !me.player { vision.sort_points_seen(pos); }
         }
         vision
     }
