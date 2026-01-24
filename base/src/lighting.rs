@@ -33,18 +33,11 @@ impl LightSourceBitset {
         }))
     }
 
-    fn set(&mut self, delta: Point) {
+    fn toggle(&mut self, delta: Point) {
         let x = delta.0 + MAX_LIGHT_RADIUS;
         let y = delta.1 + MAX_LIGHT_RADIUS;
         let i = (x + y * MAX_LIGHT_DIAMETER) as usize;
-        self.words[i / 64] |= 1 << (i & 63);
-    }
-
-    fn unset(&mut self, delta: Point) {
-        let x = delta.0 + MAX_LIGHT_RADIUS;
-        let y = delta.1 + MAX_LIGHT_RADIUS;
-        let i = (x + y * MAX_LIGHT_DIAMETER) as usize;
-        self.words[i / 64] &= !(1 << (i & 63));
+        self.words[i / 64] ^= 1 << (i & 63);
     }
 }
 
@@ -121,16 +114,12 @@ impl Lighting {
 
         for &p in self.vision.get_points_seen() {
             if !light.contains(p - point) { continue; }
-            let Some(entry) = self.light_values.entry_mut(p) else { continue };
+            let Some(index) = self.light_values.index(p) else { continue };
+            let entry = &mut self.light_values.data[index];
             assert!(*entry + delta >= 0);
             *entry += delta;
 
-            let bitset = self.sources.entry_mut(p).unwrap();
-            if delta > 0 {
-                bitset.set(point - p);
-            } else {
-                bitset.unset(point - p);
-            }
+            self.sources.data[index].toggle(point - p);
         }
     }
 }
