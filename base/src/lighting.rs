@@ -44,23 +44,21 @@ impl LightSourceBitset {
 //////////////////////////////////////////////////////////////////////////////
 
 struct Lighting {
-    max_radius: i32,
     light_bounds: Matrix<Bound>,
     light_values: Matrix<i32>,
     opacity: Matrix<i32>,
     sources: Matrix<LightSourceBitset>,
-    vision: Vision,
+    visions: Vec<Vision>,
 }
 
 impl Lighting {
-    pub fn new(size: Point, max_radius: i32) -> Self {
+    pub fn new(size: Point) -> Self {
         let mut result = Self {
-            max_radius,
             light_bounds: Matrix::new(size, Bound::new(-1)),
             light_values: Matrix::new(size, 0),
             opacity: Matrix::new(size, INITIAL_VISIBILITY),
             sources: Matrix::new(size, Default::default()),
-            vision: Vision::new(max_radius),
+            visions: (0..=MAX_LIGHT_RADIUS).map(|x| Vision::new(x)).collect(),
         };
         result.opacity.fill(0);
         result
@@ -106,14 +104,11 @@ impl Lighting {
         if light.is_empty() { return; }
 
         let (pos, dir) = (point, Point::default());
-        let opacity_lookup = |p: Point| {
-            if !light.contains(p - point) { return INITIAL_VISIBILITY; }
-            self.opacity.get(p)
-        };
-        self.vision.compute(&VisionArgs { pos, dir, opacity_lookup });
+        let opacity_lookup = |p: Point| { self.opacity.get(p) };
+        let vision = &mut self.visions[light.radius as usize];
+        vision.compute(&VisionArgs { pos, dir, opacity_lookup });
 
-        for &p in self.vision.get_points_seen() {
-            if !light.contains(p - point) { continue; }
+        for &p in vision.get_points_seen() {
             let Some(index) = self.light_values.index(p) else { continue };
             let entry = &mut self.light_values.data[index];
             assert!(*entry + delta >= 0);
@@ -143,7 +138,7 @@ mod tests {
     fn test_lighting() {
         let size = Point(SIDE, SIDE);
         let mut rng = RNG::seed_from_u64(SEED);
-        let mut lighting = Lighting::new(size, MAX_LIGHT_RADIUS);
+        let mut lighting = Lighting::new(size);
         check_lighting(&lighting);
 
         for _ in 0..ITERATIONS {
@@ -167,7 +162,7 @@ mod tests {
     fn bench_lighting_light_change(b: &mut test::Bencher) {
         let size = Point(SIDE, SIDE);
         let mut rng = RNG::seed_from_u64(SEED);
-        let mut lighting = Lighting::new(size, MAX_LIGHT_RADIUS);
+        let mut lighting = Lighting::new(size);
 
         for x in 0..lighting.opacity.size.0 {
             for y in 0..lighting.opacity.size.1 {
@@ -190,7 +185,7 @@ mod tests {
     fn bench_lighting_opacity_change(b: &mut test::Bencher) {
         let size = Point(SIDE, SIDE);
         let mut rng = RNG::seed_from_u64(SEED);
-        let mut lighting = Lighting::new(size, MAX_LIGHT_RADIUS);
+        let mut lighting = Lighting::new(size);
 
         for x in 0..lighting.opacity.size.0 {
             for y in 0..lighting.opacity.size.1 {
