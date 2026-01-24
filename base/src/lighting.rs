@@ -3,11 +3,59 @@ use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
 
 //////////////////////////////////////////////////////////////////////////////
 
+const MAX_LIGHT_RADIUS: i32 = 12;
+const MAX_LIGHT_DIAMETER: i32 = 2 * MAX_LIGHT_RADIUS + 1;
+const N: usize = ((MAX_LIGHT_DIAMETER * MAX_LIGHT_DIAMETER + 63) / 64) as usize;
+
+#[derive(Clone, Copy, Default)]
+struct LightSourceBitset { words: [u64; N], }
+
+struct OneBits(u64);
+
+impl Iterator for OneBits {
+    type Item = u32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.0 == 0 { return None; }
+        let index = self.0.trailing_zeros();
+        self.0 ^= 1 << index;
+        Some(index)
+    }
+}
+
+impl LightSourceBitset {
+    fn sources(&self) -> impl Iterator<Item = Point> {
+        self.words.iter().enumerate().flat_map(|(a, &x)| OneBits(x).map(move |b| {
+            let i = (a * 64 + b as usize) as i32;
+            let x = i % MAX_LIGHT_DIAMETER;
+            let y = i / MAX_LIGHT_DIAMETER;
+            Point(x - MAX_LIGHT_RADIUS, y - MAX_LIGHT_RADIUS)
+        }))
+    }
+
+    fn set(&mut self, delta: Point) {
+        let x = delta.0 + MAX_LIGHT_RADIUS;
+        let y = delta.1 + MAX_LIGHT_RADIUS;
+        let i = (x + y * MAX_LIGHT_DIAMETER) as usize;
+        self.words[i / 64] |= 1 << (i & 63);
+    }
+
+    fn unset(&mut self, delta: Point) {
+        let x = delta.0 + MAX_LIGHT_RADIUS;
+        let y = delta.1 + MAX_LIGHT_RADIUS;
+        let i = (x + y * MAX_LIGHT_DIAMETER) as usize;
+        self.words[i / 64] &= !(1 << (i & 63));
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 struct Lighting {
     max_radius: i32,
     light_bounds: Matrix<Bound>,
     light_values: Matrix<i32>,
     opacity: Matrix<i32>,
+    sources: Matrix<LightSourceBitset>,
     vision: Vision,
 }
 
@@ -18,6 +66,7 @@ impl Lighting {
             light_bounds: Matrix::new(size, Bound::new(-1)),
             light_values: Matrix::new(size, 0),
             opacity: Matrix::new(size, INITIAL_VISIBILITY),
+            sources: Matrix::new(size, Default::default()),
             vision: Vision::new(max_radius),
         };
         result.opacity.fill(0);
@@ -43,23 +92,21 @@ impl Lighting {
         let Some(index) = self.opacity.index(point) else { return };
         if self.opacity.data[index] == value { return; }
 
-        let r = self.max_radius;
+        let bitset = self.sources.data[index];
 
-        let mut lights = vec![];
-        for dx in -r..=r {
-            for dy in -r..=r {
-                let delta = Point(dx, dy);
-                let other = point + delta;
-                let light = self.light_bounds.get(other);
-                if light.contains(delta) { lights.push((other, light)); }
-            }
+        for delta in bitset.sources() {
+            let other = point + delta;
+            let light = self.light_bounds.get(other);
+            self.update_light(other, light, -1);
         }
-
-        for &(other, light) in &lights { self.update_light(other, light, -1); }
 
         self.opacity.data[index] = value;
 
-        for &(other, light) in &lights { self.update_light(other, light, 1); }
+        for delta in bitset.sources() {
+            let other = point + delta;
+            let light = self.light_bounds.get(other);
+            self.update_light(other, light, 1);
+        }
     }
 
     fn update_light(&mut self, point: Point, light: Bound, delta: i32) {
@@ -77,6 +124,13 @@ impl Lighting {
             let Some(entry) = self.light_values.entry_mut(p) else { continue };
             assert!(*entry + delta >= 0);
             *entry += delta;
+
+            let bitset = self.sources.entry_mut(p).unwrap();
+            if delta > 0 {
+                bitset.set(point - p);
+            } else {
+                bitset.unset(point - p);
+            }
         }
     }
 }
