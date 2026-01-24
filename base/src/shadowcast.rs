@@ -214,6 +214,10 @@ impl Vision {
         self.execute(args.pos, self.range.radius, &args.opacity_lookup);
     }
 
+    pub fn sort_points_seen(&mut self, pos: Point) {
+        self.points_seen.sort_by_key(|&x| (x - pos).len_l2_squared());
+    }
+
     fn seed_ranges(&mut self, dir: Point, target: Option<Point>) {
         let visibility = self.initial_visibility;
 
@@ -345,8 +349,6 @@ impl Vision {
             self.next.items.clear();
             self.next.depth += 2;
         }
-
-        self.points_seen.sort_by_key(|&x| (x - pos).len_l2_squared());
     }
 }
 
