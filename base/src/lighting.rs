@@ -1,4 +1,4 @@
-use crate::base::{Bound, Matrix, Point};
+use crate::base::{Matrix, Point};
 use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
 
 //////////////////////////////////////////////////////////////////////////////
@@ -44,7 +44,7 @@ impl LightSourceBitset {
 //////////////////////////////////////////////////////////////////////////////
 
 struct Lighting {
-    light_bounds: Matrix<Bound>,
+    light_radius: Matrix<i32>,
     light_values: Matrix<i32>,
     opacity: Matrix<i32>,
     sources: Matrix<LightSourceBitset>,
@@ -54,7 +54,7 @@ struct Lighting {
 impl Lighting {
     pub fn new(size: Point) -> Self {
         let mut result = Self {
-            light_bounds: Matrix::new(size, Bound::new(-1)),
+            light_radius: Matrix::new(size, -1),
             light_values: Matrix::new(size, 0),
             opacity: Matrix::new(size, INITIAL_VISIBILITY),
             sources: Matrix::new(size, Default::default()),
@@ -68,14 +68,13 @@ impl Lighting {
         self.light_values.get(point)
     }
 
-    pub fn set_light(&mut self, point: Point, light: Bound) {
-        let Some(entry) = self.light_bounds.entry_mut(point) else { return };
+    pub fn set_light(&mut self, point: Point, light: i32) {
+        let Some(entry) = self.light_radius.entry_mut(point) else { return };
 
-        let bound = *entry;
-        if bound.radius == light.radius { return; }
+        let value = std::mem::replace(entry, light);
+        if value == light { return; }
 
-        *entry = light;
-        self.update_light(point, bound, -1);
+        self.update_light(point, value, -1);
         self.update_light(point, light, 1);
     }
 
@@ -87,7 +86,7 @@ impl Lighting {
 
         for delta in bitset.sources() {
             let other = point + delta;
-            let light = self.light_bounds.get(other);
+            let light = self.light_radius.get(other);
             self.update_light(other, light, -1);
         }
 
@@ -95,17 +94,17 @@ impl Lighting {
 
         for delta in bitset.sources() {
             let other = point + delta;
-            let light = self.light_bounds.get(other);
+            let light = self.light_radius.get(other);
             self.update_light(other, light, 1);
         }
     }
 
-    fn update_light(&mut self, point: Point, light: Bound, delta: i32) {
-        if light.is_empty() { return; }
+    fn update_light(&mut self, point: Point, light: i32, delta: i32) {
+        if light < 0 { return; }
 
         let (pos, dir) = (point, Point::default());
         let opacity_lookup = |p: Point| { self.opacity.get(p) };
-        let vision = &mut self.visions[light.radius as usize];
+        let vision = &mut self.visions[light as usize];
         vision.compute(&VisionArgs { pos, dir, opacity_lookup });
 
         for &p in vision.get_points_seen() {
@@ -125,7 +124,7 @@ impl Lighting {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::base::RNG;
+    use crate::base::{Bound, RNG};
     use rand::{Rng, SeedableRng};
     extern crate test;
 
@@ -147,8 +146,8 @@ mod tests {
             let point = Point(x, y);
 
             if rng.random_bool(0.25) {
-                let radius = rng.random_range(-1..=6);
-                lighting.set_light(point, Bound::new(radius));
+                let light = rng.random_range(-1..=6);
+                lighting.set_light(point, light);
             } else {
                 let opacity = lighting.opacity.get(point);
                 lighting.set_opacity(point, INITIAL_VISIBILITY - opacity);
@@ -167,8 +166,8 @@ mod tests {
         for x in 0..lighting.opacity.size.0 {
             for y in 0..lighting.opacity.size.1 {
                 let point = Point(x, y);
-                let radius = rng.random_range(-1..=6);
-                lighting.set_light(point, Bound::new(radius));
+                let light = rng.random_range(-1..=6);
+                lighting.set_light(point, light);
             }
         }
 
@@ -176,8 +175,8 @@ mod tests {
             let x = rng.random_range(0..size.0);
             let y = rng.random_range(0..size.0);
             let point = Point(x, y);
-            let radius = rng.random_range(-1..=MAX_LIGHT_RADIUS);
-            lighting.set_light(point, Bound::new(radius));
+            let light = rng.random_range(-1..=MAX_LIGHT_RADIUS);
+            lighting.set_light(point, light);
         });
     }
 
@@ -190,8 +189,8 @@ mod tests {
         for x in 0..lighting.opacity.size.0 {
             for y in 0..lighting.opacity.size.1 {
                 let point = Point(x, y);
-                let radius = rng.random_range(-1..=6);
-                lighting.set_light(point, Bound::new(radius));
+                let light = rng.random_range(-1..=6);
+                lighting.set_light(point, light);
             }
         }
 
@@ -219,8 +218,8 @@ mod tests {
         for x in 0..lighting.opacity.size.0 {
             for y in 0..lighting.opacity.size.1 {
                 let other = Point(x, y);
-                let light = lighting.light_bounds.get(other);
-                if !light.contains(other - point) { continue; }
+                let light = lighting.light_radius.get(other);
+                if !Bound::new(light).contains(other - point) { continue; }
 
                 let dir = Point::default();
                 let opacity_lookup = |x| lighting.opacity.get(x);
@@ -240,17 +239,17 @@ mod tests {
             for x in 0..lighting.opacity.size.0 {
                 let point = Point(x, y);
                 let opacity = lighting.opacity.get(point);
-                let radius = lighting.light_bounds.get(point);
-                let values = lighting.light_values.get(point);
+                let light = lighting.light_radius.get(point);
+                let value = lighting.light_values.get(point);
                 let ch = if opacity > 0 {
                     '#'
-                } else if radius.radius >= 0 {
-                    if radius.radius < 10 {
-                        ('0' as i32 + radius.radius) as u8 as char
+                } else if light >= 0 {
+                    if light < 10 {
+                        ('0' as i32 + light) as u8 as char
                     } else {
-                        ('A' as i32 + radius.radius - 10) as u8 as char
+                        ('A' as i32 + light - 10) as u8 as char
                     }
-                } else if values > 0 {
+                } else if value > 0 {
                     'o'
                 } else {
                     '.'
