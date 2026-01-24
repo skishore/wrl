@@ -8,6 +8,7 @@ mod dex;
 mod effect;
 mod entity;
 mod knowledge;
+mod lighting;
 mod list;
 mod pathing;
 mod shadowcast;
