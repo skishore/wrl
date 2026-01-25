@@ -77,10 +77,19 @@ impl Color {
     }
 
     pub fn fade(&self, alpha: f64) -> Self {
-        self.interpolate(1. - alpha, 0x000000)
+        self.apply_light(alpha, alpha, alpha)
     }
 
-    pub fn interpolate(&self, alpha: f64, target: u32) -> Self {
+    pub fn apply_light(&self, r: f64, g: f64, b: f64) -> Self {
+        let s = self.0;
+        let (sr, sg, sb) = (s >> 16, (s >> 8) & 0xff, s & 0xff);
+        let r = std::cmp::min((r * sr as f64) as i32, 0xff);
+        let g = std::cmp::min((g * sg as f64) as i32, 0xff);
+        let b = std::cmp::min((b * sb as f64) as i32, 0xff);
+        Color(((r << 16) | (g << 8) | b) as u32)
+    }
+
+    fn interpolate(&self, alpha: f64, target: u32) -> Self {
         let (s, b) = (self.0, target);
         let (x, y) = (1. - alpha, alpha);
         let (sr, sg, sb) = (s >> 16, (s >> 8) & 0xff, s & 0xff);
