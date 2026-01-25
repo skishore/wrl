@@ -9,7 +9,8 @@ use crate::effect::{Frame, self};
 use crate::entity::{EID, Entity};
 use crate::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_};
 use crate::game::{Board, Input, Tile, show_item};
-use crate::knowledge::{Call, EntityKnowledge, Knowledge, Sound, SourceKnowledge};
+use crate::knowledge::{Call, PointLookup, Sound};
+use crate::knowledge::{EntityKnowledge, Knowledge, SourceKnowledge};
 use crate::pathing::Status;
 use crate::shadowcast::{Vision, VisionArgs};
 
@@ -31,8 +32,10 @@ const UI_MOVE_FRAMES: i32 = 12;
 const UI_TARGET_FRAMES: i32 = 20;
 
 const UI_FOV_BRIGHTEN: f64 = 0.12;
-const UI_REMEMBERED: f64 = 0.25;
-const UI_SHADE_FADE: f64 = 0.50;
+const UI_REMEMBERED: f64 = 0.20;
+const UI_SHADOW: f64 = 0.40;
+const UI_SUNLIGHT: f64 = 0.80;
+const UI_EXTRA_LIGHT: f64 = 0.80;
 
 const UI_TARGET_SHADE: u8 = 192;
 const UI_TARGET_FOV_SHADE: u8 = 32;
@@ -770,8 +773,7 @@ impl UI {
 
             let Point(x, y) = point - offset;
             let ch = if index == 0 { 'o' } else { rainfall.ch };
-            let shade = cell.shade();
-            let color = if shade { base.fade(UI_SHADE_FADE) } else { base };
+            let color = Self::apply_light(&cell, base, /*entity=*/false);
             let glyph = Glyph::wdfg(ch, color);
             slice.set(Point(2 * x, y), glyph);
         }
@@ -1140,6 +1142,20 @@ impl UI {
         format!("[{}] ", key)
     }
 
+    fn apply_light(cell: &PointLookup, color: Color, entity: bool) -> Color {
+        let light = cell.light();
+        let shade = cell.shade();
+
+        if shade && !light { return color.fade(UI_SHADOW); }
+
+        if entity { return color; }
+
+        let base = if shade { UI_SHADOW } else { UI_SUNLIGHT };
+        let extra = base + if light { UI_EXTRA_LIGHT } else { 0. };
+        let (r, g, b) = (extra, extra, base);
+        color.apply_light(r, g, b)
+    }
+
     pub fn render_tile(known: &Knowledge, point: Point) -> Glyph {
         let cell = known.get(point);
         let (source, tile) = (cell.source(), cell.tile());
@@ -1148,10 +1164,7 @@ impl UI {
         let entity = cell.entity();
         let entity = if let Some(x) = entity && x.visible { entity } else { None };
         if entity.is_none() && source.is_some() { return Self::source_glyph(source) };
-
         let obscured = tile.limits_vision();
-        let light = cell.light();
-        let shade = cell.shade();
 
         let glyph = if let Some(x) = entity {
             let big = x.too_big_to_hide();
@@ -1166,13 +1179,10 @@ impl UI {
         };
 
         let mut color = glyph.fg();
-        if !cell.visible() {
+        if cell.visible() {
+            color = Self::apply_light(&cell, color, entity.is_some());
+        } else {
             color = Color::white().fade(UI_REMEMBERED);
-        } else if shade && !light {
-            color = color.fade(UI_SHADE_FADE);
-        } else if light && entity.is_none() {
-            if shade { color = color.fade(UI_SHADE_FADE); }
-            color = color.interpolate(0.50, 0xffa040);
         }
         glyph.with_fg(color)
     }
