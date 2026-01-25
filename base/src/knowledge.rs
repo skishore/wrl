@@ -446,7 +446,7 @@ impl Knowledge {
             let cell = board.get_cell(point);
             let (eid, items, tile) = (cell.eid, &cell.items, cell.tile);
 
-            let light = cell.light > 0;
+            let light = board.is_cell_lit(point);
             let nearby = (point - pos).len_l1() <= 1;
             if dark && !light && !nearby { continue; }
 

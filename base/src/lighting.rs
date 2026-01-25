@@ -44,7 +44,7 @@ impl LightSourceBitset {
 
 //////////////////////////////////////////////////////////////////////////////
 
-struct Lighting {
+pub struct Lighting {
     light_radius: Matrix<i32>,
     light_values: Matrix<i32>,
     opacity: Matrix<i32>,

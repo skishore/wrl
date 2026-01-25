@@ -16,6 +16,7 @@ use crate::effect::{CB, Effect, Frame, FT, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
 use crate::knowledge::{Call, Knowledge, Scent, Sense, Timedelta, Timestamp};
 use crate::knowledge::{AttackEvent, CallEvent, Event, EventData, MoveEvent};
+use crate::lighting::Lighting;
 use crate::mapgen::mapgen_with_size as mapgen;
 use crate::pathing::Status;
 use crate::shadowcast::{INITIAL_VISIBILITY, VISIBILITY_LOSSES, Vision, VisionArgs};
@@ -31,7 +32,6 @@ pub const WORLD_SIZE: i32 = 100;
 
 pub const FOV_RADIUS_NPC: i32 = 12;
 pub const FOV_RADIUS_PC_: i32 = 21;
-pub const MAX_LIGHT_RADIUS: i32 = 12;
 
 const FOV_RADIUS_IN_TALL_GRASS: usize = 4;
 const VISIBILITY_LOSS: i32 = VISIBILITY_LOSSES[FOV_RADIUS_IN_TALL_GRASS - 1];
@@ -235,7 +235,6 @@ impl FOV {
 pub struct Cell {
     pub eid: Option<EID>,
     pub items: ThinVec<Item>,
-    pub light: i32,
     pub shadow: i32,
     pub tile: &'static Tile,
 }
@@ -244,7 +243,7 @@ static_assert_size!(Cell, 32);
 
 impl Cell {
     fn new(tile: &'static Tile) -> Self {
-        Self { eid: None, items: thin_vec![], light: 0, shadow: 0, tile }
+        Self { eid: None, items: thin_vec![], shadow: 0, tile }
     }
 }
 
@@ -257,19 +256,19 @@ pub struct Board {
 
     // Lighting:
     light: Light,
+    lighting: Lighting,
     shadow: Vec<Point>,
-    vision: Vision,
 }
 
 impl Board {
     fn new(size: Point, light: Light) -> Self {
+        let lighting = Lighting::new(size);
         let shadow = match light {
             Light::Sun(x) => LOS(Point::default(), x).into_iter().skip(1).collect(),
             Light::None => vec![],
         };
         let cell = Cell::new(Tile::get('#'));
         let time = Timedelta::from_seconds(365.75 * 86400.);
-        let vision = Vision::new(MAX_LIGHT_RADIUS);
 
         let mut result = Self {
             map: Matrix::new(size, cell),
@@ -280,8 +279,8 @@ impl Board {
 
             // Lighting:
             light,
+            lighting,
             shadow,
-            vision,
         };
         result.reset(Tile::get('.'));
         result
@@ -366,6 +365,8 @@ impl Board {
 
     pub fn get_tile(&self, p: Point) -> &'static Tile { self.get_cell(p).tile }
 
+    pub fn is_cell_lit(&self, p: Point) -> bool { self.lighting.get_light(p) > 0 }
+
     // Item setters
 
     fn add_item(&mut self, pos: Point, item: Item) {
@@ -393,8 +394,8 @@ impl Board {
         let entity = &mut self.entities[eid];
         entity.known.mark_turn_boundary(entity.player, entity.speed);
 
-        let light = args.species.light;
-        self.update_light(pos, light, 1);
+        let light = args.species.light.radius;
+        self.lighting.set_light(pos, light);
 
         eid
     }
@@ -402,15 +403,15 @@ impl Board {
     fn move_entity(&mut self, eid: EID, target: Point) {
         let entity = &mut self.entities[eid];
         let source = replace(&mut entity.pos, target);
-        let light = entity.species.light;
+        let light = entity.species.light.radius;
 
         let old = replace(&mut self.map.entry_mut(source).unwrap().eid, None);
         assert!(old == Some(eid));
         let new = replace(&mut self.map.entry_mut(target).unwrap().eid, old);
         assert!(new.is_none());
 
-        self.update_light(source, light, -1);
-        self.update_light(target, light, 1);
+        self.lighting.set_light(source, -1);
+        self.lighting.set_light(target, light);
     }
 
     fn remove_entity(&mut self, eid: EID) {
@@ -420,8 +421,7 @@ impl Board {
         if player { return; }
 
         // Remove the entity's light source.
-        let light = entity.species.light;
-        self.update_light(pos, light, -1);
+        self.lighting.set_light(pos, -1);
 
         // Remove the entity from the spatial map.
         let existing = self.map.entry_mut(pos).unwrap().eid.take();
@@ -443,21 +443,12 @@ impl Board {
     }
 
     fn set_tile(&mut self, point: Point, tile: &'static Tile) {
-        let mut lights = vec![];
-        for (_, entity) in self.entities.iter() {
-            let light = entity.species.light;
-            if !light.contains(entity.pos - point) { continue; }
-            lights.push((entity.pos, light));
-        }
-        for &(point, light) in &lights { self.update_light(point, light, -1); }
-
         let Some(cell) = self.map.entry_mut(point) else { return; };
         let old_shadow = if cell.tile.casts_shadow() { 1 } else { 0 };
         let new_shadow = if tile.casts_shadow() { 1 } else { 0 };
         cell.tile = tile;
         self.update_shadow(point, new_shadow - old_shadow);
-
-        for &(point, light) in &lights { self.update_light(point, light, 1); }
+        self.lighting.set_opacity(point, tile.opacity());
     }
 
     // Knowledge
@@ -495,24 +486,6 @@ impl Board {
     }
 
     // Lighting
-
-    fn update_light(&mut self, point: Point, light: Bound, delta: i32) {
-        if light.is_empty() { return; }
-
-        let (pos, dir) = (point, Point::default());
-        let opacity_lookup = |p: Point| {
-            if !light.contains(p - point) { return INITIAL_VISIBILITY; }
-            self.map.get(p).tile.opacity()
-        };
-        self.vision.compute(&VisionArgs { pos, dir, opacity_lookup });
-
-        for &p in self.vision.get_points_seen() {
-            if !light.contains(p - point) { continue; }
-            let Some(cell) = self.map.entry_mut(p) else { continue };
-            assert!(cell.light + delta >= 0);
-            cell.light += delta;
-        }
-    }
 
     fn update_shadow(&mut self, point: Point, delta: i32) {
         if delta == 0 { return; }
