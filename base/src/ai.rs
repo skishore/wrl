@@ -1399,6 +1399,13 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
 //
 //  - If we can't path to a valid target, we repeatedly run the "scan last
 //    target direction" logic.
+//
+//  - If, on pathing to a valid target (e.g. a berry tree), we take a step
+//    such that the tree is no longer visible, we unnecessarily re-plan...
+//
+//    The reason is that a) AttackTarget fails because it requires the target
+//    to be visible, but then b) FollowPath fails because we constructed a
+//    path, then ignored it in favor of running AttackTarget...
 
 #[allow(non_snake_case)]
 fn AttackOrFollowPath(kind: PathKind) -> impl Bhv {
