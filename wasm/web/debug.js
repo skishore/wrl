@@ -10,6 +10,9 @@ class DebugTrace {
     const h = this.mapY;
     for (let i = 0; i < 2 * w * h; i++) this.map.push(-1);
 
+    this.dirty = false;
+    this.timelineDirty = false;
+
     this.eid = '';
     this.ticks = [];
     this.tickState = {
@@ -63,17 +66,17 @@ class DebugTrace {
 
   onShowAllChange() {
     this.showAll = this.ui.showAll.checked;
-    this.markDirty();
+    this.dirty = true;
   }
 
   onShowSeenChange() {
     this.showSeen = this.ui.showSeen.checked;
-    this.markDirty();
+    this.dirty = true;
   }
 
   onShowUtilityChange() {
     this.showUtility = this.ui.showUtility.checked;
-    this.markDirty();
+    this.dirty = true;
   }
 
   onkeydown(keyEvent) {
@@ -120,7 +123,8 @@ class DebugTrace {
 
     this.animIndex = this.tickIndex;
     this.tickIndex = options[next][1];
-    this.markDirty();
+    this.timelineDirty = true;
+    this.dirty = true;
   }
 
   onmousedown(mouseEvent) {
@@ -162,7 +166,8 @@ class DebugTrace {
 
     this.animIndex = tickIndex;
     this.tickIndex = tickIndex;
-    this.markDirty();
+    this.timelineDirty = true;
+    this.dirty = true;
   }
 
   getEID(mouseEvent) {
@@ -228,7 +233,8 @@ class DebugTrace {
     this.eid = eid;
     this.tickIndex = next[1];
     this.animIndex = this.tickIndex;
-    this.markDirty();
+    this.timelineDirty = true;
+    this.dirty = true;
   }
 
   async init() {
@@ -263,6 +269,7 @@ class DebugTrace {
       try { this.ticks.push(JSON.parse(line)); } catch { break; }
     }
     this.lastTicks = ticks;
+    this.timelineDirty = true;
     this.dirty = true;
 
     const realTicks = this.ticks.filter(x => x.type === 'tick');
@@ -414,10 +421,6 @@ class DebugTrace {
     this.drawGlyph(posX, posY, glyph0, glyph1);
   }
 
-  markDirty() {
-    this.dirty = true;
-  }
-
   redraw() {
     if (!this.dirty) return;
     this.dirty = false;
@@ -494,6 +497,9 @@ class DebugTrace {
   }
 
   redrawTimeline() {
+    if (!this.timelineDirty) return;
+    this.timelineDirty = false;
+
     if (this.ticks.length === 0) {
       this.ui.timeline.replaceChildren();
       return;
