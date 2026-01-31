@@ -12,7 +12,7 @@ use crate::base::{Bound, Buffer, Color, Glyph};
 use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs, sample, weighted};
 use crate::dex::{Attack, Species};
 use crate::debug::DebugFile;
-use crate::effect::{CB, Effect, Frame, FT, self};
+use crate::effect::{CB, Effect, Frame, FT, Particle, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
 use crate::knowledge::{Call, Knowledge, Scent, Sense, Timedelta, Timestamp};
 use crate::knowledge::{AttackEvent, CallEvent, Event, EventData, MoveEvent};
@@ -317,12 +317,12 @@ impl Board {
         false
     }
 
-    fn disable_effect_lighting(&mut self) {
-        self._set_effect_lighting(false);
+    fn redo_effect_updates(&mut self) {
+        self._enter_effect_frame(true);
     }
 
-    fn enable_effect_lighting(&mut self) {
-        self._set_effect_lighting(true);
+    fn undo_effect_updates(&mut self) {
+        self._enter_effect_frame(false);
     }
 
     fn start_effect(&mut self, pov: EID, env: &mut UpdateEnv) {
@@ -374,32 +374,49 @@ impl Board {
         let Some(frame) = self._effect.frames.get(0) else { return false };
         let Some(me) = self.entities.get(pov) else { return false };
 
-        // TODO: account for lighting here as well...
         let vision = &env.fov.select_vision(me);
-        if frame.iter().any(|y| vision.can_see(y.point)) { return true; }
+        let visible = frame.iter().any(|x| match x {
+            &Particle::Highlight(point, _) => vision.can_see(point),
+            &Particle::Glyph(point, _) => vision.can_see(point),
+            &Particle::Noise(point, _, volume) => volume.contains(point - me.pos),
+            &Particle::Light(..) => false,
+            &Particle::Shift(..) => false,
+        });
+        if visible { return true; }
 
         let prev: Vec<_> = vision.get_points_seen().iter().map(
             |&x| self.is_cell_lit(x)).collect();
-        self.enable_effect_lighting();
+        self.redo_effect_updates();
         let next: Vec<_> = vision.get_points_seen().iter().map(
             |&x| self.is_cell_lit(x)).collect();
-        self.disable_effect_lighting();
+        self.undo_effect_updates();
 
         prev != next
     }
 
-    fn _set_effect_lighting(&mut self, active: bool) {
-        let Some(frame) = self._effect.frames.get(0) else { return };
+    fn _enter_effect_frame(&mut self, active: bool) {
+        let Some(frame) = self._effect.frames.get(0).cloned() else { return };
 
-        for &effect::Particle { point, light, .. } in frame {
-            let eid = self.get_cell(point).eid;
-            let prev = eid.map(|x| self.entities[x].species.light.radius).unwrap_or(-1);
-            let next = std::cmp::max(prev, light);
-            if prev == next { continue; }
+        frame.iter().for_each(|x| match x {
+            &Particle::Light(point, light) => {
+                let eid = self.get_cell(point).eid;
+                let prev = eid.map(|x| self.entities[x].species.light.radius).unwrap_or(-1);
+                let next = std::cmp::max(prev, light.radius);
+                if prev == next { return; }
 
-            let radius = if active { next } else { prev };
-            self.lighting.set_light(point, radius);
-        }
+                let radius = if active { next } else { prev };
+                self.lighting.set_light(point, radius);
+            },
+            &Particle::Shift(mut source, mut target) => {
+                if source == target { return; }
+                if !active { std::mem::swap(&mut source, &mut target); }
+                let eid = self.get_cell(source).eid.unwrap();
+                self.move_entity(eid, target);
+            },
+            &Particle::Glyph(..) => {},
+            &Particle::Noise(..) => {},
+            &Particle::Highlight(..) => {},
+        });
     }
 
     // Getters
@@ -834,7 +851,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 board.observe_event(s.eid, &s.merged, event, &mut state.env);
             }
 
-            let effect = apply_flash(board, pos, color, None);
+            let effect = apply_noise(pos, color, SNIFF_VOLUME);
             board.add_effect(effect, &mut state.env);
             ActionResult::success()
         }
@@ -853,8 +870,8 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let color = 0x0080ff;
             let board = &mut state.board;
             let effect = Effect::serial(vec![
-                apply_flash(board, target, color, None),
-                apply_flash(board, source, color, None).delay(UI_FLASH / 2),
+                apply_flash(target, color, None),
+                apply_flash(source, color, None).delay(UI_FLASH / 2),
             ]);
             board.add_effect(effect, &mut state.env);
             ActionResult::success()
@@ -878,8 +895,8 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 board.remove_item(target, item);
             });
             let effect = Effect::serial(vec![
-                apply_flash(board, target, color, Some(cb)),
-                apply_flash(board, source, color, None).delay(UI_FLASH / 2),
+                apply_flash(target, color, Some(cb)),
+                apply_flash(source, color, None).delay(UI_FLASH / 2),
             ]);
             board.add_effect(effect, &mut state.env);
             ActionResult::success()
@@ -903,11 +920,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 Call::Warning => (0xff8000, false),
             };
             let board = &mut state.board;
-            let mut effect = Effect::default();
-            for _ in 0..3 {
-                effect = effect.then(apply_flash(board, source, color, None));
-                effect = effect.then(Effect::pause(UI_FLASH));
-            }
+            let mut effect = apply_noise(source, color, CALL_VOLUME);
 
             // For some call types, we look before calling; when calling for
             // help, we shout in the direction of our allies, then look.
@@ -1035,11 +1048,11 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 let cb = move |board: &mut Board, env: &mut UpdateEnv| {
                     hit_entity(board, env, attack, logged, tid);
                 };
-                board.add_effect(apply_damage(board, target, Box::new(cb)), env);
+                board.add_effect(apply_damage(target, Box::new(cb)), env);
             };
 
             let rng = &mut state.env.rng;
-            let effect = (attack.effect)(&state.board, rng, source, target);
+            let effect = (attack.effect)(rng, source, target);
             state.add_effect(apply_effect(effect, FT::Hit, Box::new(cb)));
             ActionResult::success_moves(1.)
         }
@@ -1049,46 +1062,27 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 //////////////////////////////////////////////////////////////////////////////
 
 // Animation
-//
-// TODO: All this code is WRONG! It may reveal things (e.g. hidden entities)
-// to the player that they should not be able to see.
-//
-// To fix these bugs, we need to audit all usage of Board getters in Effects,
-// and instead of directly overwriting cells, we need to apply updates (e.g.
-// moving Entities) and use the player's FOV resolve what they can see.
-//
-// We also need to figure out if items are "hidden" the same way entities are.
 
-fn apply_flash<T: Into<Color>>(board: &Board, target: Point, color: T, cb: Option<CB>) -> Effect {
-    let cell = board.get_cell(target);
-    let glyph = if let Some(x) = cell.eid {
-        board.entities[x].species.glyph
-    } else if let Some(x) = cell.items.last() {
-        show_item(x)
-    } else {
-        cell.tile.glyph
-    };
-
-    let flash = glyph.with_fg(Color::black()).with_bg(color);
-    let particle = effect::Particle::new(target, flash);
+fn apply_flash<T: Into<Color>>(target: Point, color: T, cb: Option<CB>) -> Effect {
+    let particle = Particle::visible_highlight(target, color.into());
     let mut effect = Effect::constant(particle, UI_FLASH);
     if let Some(x) = cb { effect.sub_on_finished(x); }
     effect
 }
 
-fn apply_damage(board: &Board, target: Point, callback: CB) -> Effect {
-    let eid = board.get_cell(target).eid;
-    let Some(eid) = eid else { return Effect::default(); };
+fn apply_noise<T: Into<Color>>(target: Point, color: T, volume: Bound) -> Effect {
+    let particle = Particle::audible_highlight(target, color.into(), volume);
+    Effect::constant(particle, UI_FLASH)
+}
 
-    let glyph = board.entities[eid].species.glyph;
-    let flash = glyph.with_fg(Color::black()).with_bg(0xff0000);
-    let particle = effect::Particle::new(target, flash);
-    let restored = effect::Particle::new(target, glyph);
+fn apply_damage(target: Point, cb: CB) -> Effect {
+    let particle = Particle::visible_highlight(target, 0xff0000.into());
+    let restored = Particle::dummy(target);
     let mut effect = Effect::serial(vec![
         Effect::constant(particle, UI_DAMAGE_FLASH),
         Effect::constant(restored, UI_DAMAGE_TICKS),
     ]);
-    effect.sub_on_finished(callback);
+    effect.sub_on_finished(cb);
     effect
 }
 
@@ -1140,13 +1134,13 @@ fn update_player_knowledge(state: &mut State) {
 
     if board.get_frame().is_none() { return; }
 
-    board.enable_effect_lighting();
+    board.redo_effect_updates();
 
     swap(&mut env.known, &mut board.entities[eid].known);
     board.update_known(eid, env);
     swap(&mut env.known, &mut board.entities[eid].known);
 
-    board.disable_effect_lighting();
+    board.undo_effect_updates();
 }
 
 fn update_state(state: &mut State) {

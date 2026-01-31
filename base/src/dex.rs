@@ -2,13 +2,12 @@ use lazy_static::lazy_static;
 
 use crate::base::{Bound, Glyph, HashMap, Point, RNG};
 use crate::effect::*;
-use crate::game::Board;
 
 //////////////////////////////////////////////////////////////////////////////
 
 // Attack
 
-type AttackEffect = fn(&Board, &mut RNG, Point, Point) -> Effect;
+type AttackEffect = fn(&mut RNG, Point, Point) -> Effect;
 
 pub struct Attack {
     pub name: &'static str,

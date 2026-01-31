@@ -653,10 +653,12 @@ impl UI {
         }
 
         // Render moves that we've seen or heard.
+        let remap = |point: Point| {
+            Point(2 * (point.0 - offset.0), point.1 - offset.1)
+        };
         if player {
             for (&k, v) in &self.moves {
-                let Point(x, y) = k - offset;
-                let p = Point(2 * x, y);
+                let p = remap(k);
                 if v.frame < 0 || !slice.contains(p) { continue; }
 
                 let alpha = 1.0 - (v.frame as f64 / v.limit as f64);
@@ -667,18 +669,17 @@ impl UI {
 
         // Helpers used for the map overlay UIs.
         let set = |slice: &mut Slice, point: Point, glyph: Glyph| {
-            let point = Point(2 * (point.0 - offset.0), point.1 - offset.1);
-            slice.set(point, glyph);
+            slice.set(remap(point), glyph);
         };
         let highlight = |slice: &mut Slice, point: Point, bg: Color| {
-            let point = Point(2 * (point.0 - offset.0), point.1 - offset.1);
+            let point = remap(point);
             if !slice.contains(point) { return; }
 
             let glyph = slice.get(point);
             slice.set(point, glyph.with_fg(Color::black()).with_bg(bg));
         };
         let brighten = |slice: &mut Slice, point: Point| {
-            let point = Point(2 * (point.0 - offset.0), point.1 - offset.1);
+            let point = remap(point);
             if !slice.contains(point) { return; }
 
             let glyph = slice.get(point);
@@ -696,11 +697,33 @@ impl UI {
         // Render any animation that's currently running. Otherwise, if we're
         // still alive, render arrows showing NPC facing.
         if let Some(frame) = frame {
-            for &Particle { point, glyph, .. } in frame {
-                if !known.get(point).visible() { continue; }
-                let Point(x, y) = point - offset;
-                slice.set(Point(2 * x, y), glyph);
-            }
+            frame.iter().for_each(|x| match x {
+                &Particle::Highlight(point, color) => {
+                    if !known.get(point).visible() { return; }
+                    if color == Color::black() { return; }
+                    let glyph = slice.get(remap(point)).with_fg(Color::black()).with_bg(color);
+                    slice.set(remap(point), glyph);
+                },
+                &Particle::Glyph(point, glyph) => {
+                    if !known.get(point).visible() { return; }
+                    slice.set(remap(point), glyph);
+                },
+                &Particle::Noise(point, color, volume) => {
+                    if !volume.contains(point - me.pos) { return; }
+                    let entity = known.get(point).entity();
+                    let mut glyph = if let Some(x) = entity && x.visible {
+                        x.species.glyph
+                    } else {
+                        Glyph::wide('?')
+                    };
+                    if color != Color::black() {
+                        glyph = glyph.with_fg(Color::black()).with_bg(color);
+                    }
+                    slice.set(remap(point), glyph);
+                },
+                &Particle::Light(..) => {},
+                &Particle::Shift(..) => {},
+            });
         } else if me.cur_hp > 0 {
             self.render_arrows(known, offset, slice);
         }

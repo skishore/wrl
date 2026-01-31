@@ -1,4 +1,6 @@
-use crate::base::{HashSet, Glyph, LOS, Point, RNG, dirs, sample};
+use rand::Rng;
+
+use crate::base::{Bound, Color, HashSet, Glyph, LOS, Point, RNG, dirs, sample};
 use crate::game::{Board, UpdateEnv};
 
 //////////////////////////////////////////////////////////////////////////////
@@ -16,19 +18,41 @@ pub enum Event {
 }
 
 #[derive(Copy, Clone)]
-pub struct Particle {
-    pub point: Point,
-    pub glyph: Glyph,
-    pub light: i32,
+pub enum Particle {
+    Glyph(Point, Glyph),
+    Light(Point, Bound),
+    Noise(Point, Color, Bound),
+    Shift(Point, Point),
+    Highlight(Point, Color),
 }
 
 impl Particle {
     pub fn new(point: Point, glyph: Glyph) -> Self {
-        Self::new_lit(point, glyph, -1)
+        Self::Glyph(point, glyph)
     }
 
-    fn new_lit(point: Point, glyph: Glyph, light: i32) -> Self {
-        Self { point, glyph, light }
+    pub fn light(point: Point, light: Bound) -> Self {
+        Self::Light(point, light)
+    }
+
+    pub fn noise(point: Point, volume: Bound) -> Self {
+        Self::Noise(point, Color::black(), volume)
+    }
+
+    pub fn shift(source: Point, target: Point) -> Self {
+        Self::Shift(source, target)
+    }
+
+    pub fn dummy(point: Point) -> Self {
+        Self::Highlight(point, Color::black())
+    }
+
+    pub fn audible_highlight(point: Point, color: Color, volume: Bound) -> Self {
+        Self::Noise(point, color, volume)
+    }
+
+    pub fn visible_highlight(point: Point, color: Color) -> Self {
+        Self::Highlight(point, color)
     }
 }
 
@@ -164,36 +188,27 @@ impl Event {
 type Sparkle<'a> = (i32, &'a str, i32);
 
 fn add_sparkle(effect: &mut Effect, sparkle: &[Sparkle], frame: i32, point: Point) -> i32 {
-    add_lit_sparkle(effect, sparkle, frame, point, -1)
+    add_lit_sparkle(effect, sparkle, frame, point, Bound::new(-1))
 }
 
 fn add_lit_sparkle(effect: &mut Effect, sparkle: &[Sparkle],
-                   mut frame: i32, point: Point, light: i32) -> i32 {
+                   mut frame: i32, point: Point, light: Bound) -> i32 {
     for &(delay, chars, color) in sparkle {
         for _ in 0..delay {
             let index = rand::random_range(0..chars.chars().count());
             let glyph = Glyph::wdfg(chars.chars().nth(index).unwrap(), color);
-            effect.add_particle(frame, Particle::new_lit(point, glyph, light));
+            if light.radius >= 0 { effect.add_particle(frame, Particle::light(point, light)); }
+            effect.add_particle(frame, Particle::new(point, glyph));
             frame += 1;
         }
     }
     frame
 }
 
-fn get_glyph_at(board: &Board, p: Point) -> Glyph {
-    let cell = board.get_cell(p);
-    let entity = cell.eid.and_then(|x| board.get_entity(x));
-    entity.map(|x| x.species.glyph).unwrap_or(cell.tile.glyph)
-}
-
-fn get_underlying_glyph_at(board: &Board, p: Point) -> Glyph {
-    board.get_tile(p).glyph
-}
-
-fn random_delay(n: i32) -> i32 {
+fn random_delay(n: i32, rng: &mut RNG) -> i32 {
     let mut count = 1;
     let limit = (1.5 * n as f64).floor() as i32;
-    while count < limit && (rand::random::<i32>() % n) != 0 { count += 1; }
+    while count < limit && rng.random_range(0..n) != 0 { count += 1; }
     count
 }
 
@@ -203,18 +218,6 @@ pub fn ray_character(delta: Point) -> char {
     if ax > 2 * ay { return '-'; }
     if ay > 2 * ax { return '|'; }
     if (x > 0) == (y > 0) { '\\' } else { '/' }
-}
-
-#[allow(non_snake_case)]
-fn OverlayEffect(effect: Effect, particle: Particle) -> Effect {
-    let constant = Effect::constant(particle, effect.frames.len() as i32);
-    Effect::parallel(vec![effect, constant])
-}
-
-#[allow(non_snake_case)]
-fn UnderlayEffect(effect: Effect, particle: Particle) -> Effect {
-    let constant = Effect::constant(particle, effect.frames.len() as i32);
-    Effect::parallel(vec![constant, effect])
 }
 
 #[allow(non_snake_case)]
@@ -325,38 +328,36 @@ fn SwitchEffect(source: Point, target: Point) -> Effect {
 }
 
 #[allow(non_snake_case)]
-pub fn EmberEffect(_: &Board, _: &mut RNG, source: Point, target: Point) -> Effect {
+pub fn EmberEffect(rng: &mut RNG, source: Point, target: Point) -> Effect {
     let mut effect = Effect::default();
     let line = LOS(source, target);
 
-    let trail = || [
-        (random_delay(0), "*^^",   0xff0000),
-        (random_delay(1), "*^",    0xffa800),
-        (random_delay(2), "**^",   0xffff00),
-        (random_delay(3), "**^#%", 0xffa800),
-        (random_delay(4), "#%",    0xff0000),
+    let trail = |rng: &mut RNG| [
+        (random_delay(0, rng), "*^^",   0xff0000),
+        (random_delay(1, rng), "*^",    0xffa800),
+        (random_delay(2, rng), "**^",   0xffff00),
+        (random_delay(3, rng), "**^#%", 0xffa800),
+        (random_delay(4, rng), "#%",    0xff0000),
     ];
-
-    let flame = || [
-        (random_delay(0), "*^^",   0xff0000),
-        (random_delay(1), "*^",    0xffa800),
-        (random_delay(2), "**^#%", 0xffff00),
-        (random_delay(3), "*^#%",  0xffa800),
-        (random_delay(4), "*^#%",  0xff0000),
+    let flame = |rng: &mut RNG| [
+        (random_delay(0, rng), "*^^",   0xff0000),
+        (random_delay(1, rng), "*^",    0xffa800),
+        (random_delay(2, rng), "**^#%", 0xffff00),
+        (random_delay(3, rng), "*^#%",  0xffa800),
+        (random_delay(4, rng), "*^#%",  0xff0000),
     ];
-
-    let light = 4;
+    let light = Bound::new(4);
 
     for i in 1..line.len() - 1 {
         let frame = (i - 1) / 2;
-        add_lit_sparkle(&mut effect, &trail(), frame as i32, line[i], light);
+        add_lit_sparkle(&mut effect, &trail(rng), frame as i32, line[i], light);
     }
 
     let mut hit: i32 = 0;
     for &dir in [dirs::NONE].iter().chain(&dirs::ALL) {
         let norm = dir.len_taxicab();
         let frame = 2 * norm + (line.len() as i32 - 1) / 2;
-        let finish = add_lit_sparkle(&mut effect, &flame(), frame, target + dir, light);
+        let finish = add_lit_sparkle(&mut effect, &flame(rng), frame, target + dir, light);
         if norm == 0 { hit = finish; }
     }
     effect.add_event(Event::Other { frame: hit, point: target, what: FT::Hit });
@@ -364,7 +365,7 @@ pub fn EmberEffect(_: &Board, _: &mut RNG, source: Point, target: Point) -> Effe
 }
 
 #[allow(non_snake_case)]
-pub fn IceBeamEffect(_: &Board, _: &mut RNG, source: Point, target: Point) -> Effect {
+pub fn IceBeamEffect(_: &mut RNG, source: Point, target: Point) -> Effect {
     let mut effect = Effect::default();
     let line = LOS(source, target);
     let ray = ray_character(target - source).to_string();
@@ -397,7 +398,7 @@ pub fn IceBeamEffect(_: &Board, _: &mut RNG, source: Point, target: Point) -> Ef
 }
 
 #[allow(non_snake_case)]
-pub fn BlizzardEffect(_: &Board, rng: &mut RNG, source: Point, target: Point) -> Effect {
+pub fn BlizzardEffect(rng: &mut RNG, source: Point, target: Point) -> Effect {
     let mut effect = Effect::default();
     let ray = ray_character(target - source).to_string();
     let ray = ray.as_str();
@@ -441,10 +442,7 @@ pub fn BlizzardEffect(_: &Board, rng: &mut RNG, source: Point, target: Point) ->
 }
 
 #[allow(non_snake_case)]
-pub fn HeadbuttEffect(board: &Board, _: &mut RNG, source: Point, target: Point) -> Effect {
-    let glyph = get_glyph_at(board, source);
-    let underlying = get_underlying_glyph_at(board, source);
-
+pub fn HeadbuttEffect(_: &mut RNG, source: Point, target: Point) -> Effect {
     let trail = [
         (2, "#", 0xffffff),
         (2, "#", 0xc0c0c0),
@@ -452,12 +450,12 @@ pub fn HeadbuttEffect(board: &Board, _: &mut RNG, source: Point, target: Point) 
         (2, "#", 0x404040),
     ];
 
-    let move_along_line = |line: &[Point], glyph: Glyph| {
+    let move_along_line = |line: &[Point]| {
         let mut effect = Effect::default();
         for i in 1..line.len() {
             let tick = i as i32 - 1;
             let (prev, next) = (line[i - 1], line[i]);
-            effect.add_particle(tick, Particle::new(next, glyph));
+            effect.add_particle(tick, Particle::shift(source, next));
             add_sparkle(&mut effect, &trail, tick, prev);
         }
         effect
@@ -472,21 +470,15 @@ pub fn HeadbuttEffect(board: &Board, _: &mut RNG, source: Point, target: Point) 
 
     // Once we reach the neighbor, pause for a second to do the attack.
     let neighbor    = line_from.first().cloned().unwrap_or(source);
-    let hold_effect = Effect::constant(Particle::new(neighbor, glyph), 32);
+    let hold_effect = Effect::constant(Particle::shift(source, neighbor), 32);
     let move_length = std::cmp::max(line_to.len() as i32 - 1, 0);
 
-    let to   = move_along_line(&line_to, glyph);
+    let to   = move_along_line(&line_to);
     let hold = hold_effect.delay(move_length);
-    let from = move_along_line(&line_from, glyph);
-
-    let back_delays = hold.frames.len() as i32 + move_length;
-    let back_length = from.frames.len() as i32 - move_length;
-    let back_effect = Effect::constant(Particle::new(source, glyph), back_length);
-    let back = back_effect.delay(back_delays);
+    let from = move_along_line(&line_from);
 
     let hit  = move_length;
-    let mut effect = UnderlayEffect(to.and(hold.then(from).and(back)),
-                                    Particle::new(source, underlying));
+    let mut effect = to.and(hold.then(from));
     effect.add_event(Event::Other { frame: hit, point: target, what: FT::Hit });
     effect.scale(0.5)
 }
