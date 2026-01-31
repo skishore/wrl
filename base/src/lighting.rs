@@ -69,6 +69,7 @@ impl Lighting {
     }
 
     pub fn set_light(&mut self, point: Point, light: i32) {
+        let light = std::cmp::min(light, MAX_LIGHT_RADIUS);
         let Some(entry) = self.light_radius.entry_mut(point) else { return };
 
         let value = std::mem::replace(entry, light);
