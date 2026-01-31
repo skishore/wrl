@@ -220,7 +220,7 @@ fn is_hiding_place(ctx: &Ctx, point: Point) -> bool {
     if ctx.blackboard.threats.menacing.iter().any(
         |x| (x.pos - point).len_l1() <= 1) { return false; }
     let cell = ctx.known.get(point);
-    (cell.is_shadow_cover()) || matches!(cell.tile(), Some(x) if x.limits_vision())
+    (cell.is_shadow_cover()) || matches!(cell.tile(), Some(x) if x.is_cover())
 }
 
 fn get_basic_check<'a>(ctx: &'a Ctx) -> impl Fn(Point) -> Status + use<'a> {
@@ -815,10 +815,7 @@ fn PathToTarget<F: Fn(Point) -> bool>(
         let cell = known.get(target);
         let (shade, tile) = (cell.shade(), cell.tile());
         let light = ctx.entity.species.light.radius;
-        let cover = match tile {
-            Some(x) => x.limits_vision() && !x.blocks_movement(),
-            None => false,
-        };
+        let cover = matches!(tile, Some(x) if x.is_cover());
 
         // Check for any of several reasons to stay close to a target.
         let mut radius = min(range.radius, MOVE_VOLUME.radius);
