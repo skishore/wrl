@@ -19,11 +19,16 @@ pub enum Event {
 pub struct Particle {
     pub point: Point,
     pub glyph: Glyph,
+    pub light: i32,
 }
 
 impl Particle {
     pub fn new(point: Point, glyph: Glyph) -> Self {
-        Self { point, glyph }
+        Self::new_lit(point, glyph, -1)
+    }
+
+    fn new_lit(point: Point, glyph: Glyph, light: i32) -> Self {
+        Self { point, glyph, light }
     }
 }
 
@@ -158,12 +163,17 @@ impl Event {
 
 type Sparkle<'a> = (i32, &'a str, i32);
 
-fn add_sparkle(effect: &mut Effect, sparkle: &[Sparkle], mut frame: i32, point: Point) -> i32 {
+fn add_sparkle(effect: &mut Effect, sparkle: &[Sparkle], frame: i32, point: Point) -> i32 {
+    add_lit_sparkle(effect, sparkle, frame, point, -1)
+}
+
+fn add_lit_sparkle(effect: &mut Effect, sparkle: &[Sparkle],
+                   mut frame: i32, point: Point, light: i32) -> i32 {
     for &(delay, chars, color) in sparkle {
         for _ in 0..delay {
             let index = rand::random_range(0..chars.chars().count());
             let glyph = Glyph::wdfg(chars.chars().nth(index).unwrap(), color);
-            effect.add_particle(frame, Particle::new(point, glyph));
+            effect.add_particle(frame, Particle::new_lit(point, glyph, light));
             frame += 1;
         }
     }
@@ -335,16 +345,18 @@ pub fn EmberEffect(_: &Board, _: &mut RNG, source: Point, target: Point) -> Effe
         (random_delay(4), "*^#%",  0xff0000),
     ];
 
+    let light = 4;
+
     for i in 1..line.len() - 1 {
         let frame = (i - 1) / 2;
-        add_sparkle(&mut effect, &trail(), frame as i32, line[i]);
+        add_lit_sparkle(&mut effect, &trail(), frame as i32, line[i], light);
     }
 
     let mut hit: i32 = 0;
     for &dir in [dirs::NONE].iter().chain(&dirs::ALL) {
         let norm = dir.len_taxicab();
         let frame = 2 * norm + (line.len() as i32 - 1) / 2;
-        let finish = add_sparkle(&mut effect, &flame(), frame, target + dir);
+        let finish = add_lit_sparkle(&mut effect, &flame(), frame, target + dir, light);
         if norm == 0 { hit = finish; }
     }
     effect.add_event(Event::Other { frame: hit, point: target, what: FT::Hit });

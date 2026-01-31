@@ -5,10 +5,10 @@ use rand::Rng;
 
 use crate::base::{HashMap, LOS, Point, RNG, dirs};
 use crate::base::{Bound, Buffer, Color, Glyph, Matrix, Rect, Slice};
-use crate::effect::{Frame, self};
+use crate::effect::{Frame, Particle};
 use crate::entity::{EID, Entity};
 use crate::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_};
-use crate::game::{Board, Input, Tile, show_item};
+use crate::game::{Input, Tile, show_item};
 use crate::knowledge::{Call, PointLookup, Sound};
 use crate::knowledge::{EntityKnowledge, Knowledge, SourceKnowledge};
 use crate::pathing::Status;
@@ -493,6 +493,11 @@ struct Menu {
     summon: i32,
 }
 
+pub struct Effect<'a> {
+    pub frame: &'a Frame,
+    pub known: &'a Knowledge,
+}
+
 #[derive(Default)]
 pub struct UI {
     frame: usize,
@@ -514,7 +519,7 @@ pub struct UI {
 impl UI {
     // Rendering entry point:
 
-    pub fn render(&self, buffer: &mut Buffer, entity: &Entity, board: &Board) {
+    pub fn render(&self, buffer: &mut Buffer, entity: &Entity, effect: Option<&Effect>) {
         if buffer.data.is_empty() {
             *buffer = Matrix::new(self.layout.bounds, ' '.into());
         }
@@ -526,9 +531,8 @@ impl UI {
         self.render_status(buffer, entity, None, None);
         self.render_target(buffer, entity);
 
-        let frame = board.get_frame();
-        self.render_map(buffer, entity, frame);
-        self.render_weather(buffer, entity);
+        self.render_map(buffer, entity, effect);
+        self.render_weather(buffer, entity, effect);
     }
 
     // Update entry points:
@@ -631,11 +635,13 @@ impl UI {
 
     // Rendering the map
 
-    fn render_map(&self, buffer: &mut Buffer, entity: &Entity, frame: Option<&Frame>) {
-        let (known, player) = (&*entity.known, entity.player);
+    fn render_map(&self, buffer: &mut Buffer, entity: &Entity, effect: Option<&Effect>) {
+        let size = self.get_map_size();
+        let frame = effect.map(|x| x.frame);
+        let known = effect.map(|x| x.known).unwrap_or(&entity.known);
         let slice = &mut Slice::new(buffer, self.layout.map);
         let offset = self.get_map_offset(entity);
-        let size = self.get_map_size();
+        let player = entity.player;
 
         // Render each tile's base glyph, if it's known.
         slice.fill(Glyph::wide(' '));
@@ -690,7 +696,7 @@ impl UI {
         // Render any animation that's currently running. Otherwise, if we're
         // still alive, render arrows showing NPC facing.
         if let Some(frame) = frame {
-            for &effect::Particle { point, glyph } in frame {
+            for &Particle { point, glyph, .. } in frame {
                 if !known.get(point).visible() { continue; }
                 let Point(x, y) = point - offset;
                 slice.set(Point(2 * x, y), glyph);
@@ -753,7 +759,7 @@ impl UI {
         }
     }
 
-    fn render_weather(&self, buffer: &mut Buffer, entity: &Entity) {
+    fn render_weather(&self, buffer: &mut Buffer, entity: &Entity, effect: Option<&Effect>) {
         let Some(rainfall) = &self.rainfall else { return };
 
         let slice = &mut Slice::new(buffer, self.layout.map);
@@ -761,7 +767,7 @@ impl UI {
 
         let size = self.get_map_size();
         let base = Tile::get('~').glyph.fg();
-        let known = &*entity.known;
+        let known = effect.map(|x| x.known).unwrap_or(&entity.known);
 
         for drop in &rainfall.drops {
             let index = drop.frame - self.frame;

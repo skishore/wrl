@@ -6,7 +6,7 @@ use flate2::Compression;
 use flate2::write::GzEncoder;
 
 use crate::base::{Color, Glyph, Matrix, Point};
-use crate::effect::Frame;
+use crate::effect::{Frame, Particle};
 use crate::entity::{EID, Entity};
 use crate::game::{WORLD_SIZE, Action, Board};
 use crate::knowledge::{EntityKnowledge, Timestamp};
@@ -125,7 +125,9 @@ impl DebugFile {
             Self::write_bin(&mut file, &(self.animation.len() as i32))?;
             for frame in &self.animation {
                 Self::write_bin(&mut file, &(frame.len() as i32))?;
-                Self::write_array(&mut file, frame.as_slice())?;
+                for &Particle { point, glyph, .. } in frame {
+                    Self::write_bin(&mut file, &(point, glyph))?;
+                }
             }
             file.flush()?;
         }
