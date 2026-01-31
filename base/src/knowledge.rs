@@ -414,7 +414,7 @@ impl Knowledge {
         self.time = board.time;
 
         let (pos, time) = (me.pos, board.time);
-        let dark = matches!(board.get_light(), Light::None);
+        let unlit = matches!(board.get_light(), Light::None);
 
         // Clear and recompute scents. Only prey gives off a scent.
         self.scents.clear();
@@ -448,13 +448,13 @@ impl Knowledge {
 
             let light = board.is_cell_lit(point);
             let nearby = (point - pos).len_l1() <= 1;
-            if dark && !light && !nearby { continue; }
+            if unlit && !light && !nearby { continue; }
 
             let visible = true;
-            let shade = dark || cell.shadow > 0;
+            let shade = unlit || cell.shadow > 0;
             let is_shadow_cover = shade && !light;
             let see_big_entities = nearby || !is_shadow_cover;
-            let see_all_entities = nearby || !(is_shadow_cover || tile.limits_vision());
+            let see_all_entities = nearby || !(is_shadow_cover || tile.is_cover());
 
             let entity = (|| {
                 if !see_big_entities { return None; }

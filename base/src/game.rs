@@ -94,6 +94,8 @@ impl Tile {
     // Derived predicates.
     pub fn casts_shadow(&self) -> bool { self.blocks_vision() }
 
+    pub fn is_cover(&self) -> bool { self.limits_vision() && !self.blocks_movement() }
+
     pub fn opacity(&self) -> i32 {
         if self.blocks_vision() { return INITIAL_VISIBILITY; }
         if self.limits_vision() { return VISIBILITY_LOSS; }
@@ -183,15 +185,15 @@ impl Default for FOV {
 }
 
 impl FOV {
-    fn select_vision(&mut self, entity: &Entity) -> &mut Vision {
-        if entity.player { &mut self._pc_vision } else { &mut self.npc_vision }
+    fn select_vision(&mut self, me: &Entity) -> &mut Vision {
+        if me.player { &mut self._pc_vision } else { &mut self.npc_vision }
     }
 
-    fn can_see(&mut self, board: &Board, entity: &Entity, point: Point) -> bool {
-        let Entity { pos, dir, asleep, player, .. } = *entity;
+    fn can_see(&mut self, board: &Board, me: &Entity, point: Point) -> bool {
+        let Entity { pos, dir, asleep, player, .. } = *me;
         if asleep { return pos == point; }
 
-        let vision = self.select_vision(entity);
+        let vision = self.select_vision(me);
 
         let map = &board.map;
         let dir = if player { Point::default() } else { dir };
@@ -199,21 +201,27 @@ impl FOV {
         vision.check_point(&VisionArgs { pos, dir, opacity_lookup }, point)
     }
 
-    fn can_see_entity_at(&mut self, board: &Board, entity: &Entity, point: Point) -> bool {
-        if !self.can_see(board, entity, point) { return false; }
+    fn can_see_entity_at(&mut self, board: &Board, me: &Entity, point: Point) -> bool {
+        // If we can't see the cell at all, we can't see entities there.
+        if !self.can_see(board, me, point) { return false; }
 
-        let nearby = (point - entity.pos).len_l1() <= 1;
+        // Entities can't hide if we're adjacent to them.
+        let nearby = (point - me.pos).len_l1() <= 1;
         if nearby { return true; }
 
+        // If they're hidden due to tall grass, then we can't see them.
         let cell = board.get_cell(point);
-        let dark = matches!(board.get_light(), Light::None);
-        let shade = dark || cell.shadow > 0;
-        nearby || !(shade || cell.tile.limits_vision())
+        if cell.tile.is_cover() { return false; }
+
+        // If they're hidden due to being in shadow, we can't see them.
+        let unlit = matches!(board.get_light(), Light::None);
+        let shade = unlit || cell.shadow > 0;
+        !shade || board.is_cell_lit(point)
     }
 
-    fn compute(&mut self, board: &Board, entity: &Entity) -> &Vision {
-        let vision = self.select_vision(entity);
-        let Entity { pos, dir, asleep, player, .. } = *entity;
+    fn compute(&mut self, board: &Board, me: &Entity) -> &Vision {
+        let vision = self.select_vision(me);
+        let Entity { pos, dir, asleep, player, .. } = *me;
         if asleep {
             vision.clear(pos);
         } else {
@@ -221,7 +229,7 @@ impl FOV {
             let dir = if player { Point::default() } else { dir };
             let opacity_lookup = |x| map.get(x).tile.opacity();
             vision.compute(&VisionArgs { pos, dir, opacity_lookup });
-            if !entity.player { vision.sort_points_seen(pos); }
+            if !me.player { vision.sort_points_seen(pos); }
         }
         vision
     }
