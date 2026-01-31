@@ -76,21 +76,21 @@ fn describe_sound(sound: Sound) -> &'static str {
     }
 }
 
-fn rivals<'a>(entity: &'a Entity) -> Vec<&'a EntityKnowledge> {
+fn rivals<'a>(me: &'a Entity) -> Vec<&'a EntityKnowledge> {
     let mut rivals = vec![];
-    for other in &entity.known.entities {
+    for other in &me.known.entities {
         if !other.visible { break; }
-        if other.eid != entity.eid { rivals.push(other); }
+        if other.eid != me.eid { rivals.push(other); }
     }
-    let pos = entity.pos;
+    let pos = me.pos;
     rivals.sort_by_cached_key(
         |x| ((x.pos - pos).len_l2_squared(), x.pos.0, x.pos.1));
     rivals
 }
 
-fn within_map_bounds(ui: &UI, entity: &Entity, point: Point) -> bool {
+fn within_map_bounds(ui: &UI, me: &Entity, point: Point) -> bool {
     let size = ui.get_map_size();
-    let Point(x, y) = point - ui.get_map_offset(entity);
+    let Point(x, y) = point - ui.get_map_offset(me);
     0 <= x && x < size.0 && 0 <= y && y < size.1
 }
 
@@ -310,13 +310,13 @@ fn select_valid_target(ui: &mut UI, known: &Knowledge) -> Option<EID> {
 
 // UI inputs
 
-fn process_ui_input(ui: &mut UI, entity: &Entity, input: Input) -> bool {
-    let known = &*entity.known;
+fn process_ui_input(ui: &mut UI, me: &Entity, input: Input) -> bool {
+    let known = &*me.known;
     let tab = input == Input::Char('\t') || input == Input::BackTab;
     let enter = input == Input::Char('\n') || input == Input::Char('.');
 
     let apply_tab = |prev: Option<EID>, off: bool| -> Option<EID> {
-        let rivals = rivals(entity);
+        let rivals = rivals(me);
         if rivals.is_empty() { return None; }
 
         let t = input == Input::Char('\t');
@@ -330,10 +330,10 @@ fn process_ui_input(ui: &mut UI, entity: &Entity, input: Input) -> bool {
     };
 
     let get_initial_target = |source: Point| -> Point {
-        let known = &*entity.known;
+        let known = &*me.known;
         let focus = ui.focus.and_then(|x| known.entity(x));
         if let Some(target) = focus && can_target(target) { return target.pos; }
-        if let Some(rival) = rivals(entity).first() { return rival.pos; }
+        if let Some(rival) = rivals(me).first() { return rival.pos; }
         source
     };
 
@@ -351,7 +351,7 @@ fn process_ui_input(ui: &mut UI, entity: &Entity, input: Input) -> bool {
         let mut prev = target;
         for _ in 0..scale {
             let next = prev + dir;
-            if !within_map_bounds(ui, entity, prev + dir) { break; }
+            if !within_map_bounds(ui, me, prev + dir) { break; }
             prev = next;
         }
         Some(prev)
@@ -390,7 +390,7 @@ fn process_ui_input(ui: &mut UI, entity: &Entity, input: Input) -> bool {
     }
 
     if input == Input::Char('x') {
-        let source = entity.pos;
+        let source = me.pos;
         let update = get_initial_target(source);
         let mut target = init_target(TargetData::FarLook, source, update);
         update_target(known, &mut target, update);
@@ -469,8 +469,8 @@ impl Default for Focused {
 }
 
 impl Focused {
-    fn update(&mut self, entity: &Entity, target: &EntityKnowledge) {
-        let known = &*entity.known;
+    fn update(&mut self, me: &Entity, target: &EntityKnowledge) {
+        let known = &*me.known;
         let (pos, dir) = (target.pos, target.dir);
         self.tile = known.get(pos).tile();
 
@@ -519,7 +519,7 @@ pub struct UI {
 impl UI {
     // Rendering entry point:
 
-    pub fn render(&self, buffer: &mut Buffer, entity: &Entity, effect: Option<&Effect>) {
+    pub fn render(&self, buffer: &mut Buffer, me: &Entity, effect: Option<&Effect>) {
         if buffer.data.is_empty() {
             *buffer = Matrix::new(self.layout.bounds, ' '.into());
         }
@@ -527,12 +527,12 @@ impl UI {
         self.render_layout(buffer);
 
         self.render_log(buffer);
-        self.render_rivals(buffer, entity);
-        self.render_status(buffer, entity, None, None);
-        self.render_target(buffer, entity);
+        self.render_rivals(buffer, me);
+        self.render_status(buffer, me, None, None);
+        self.render_target(buffer, me);
 
-        self.render_map(buffer, entity, effect);
-        self.render_weather(buffer, entity, effect);
+        self.render_map(buffer, me, effect);
+        self.render_weather(buffer, me, effect);
     }
 
     // Update entry points:
@@ -543,8 +543,8 @@ impl UI {
         self.moves.insert(point, manim);
     }
 
-    pub fn process_input(&mut self, entity: &Entity, input: Input) -> bool {
-        process_ui_input(self, entity, input)
+    pub fn process_input(&mut self, me: &Entity, input: Input) -> bool {
+        process_ui_input(self, me, input)
     }
 
     pub fn start_rain(&mut self, delta: Point, count: usize) {
@@ -567,8 +567,8 @@ impl UI {
         self.moves.retain(|_, v| v.frame < v.limit);
     }
 
-    pub fn update_focus(&mut self, entity: &Entity) {
-        let known = &*entity.known;
+    pub fn update_focus(&mut self, me: &Entity) {
+        let known = &*me.known;
         let focus = self.focus.and_then(|x| known.entity(x));
         if focus.is_none() { self.focus = None; }
 
@@ -577,22 +577,22 @@ impl UI {
             None => focus,
         };
         if let Some(target) = target && can_target(target) {
-            self.focused.update(entity, target);
+            self.focused.update(me, target);
             self.focused.active = true;
         } else {
             self.focused.active = false;
         }
     }
 
-    pub fn update_moves(&mut self, entity: &Entity) {
-        let known = &entity.known;
+    pub fn update_moves(&mut self, me: &Entity) {
+        let known = &me.known;
         self.moves.retain(|&pos, _| !known.get(pos).occupied())
     }
 
-    pub fn update_target(&mut self, entity: &Entity) -> bool {
+    pub fn update_target(&mut self, me: &Entity) -> bool {
         let Some(target) = &mut self.target else { return false };
         target.frame = (target.frame + 1) % UI_TARGET_FRAMES;
-        self.update_focus(entity);
+        self.update_focus(me);
         true
     }
 
@@ -635,19 +635,19 @@ impl UI {
 
     // Rendering the map
 
-    fn render_map(&self, buffer: &mut Buffer, entity: &Entity, effect: Option<&Effect>) {
+    fn render_map(&self, buffer: &mut Buffer, me: &Entity, effect: Option<&Effect>) {
         let size = self.get_map_size();
         let frame = effect.map(|x| x.frame);
-        let known = effect.map(|x| x.known).unwrap_or(&entity.known);
+        let known = effect.map(|x| x.known).unwrap_or(&me.known);
         let slice = &mut Slice::new(buffer, self.layout.map);
-        let offset = self.get_map_offset(entity);
-        let player = entity.player;
+        let offset = self.get_map_offset(me);
+        let player = me.player;
 
         // Render each tile's base glyph, if it's known.
         slice.fill(Glyph::wide(' '));
         for y in 0..size.1 {
             for x in 0..size.0 {
-                let glyph = Self::render_tile(known, Point(x, y) + offset);
+                let glyph = Self::render_tile(me, known, Point(x, y) + offset);
                 slice.set(Point(2 * x, y), glyph);
             }
         }
@@ -701,7 +701,7 @@ impl UI {
                 let Point(x, y) = point - offset;
                 slice.set(Point(2 * x, y), glyph);
             }
-        } else if entity.cur_hp > 0 {
+        } else if me.cur_hp > 0 {
             self.render_arrows(known, offset, slice);
         }
 
@@ -759,15 +759,15 @@ impl UI {
         }
     }
 
-    fn render_weather(&self, buffer: &mut Buffer, entity: &Entity, effect: Option<&Effect>) {
+    fn render_weather(&self, buffer: &mut Buffer, me: &Entity, effect: Option<&Effect>) {
         let Some(rainfall) = &self.rainfall else { return };
 
         let slice = &mut Slice::new(buffer, self.layout.map);
-        let offset = self.get_map_offset(entity);
+        let offset = self.get_map_offset(me);
 
         let size = self.get_map_size();
         let base = Tile::get('~').glyph.fg();
-        let known = effect.map(|x| x.known).unwrap_or(&entity.known);
+        let known = effect.map(|x| x.known).unwrap_or(&me.known);
 
         for drop in &rainfall.drops {
             let index = drop.frame - self.frame;
@@ -820,10 +820,12 @@ impl UI {
         for x in &self.log.lines { slice.set_fg(Some(x.color)).write_str(&x.text).newline(); }
     }
 
-    fn render_rivals(&self, buffer: &mut Buffer, entity: &Entity) {
+    fn render_rivals(&self, buffer: &mut Buffer, me: &Entity) {
         let slice = &mut Slice::new(buffer, self.layout.rivals);
-        let mut rivals = rivals(entity);
+
+        let mut rivals = rivals(me);
         rivals.truncate(max(slice.size().1, 0) as usize / 2);
+        let rivals = rivals;
 
         for rival in rivals {
             let EntityKnowledge { hp, species, .. } = *rival;
@@ -851,15 +853,17 @@ impl UI {
         }
     }
 
-    fn render_status(&self, buffer: &mut Buffer, entity: &Entity,
+    fn render_status(&self, buffer: &mut Buffer, me: &Entity,
                      menu: Option<&Menu>, summon: Option<&Entity>) {
         assert!(menu.is_some() == summon.is_some());
         let slice = &mut Slice::new(buffer, self.layout.status);
-        let known = &*entity.known;
-        if let Some(view) = known.entity(entity.eid) {
+        let known = &*me.known;
+
+        if let Some(view) = known.entity(me.eid) {
             let key = if menu.is_some() { '-' } else { PLAYER_KEY };
             self.render_entity(Some(key), None, view, slice);
         }
+
         for (_, &key) in SUMMON_KEYS.iter().enumerate() {
             //let key = if menu.is_some() { '-' } else { *key };
             //let eid = entity.data.summons.get(i).map(|x| x.eid());
@@ -875,9 +879,10 @@ impl UI {
         }
     }
 
-    fn render_target(&self, buffer: &mut Buffer, entity: &Entity) {
+    fn render_target(&self, buffer: &mut Buffer, me: &Entity) {
         let slice = &mut Slice::new(buffer, self.layout.target);
-        let known = &*entity.known;
+        let known = &*me.known;
+
         if self.target.is_none() && self.focus.is_none() {
             let fg = Some(UI_GRAY_OPTION.into());
             slice.newline();
@@ -1162,7 +1167,7 @@ impl UI {
         color.apply_light(r, g, b)
     }
 
-    pub fn render_tile(known: &Knowledge, point: Point) -> Glyph {
+    pub fn render_tile(_: &Entity, known: &Knowledge, point: Point) -> Glyph {
         let cell = known.get(point);
         let (source, tile) = (cell.source(), cell.tile());
         let Some(tile) = tile else { return Self::source_glyph(source) };
