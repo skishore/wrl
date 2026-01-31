@@ -296,17 +296,33 @@ impl Board {
     }
 
     fn advance_effect(&mut self, pov: EID, env: &mut UpdateEnv) -> bool {
-        let mut visible = self._pov_sees_effect(pov);
+        let Some(entity) = self.entities.get(pov) else { return false };
+
+        env.fov.compute(self, entity);
+
+        let mut visible = self._pov_sees_effect(pov, env);
         while self._advance_one_frame(env) {
-            visible = visible || self._pov_sees_effect(pov);
+            visible = visible || self._pov_sees_effect(pov, env);
             if visible { return true; }
         }
         false
     }
 
+    fn disable_effect_lighting(&mut self) {
+        self._set_effect_lighting(false);
+    }
+
+    fn enable_effect_lighting(&mut self) {
+        self._set_effect_lighting(true);
+    }
+
     fn start_effect(&mut self, pov: EID, env: &mut UpdateEnv) {
         if self.get_frame().is_none() { return; }
-        if !self._pov_sees_effect(pov) { self.advance_effect(pov, env); }
+        let Some(entity) = self.entities.get(pov) else { return };
+
+        env.fov.compute(self, entity);
+
+        if !self._pov_sees_effect(pov, env) { self.advance_effect(pov, env); }
     }
 
     fn _advance_one_frame(&mut self, env: &mut UpdateEnv) -> bool {
@@ -337,12 +353,36 @@ impl Board {
         true
     }
 
-    fn _pov_sees_effect(&self, pov: EID) -> bool {
+    fn _pov_sees_effect(&mut self, pov: EID, env: &mut UpdateEnv) -> bool {
         let Some(frame) = self._effect.frames.get(0) else { return false };
-        let Some(entity) = self.entities.get(pov) else { return false };
+        let Some(me) = self.entities.get(pov) else { return false };
 
-        let known = &entity.known;
-        frame.iter().any(|y| known.get(y.point).visible())
+        // TODO: account for lighting here as well...
+        let vision = &env.fov.select_vision(me);
+        if frame.iter().any(|y| vision.can_see(y.point)) { return true; }
+
+        let prev: Vec<_> = vision.get_points_seen().iter().map(
+            |&x| self.is_cell_lit(x)).collect();
+        self.enable_effect_lighting();
+        let next: Vec<_> = vision.get_points_seen().iter().map(
+            |&x| self.is_cell_lit(x)).collect();
+        self.disable_effect_lighting();
+
+        prev != next
+    }
+
+    fn _set_effect_lighting(&mut self, active: bool) {
+        let Some(frame) = self._effect.frames.get(0) else { return };
+
+        for &effect::Particle { point, light, .. } in frame {
+            let eid = self.get_cell(point).eid;
+            let prev = eid.map(|x| self.entities[x].species.light.radius).unwrap_or(-1);
+            let next = std::cmp::max(prev, light);
+            if prev == next { continue; }
+
+            let radius = if active { next } else { prev };
+            self.lighting.set_light(point, radius);
+        }
     }
 
     // Getters
@@ -1071,10 +1111,23 @@ fn process_input(state: &mut State, input: Input) {
 }
 
 fn update_player_knowledge(state: &mut State) {
-    state.board.update_known(state.player, &mut state.env);
-    let player = &state.board.entities[state.player];
-    state.env.ui.update_focus(player);
-    state.env.ui.update_moves(player);
+    let eid = state.player;
+    let State { board, env, .. } = state;
+
+    board.update_known(eid, env);
+    let player = &board.entities[eid];
+    env.ui.update_focus(player);
+    env.ui.update_moves(player);
+
+    if board.get_frame().is_none() { return; }
+
+    board.enable_effect_lighting();
+
+    swap(&mut env.known, &mut board.entities[eid].known);
+    board.update_known(eid, env);
+    swap(&mut env.known, &mut board.entities[eid].known);
+
+    board.disable_effect_lighting();
 }
 
 fn update_state(state: &mut State) {
@@ -1274,7 +1327,9 @@ impl State {
 
     pub fn render(&self, buffer: &mut Buffer) {
         let entity = self.get_player();
-        self.ui.render(buffer, entity, &self.board);
+        let effect = self.board.get_frame().map(
+            |x| crate::ui::Effect { frame: x, known: &*self.env.known });
+        self.ui.render(buffer, entity, effect.as_ref());
     }
 
     // Private helpers:
