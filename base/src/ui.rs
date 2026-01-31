@@ -1167,21 +1167,23 @@ impl UI {
         color.apply_light(r, g, b)
     }
 
-    pub fn render_tile(_: &Entity, known: &Knowledge, point: Point) -> Glyph {
+    pub fn render_tile(me: &Entity, known: &Knowledge, point: Point) -> Glyph {
         let cell = known.get(point);
-        let (source, tile) = (cell.source(), cell.tile());
-        let Some(tile) = tile else { return Self::source_glyph(source) };
+        let same = (known as *const Knowledge) == (&*me.known as *const Knowledge);
+        let source = if same { cell.source() } else { me.known.get(point).source() };
+
+        let Some(tile) = cell.tile() else { return Self::source_glyph(source) };
 
         let entity = cell.entity();
         let entity = if let Some(x) = entity && x.visible { entity } else { None };
+
         if entity.is_none() && source.is_some() { return Self::source_glyph(source) };
-        let obscured = tile.limits_vision();
 
         let glyph = if let Some(x) = entity {
             let big = x.too_big_to_hide();
             let glyph = Self::knowledge_glyph(x);
             if x.hp == 0. { Glyph::wdfg('%', 0xff0000) }
-            else if obscured && !big { glyph.with_fg(tile.glyph.fg()) }
+            else if tile.limits_vision() && !big { glyph.with_fg(tile.glyph.fg()) }
             else { glyph }
         } else if let Some(x) = cell.items().last() {
             show_item(x)
