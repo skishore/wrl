@@ -300,6 +300,7 @@ impl Board {
         let mut existing = Effect::default();
         swap(&mut self._effect, &mut existing);
         self._effect = existing.and(effect);
+        self._effect.events.retain(|x| matches!(x, effect::Event::Callback { .. }));
         self._execute_effect_callbacks(env);
     }
 
@@ -307,9 +308,9 @@ impl Board {
         let Some(entity) = self.entities.get(pov) else { return false };
 
         env.fov.compute(self, entity);
-
         let mut visible = self._pov_sees_effect(pov, env);
-        while self._advance_one_frame(env) {
+
+        while self._advance_one_frame(pov, env) {
             visible = visible || self._pov_sees_effect(pov, env);
             if visible { return true; }
         }
@@ -333,7 +334,7 @@ impl Board {
         if !self._pov_sees_effect(pov, env) { self.advance_effect(pov, env); }
     }
 
-    fn _advance_one_frame(&mut self, env: &mut UpdateEnv) -> bool {
+    fn _advance_one_frame(&mut self, pov: EID, env: &mut UpdateEnv) -> bool {
         if self._effect.frames.is_empty() {
             assert!(self._effect.events.is_empty());
             return false;
@@ -342,18 +343,26 @@ impl Board {
         let frame = self._effect.frames.remove(0);
         env.debug.as_mut().map(|x| x.record_frame(self.time, &frame));
         self._effect.events.iter_mut().for_each(|x| x.update_frame(|y| y - 1));
-        self._execute_effect_callbacks(env);
+
+        // Need to re-arm the vision context after any effect callback.
+        let update = self._execute_effect_callbacks(env);
+        if update && let Some(x) = self.entities.get(pov) { env.fov.compute(self, x); }
+
         true
     }
 
-    fn _execute_effect_callbacks(&mut self, env: &mut UpdateEnv) {
-        while self._execute_one_effect_callback(env) {}
+    fn _execute_effect_callbacks(&mut self, env: &mut UpdateEnv) -> bool {
+        let mut result = false;
+        while self._execute_one_effect_callback(env) { result = true; }
+        result
     }
 
     fn _execute_one_effect_callback(&mut self, env: &mut UpdateEnv) -> bool {
         if self._effect.events.is_empty() { return false; }
+
         let event = &self._effect.events[0];
         if !self._effect.frames.is_empty() && event.frame() > 0 { return false; }
+
         match self._effect.events.remove(0) {
             effect::Event::Callback { callback, .. } => callback(self, env),
             effect::Event::Other { .. } => (),
