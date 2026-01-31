@@ -1195,12 +1195,10 @@ fn update_state(state: &mut State) {
 
         state.board.active_entity = None;
         drain(entity, &result);
+
+        let pov = state.player;
+        state.board.start_effect(pov, &mut state.env);
     }
-
-    // Skip the prefix of Effect frames that the player can't see.
-    let pov = state.player;
-    state.board.start_effect(pov, &mut state.env);
-
     if update { update_player_knowledge(state); }
 }
 
