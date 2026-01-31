@@ -782,6 +782,8 @@ fn can_attack(board: &Board, entity: &Entity, action: &AttackAction) -> bool {
 }
 
 fn plan(state: &mut State, eid: EID) -> Action {
+    state.board.update_known(eid, &mut state.env);
+
     let player = eid == state.player;
     if player { return replace(&mut state.input, Action::WaitForInput); }
 
@@ -1173,8 +1175,6 @@ fn update_state(state: &mut State) {
         let player = entity.player;
         if player && needs_input(state) { break; }
 
-        state.board.update_known(eid, &mut state.env);
-
         update = true;
         let action = plan(state, eid);
         state.record_trace(&action, eid);
@@ -1186,8 +1186,8 @@ fn update_state(state: &mut State) {
         let Entity { pos, speed, .. } = *entity;
         entity.known.mark_turn_boundary(player, speed);
 
-        state.board.time = state.board.time.bump();
-        let time = state.board.time;
+        let time = state.board.time.bump();
+        state.board.time = time;
 
         let trail = &mut entity.trail;
         if trail.len() == trail.capacity() { trail.pop_back(); }
