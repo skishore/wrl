@@ -156,9 +156,9 @@ impl Event {
 
 //////////////////////////////////////////////////////////////////////////////
 
-type Sparkle<'a> = Vec<(i32, &'a str, i32)>;
+type Sparkle<'a> = (i32, &'a str, i32);
 
-fn add_sparkle(effect: &mut Effect, sparkle: &Sparkle, mut frame: i32, point: Point) -> i32 {
+fn add_sparkle(effect: &mut Effect, sparkle: &[Sparkle], mut frame: i32, point: Point) -> i32 {
     for &(delay, chars, color) in sparkle {
         for _ in 0..delay {
             let index = rand::random_range(0..chars.chars().count());
@@ -319,7 +319,7 @@ pub fn EmberEffect(_: &Board, _: &mut RNG, source: Point, target: Point) -> Effe
     let mut effect = Effect::default();
     let line = LOS(source, target);
 
-    let trail = || vec![
+    let trail = || [
         (random_delay(0), "*^^",   0xff0000),
         (random_delay(1), "*^",    0xffa800),
         (random_delay(2), "**^",   0xffff00),
@@ -327,7 +327,7 @@ pub fn EmberEffect(_: &Board, _: &mut RNG, source: Point, target: Point) -> Effe
         (random_delay(4), "#%",    0xff0000),
     ];
 
-    let flame = || vec![
+    let flame = || [
         (random_delay(0), "*^^",   0xff0000),
         (random_delay(1), "*^",    0xffa800),
         (random_delay(2), "**^#%", 0xffff00),
@@ -356,14 +356,15 @@ pub fn IceBeamEffect(_: &Board, _: &mut RNG, source: Point, target: Point) -> Ef
     let mut effect = Effect::default();
     let line = LOS(source, target);
     let ray = ray_character(target - source).to_string();
+    let ray = ray.as_str();
 
-    let trail: Sparkle = vec![
-        (2, &ray, 0xffffff),
-        (2, &ray, 0x00ffff),
-        (2, &ray, 0x0000ff),
+    let trail = [
+        (2, ray, 0xffffff),
+        (2, ray, 0x00ffff),
+        (2, ray, 0x0000ff),
     ];
 
-    let flame: Sparkle = vec![
+    let flame = [
         (2, "*", 0xffffff),
         (2, "*", 0x00ffff),
         (2, "*", 0x0000ff),
@@ -387,6 +388,7 @@ pub fn IceBeamEffect(_: &Board, _: &mut RNG, source: Point, target: Point) -> Ef
 pub fn BlizzardEffect(_: &Board, rng: &mut RNG, source: Point, target: Point) -> Effect {
     let mut effect = Effect::default();
     let ray = ray_character(target - source).to_string();
+    let ray = ray.as_str();
 
     let mut points = vec![target];
     let mut used = HashSet::default();
@@ -396,13 +398,13 @@ pub fn BlizzardEffect(_: &Board, rng: &mut RNG, source: Point, target: Point) ->
         points.push(alt);
     }
 
-    let trail: Sparkle = vec![
-        (1, &ray, 0xffffff),
-        (1, &ray, 0x00ffff),
-        (1, &ray, 0x0000ff),
+    let trail = [
+        (1, ray, 0xffffff),
+        (1, ray, 0x00ffff),
+        (1, ray, 0x0000ff),
     ];
 
-    let flame: Sparkle = vec![
+    let flame = [
         (1, "*", 0xffffff),
         (1, "*", 0x00ffff),
         (1, "*", 0x0000ff),
@@ -431,7 +433,7 @@ pub fn HeadbuttEffect(board: &Board, _: &mut RNG, source: Point, target: Point) 
     let glyph = get_glyph_at(board, source);
     let underlying = get_underlying_glyph_at(board, source);
 
-    let trail: Sparkle = vec![
+    let trail = [
         (2, "#", 0xffffff),
         (2, "#", 0xc0c0c0),
         (2, "#", 0x808080),
