@@ -123,11 +123,13 @@ impl DebugFile {
             let mut file = GzEncoder::new(file, Compression::default());
 
             Self::write_bin(&mut file, &(self.animation.len() as i32))?;
-            for frame in &self.animation {
-                Self::write_bin(&mut file, &(frame.len() as i32))?;
-                for &Particle { point, glyph, .. } in frame {
-                    Self::write_bin(&mut file, &(point, glyph))?;
-                }
+            for _frame in &self.animation {
+                Self::write_bin(&mut file, &(0 as i32))?;
+
+                //Self::write_bin(&mut file, &(frame.len() as i32))?;
+                //for &Particle { point, glyph, .. } in frame {
+                //    Self::write_bin(&mut file, &(point, glyph))?;
+                //}
             }
             file.flush()?;
         }
