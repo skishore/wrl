@@ -496,6 +496,7 @@ struct Menu {
 pub struct Effect<'a> {
     pub frame: &'a Frame,
     pub known: &'a Knowledge,
+    pub mask: &'a [bool],
 }
 
 #[derive(Default)]
@@ -637,7 +638,6 @@ impl UI {
 
     fn render_map(&self, buffer: &mut Buffer, me: &Entity, effect: Option<&Effect>) {
         let size = self.get_map_size();
-        let frame = effect.map(|x| x.frame);
         let known = effect.map(|x| x.known).unwrap_or(&me.known);
         let slice = &mut Slice::new(buffer, self.layout.map);
         let offset = self.get_map_offset(me);
@@ -696,20 +696,18 @@ impl UI {
 
         // Render any animation that's currently running. Otherwise, if we're
         // still alive, render arrows showing NPC facing.
-        if let Some(frame) = frame {
-            frame.iter().for_each(|x| match x {
+        if let Some(effect) = effect {
+            assert!(effect.frame.len() == effect.mask.len());
+            effect.frame.iter().zip(effect.mask).filter(|x| *x.1).for_each(|x| match x.0 {
                 &Particle::Highlight(point, color) => {
-                    if !known.get(point).visible() { return; }
                     if color == Color::black() { return; }
                     let glyph = slice.get(remap(point)).with_fg(Color::black()).with_bg(color);
                     slice.set(remap(point), glyph);
                 },
                 &Particle::Glyph(point, glyph) => {
-                    if !known.get(point).visible() { return; }
                     slice.set(remap(point), glyph);
                 },
-                &Particle::Noise(point, color, volume) => {
-                    if !volume.contains(point - me.pos) { return; }
+                &Particle::Noise(point, color, _) => {
                     let entity = known.get(point).entity();
                     let mut glyph = if let Some(x) = entity && x.visible {
                         x.species.glyph
