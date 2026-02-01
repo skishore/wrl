@@ -198,7 +198,7 @@ impl DebugFile {
         // Anything we scribble on the map shows up in the debug UI.
         for y in 0..self.map.size.1 {
             for x in 0..self.map.size.0 {
-                let glyph = UI::render_tile(me, &me.known, Point(x, y));
+                let glyph = UI::render_tile(me, Point(x, y), None);
                 self.map.set(Point(x, y), glyph);
             }
         }

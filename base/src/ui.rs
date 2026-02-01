@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 
 use rand::Rng;
 
-use crate::base::{HashMap, LOS, Point, RNG, dirs};
+use crate::base::{HashMap, HashSet, LOS, Point, RNG, dirs};
 use crate::base::{Bound, Buffer, Color, Glyph, Matrix, Rect, Slice};
 use crate::effect::{Frame, Particle};
 use crate::entity::{EID, Entity};
@@ -497,6 +497,8 @@ pub struct Effect<'a> {
     pub frame: &'a Frame,
     pub known: &'a Knowledge,
     pub mask: &'a [bool],
+    pub sources: HashSet<Point>,
+    pub targets: HashSet<Point>,
 }
 
 #[derive(Default)]
@@ -647,7 +649,8 @@ impl UI {
         slice.fill(Glyph::wide(' '));
         for y in 0..size.1 {
             for x in 0..size.0 {
-                let glyph = Self::render_tile(me, known, Point(x, y) + offset);
+                let point = Point(x, y) + offset;
+                let glyph = Self::render_tile(me, point, effect);
                 slice.set(Point(2 * x, y), glyph);
             }
         }
@@ -1154,14 +1157,27 @@ impl UI {
 
     // Static helpers
 
-    fn knowledge_glyph(entity: &EntityKnowledge) -> Glyph {
+    fn entity_glyph(entity: &EntityKnowledge) -> Glyph {
         let sneaking = entity.species.human() && entity.sneaking;
         if sneaking { Glyph::wide('e') } else { entity.species.glyph }
     }
 
+    fn knowledge_glyph(entity: &EntityKnowledge, tile: &Tile) -> Glyph {
+        if entity.hp == 0. { return Glyph::wdfg('%', 0xff0000); }
+
+        let glyph = Self::entity_glyph(entity);
+        let cover = tile.is_cover() && !entity.too_big_to_hide();
+
+        if cover { glyph.with_fg(tile.glyph.fg()) } else { glyph }
+    }
+
+    fn noise_glyph(freshness: f64) -> Glyph {
+        Glyph::wdfg('?', Color::white().fade(0.25 + 0.5 * freshness))
+    }
+
     fn source_glyph(source: Option<&SourceKnowledge>) -> Glyph {
         let Some(x) = source else { return Glyph::wide(' ') };
-        Glyph::wdfg('?', Color::white().fade(0.25 + 0.5 * x.freshness()))
+        Self::noise_glyph(x.freshness())
     }
 
     fn hp_color(hp: f64) -> Color {
@@ -1188,24 +1204,26 @@ impl UI {
         color.apply_light(r, g, b)
     }
 
-    pub fn render_tile(me: &Entity, known: &Knowledge, point: Point) -> Glyph {
+    pub fn render_tile(me: &Entity, point: Point, effect: Option<&Effect>) -> Glyph {
+        let known = effect.map(|x| x.known).unwrap_or(&*me.known);
+        let is_source = effect.map(|x| x.sources.contains(&point)).unwrap_or(false);
+        let is_target = effect.map(|x| x.targets.contains(&point)).unwrap_or(false);
+
         let cell = known.get(point);
-        let same = (known as *const Knowledge) == (&*me.known as *const Knowledge);
-        let source = if same { cell.source() } else { me.known.get(point).source() };
+        let source = me.known.get(point).source();
+        let source = if is_source { None } else { source };
 
         let Some(tile) = cell.tile() else { return Self::source_glyph(source) };
 
         let entity = cell.entity();
         let entity = if let Some(x) = entity && x.visible { entity } else { None };
+        let entity = if is_source { None } else { entity };
 
         if entity.is_none() && source.is_some() { return Self::source_glyph(source) };
+        if entity.is_none() && is_target { return Self::noise_glyph(1.) };
 
         let glyph = if let Some(x) = entity {
-            let big = x.too_big_to_hide();
-            let glyph = Self::knowledge_glyph(x);
-            if x.hp == 0. { Glyph::wdfg('%', 0xff0000) }
-            else if tile.limits_vision() && !big { glyph.with_fg(tile.glyph.fg()) }
-            else { glyph }
+            Self::knowledge_glyph(x, tile)
         } else if let Some(x) = cell.items().last() {
             show_item(x)
         } else {
