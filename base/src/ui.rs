@@ -653,13 +653,14 @@ impl UI {
         }
 
         // Render moves that we've seen or heard.
-        let remap = |point: Point| {
-            Point(2 * (point.0 - offset.0), point.1 - offset.1)
+        let remap = |point: Point, slice: &Slice| {
+            let result = Point(2 * (point.0 - offset.0), point.1 - offset.1);
+            if slice.contains(result) { Some(result) } else { None }
         };
         if player {
             for (&k, v) in &self.moves {
-                let p = remap(k);
-                if v.frame < 0 || !slice.contains(p) { continue; }
+                if v.frame < 0 { continue; }
+                let Some(p) = remap(k, slice) else { continue };
 
                 let alpha = 1.0 - (v.frame as f64 / v.limit as f64);
                 let color = v.color.fade(UI_MOVE_ALPHA * alpha);
@@ -669,19 +670,16 @@ impl UI {
 
         // Helpers used for the map overlay UIs.
         let set = |slice: &mut Slice, point: Point, glyph: Glyph| {
-            slice.set(remap(point), glyph);
+            let Some(point) = remap(point, slice) else { return };
+            slice.set(point, glyph);
         };
         let highlight = |slice: &mut Slice, point: Point, bg: Color| {
-            let point = remap(point);
-            if !slice.contains(point) { return; }
-
+            let Some(point) = remap(point, slice) else { return };
             let glyph = slice.get(point);
             slice.set(point, glyph.with_fg(Color::black()).with_bg(bg));
         };
         let brighten = |slice: &mut Slice, point: Point| {
-            let point = remap(point);
-            if !slice.contains(point) { return; }
-
+            let Some(point) = remap(point, slice) else { return };
             let glyph = slice.get(point);
             let glyph = glyph.with_fg(glyph.fg().brighten(UI_FOV_BRIGHTEN));
             let glyph = glyph.with_bg(glyph.bg().brighten(UI_FOV_BRIGHTEN));
@@ -701,13 +699,15 @@ impl UI {
             effect.frame.iter().zip(effect.mask).filter(|x| *x.1).for_each(|x| match x.0 {
                 &Particle::Highlight(point, color) => {
                     if color == Color::black() { return; }
-                    let glyph = slice.get(remap(point)).with_fg(Color::black()).with_bg(color);
-                    slice.set(remap(point), glyph);
+                    let Some(point) = remap(point, slice) else { return };
+                    slice.set(point, slice.get(point).with_fg(0).with_bg(color));
                 },
                 &Particle::Glyph(point, glyph) => {
-                    slice.set(remap(point), glyph);
+                    let Some(point) = remap(point, slice) else { return };
+                    slice.set(point, glyph);
                 },
                 &Particle::Noise(point, color, _) => {
+                    let Some(point) = remap(point, slice) else { return };
                     let entity = known.get(point).entity();
                     let mut glyph = if let Some(x) = entity && x.visible {
                         x.species.glyph
@@ -717,7 +717,7 @@ impl UI {
                     if color != Color::black() {
                         glyph = glyph.with_fg(Color::black()).with_bg(color);
                     }
-                    slice.set(remap(point), glyph);
+                    slice.set(point, glyph);
                 },
                 &Particle::Light(..) => {},
                 &Particle::Shift(..) => {},
