@@ -260,7 +260,10 @@ pub struct Board {
     active_entity: Option<EID>,
     pub entities: EntityMap,
     pub time: Timestamp,
+
+    // Animation:
     _effect: Effect,
+    _frame_mask: Vec<bool>,
 
     // Lighting:
     light: Light,
@@ -283,7 +286,10 @@ impl Board {
             active_entity: None,
             entities: EntityMap::default(),
             time: Timestamp::default().latch(time),
+
+            // Animation:
             _effect: Effect::default(),
+            _frame_mask: vec![],
 
             // Lighting:
             light,
@@ -301,6 +307,7 @@ impl Board {
         swap(&mut self._effect, &mut existing);
         self._effect = existing.and(effect);
         self._effect.events.retain(|x| matches!(x, effect::Event::Callback { .. }));
+        self._frame_mask.clear();
         self._execute_effect_callbacks(env);
     }
 
@@ -311,6 +318,7 @@ impl Board {
         let mut visible = self._pov_sees_effect(pov, env);
 
         while self._advance_one_frame(pov, env) {
+            self._fill_frame_mask(pov, env);
             visible = visible || self._pov_sees_effect(pov, env);
             if visible { return true; }
         }
@@ -339,10 +347,12 @@ impl Board {
             assert!(self._effect.events.is_empty());
             return false;
         }
+
         self.time = self.time.bump();
         let frame = self._effect.frames.remove(0);
         env.debug.as_mut().map(|x| x.record_frame(self.time, &frame));
         self._effect.events.iter_mut().for_each(|x| x.update_frame(|y| y - 1));
+        self._frame_mask.clear();
 
         // Need to re-arm the vision context after any effect callback.
         let update = self._execute_effect_callbacks(env);
@@ -370,19 +380,27 @@ impl Board {
         true
     }
 
-    fn _pov_sees_effect(&mut self, pov: EID, env: &mut UpdateEnv) -> bool {
-        let Some(frame) = self._effect.frames.get(0) else { return false };
-        let Some(me) = self.entities.get(pov) else { return false };
+    fn _fill_frame_mask(&mut self, pov: EID, env: &mut UpdateEnv) {
+        if !self._frame_mask.is_empty() { return; }
+        let Some(me) = self.entities.get(pov) else { return };
+        let Some(frame) = self._effect.frames.get(0) else { return };
 
         let vision = &env.fov.select_vision(me);
-        let visible = frame.iter().any(|x| match x {
+        self._frame_mask = frame.iter().map(|x| match x {
             &Particle::Highlight(point, _) => vision.can_see(point),
             &Particle::Glyph(point, _) => vision.can_see(point),
             &Particle::Noise(point, _, volume) => volume.contains(point - me.pos),
             &Particle::Light(..) => false,
             &Particle::Shift(..) => false,
-        });
-        if visible { return true; }
+        }).collect();
+    }
+
+    fn _pov_sees_effect(&mut self, pov: EID, env: &mut UpdateEnv) -> bool {
+        self._fill_frame_mask(pov, env);
+        if self._frame_mask.iter().any(|&x| x) { return true; }
+
+        let Some(me) = self.entities.get(pov) else { return false };
+        let vision = &env.fov.select_vision(me);
 
         let prev: Vec<_> = vision.get_points_seen().iter().map(
             |&x| self.is_cell_lit(x)).collect();
@@ -1336,8 +1354,11 @@ impl State {
 
     pub fn render(&self, buffer: &mut Buffer) {
         let entity = self.get_player();
-        let effect = self.board.get_frame().map(
-            |x| crate::ui::Effect { frame: x, known: &*self.env.known });
+        let effect = self.board.get_frame().map(|frame| {
+            let known = &*self.env.known;
+            let mask = &self.board._frame_mask;
+            crate::ui::Effect { frame, known, mask }
+        });
         self.ui.render(buffer, entity, effect.as_ref());
     }
 
