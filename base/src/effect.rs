@@ -1,3 +1,5 @@
+use std::cmp::{max, min};
+
 use rand::Rng;
 
 use crate::base::{Bound, Color, HashSet, Glyph, LOS, Point, RNG, dirs, sample};
@@ -301,7 +303,7 @@ pub fn SummonEffect(source: Point, target: Point) -> Effect {
 #[allow(non_snake_case)]
 pub fn WithdrawEffect(source: Point, target: Point) -> Effect {
     let mut implode  = ImplosionEffect(target);
-    let frame = std::cmp::max(implode.frames.len() as i32 - 6, 0);
+    let frame = max(implode.frames.len() as i32 - 6, 0);
     implode.add_event(Event::Other { frame, point: target, what: FT::Withdraw });
 
     let base = RayEffect(source, target, 4);
@@ -443,11 +445,16 @@ pub fn BlizzardEffect(rng: &mut RNG, source: Point, target: Point) -> Effect {
 
 #[allow(non_snake_case)]
 pub fn HeadbuttEffect(_: &mut RNG, source: Point, target: Point) -> Effect {
+    let init = 0.75;
+    let gray = |value: f64| {
+        let byte = min((value * 0x100 as f64) as i32, 0xff) as u8 as i32;
+        (byte << 16) | (byte << 8) | byte
+    };
     let trail = [
-        (2, "#", 0xffffff),
-        (2, "#", 0xc0c0c0),
-        (2, "#", 0x808080),
-        (2, "#", 0x404040),
+        (2, "#", gray(4. * 0.25 * init)),
+        (2, "#", gray(3. * 0.25 * init)),
+        (2, "#", gray(2. * 0.25 * init)),
+        (2, "#", gray(1. * 0.25 * init)),
     ];
 
     let move_along_line = |line: &[Point]| {
@@ -471,7 +478,7 @@ pub fn HeadbuttEffect(_: &mut RNG, source: Point, target: Point) -> Effect {
     // Once we reach the neighbor, pause for a second to do the attack.
     let neighbor    = line_from.first().cloned().unwrap_or(source);
     let hold_effect = Effect::constant(Particle::shift(source, neighbor), 32);
-    let move_length = std::cmp::max(line_to.len() as i32 - 1, 0);
+    let move_length = max(line_to.len() as i32 - 1, 0);
 
     let to   = move_along_line(&line_to);
     let hold = hold_effect.delay(move_length);
