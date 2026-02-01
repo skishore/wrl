@@ -40,7 +40,7 @@ impl Particle {
     }
 
     pub fn shift(source: Point, target: Point) -> Self {
-        Self::Shift(source, target)
+        if source == target { Self::dummy(source) } else { Self::Shift(source, target) }
     }
 
     pub fn dummy(point: Point) -> Self {

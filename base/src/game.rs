@@ -391,7 +391,7 @@ impl Board {
             &Particle::Glyph(point, _) => vision.can_see(point),
             &Particle::Noise(point, _, volume) => volume.contains(point - me.pos),
             &Particle::Light(..) => false,
-            &Particle::Shift(..) => false,
+            &Particle::Shift(_, target) => vision.can_see(target),
         }).collect();
     }
 
@@ -426,7 +426,6 @@ impl Board {
                 self.lighting.set_light(point, radius);
             },
             &Particle::Shift(mut source, mut target) => {
-                if source == target { return; }
                 if !active { std::mem::swap(&mut source, &mut target); }
                 let eid = self.get_cell(source).eid.unwrap();
                 self.move_entity(eid, target);
@@ -1357,7 +1356,13 @@ impl State {
         let effect = self.board.get_frame().map(|frame| {
             let known = &*self.env.known;
             let mask = &self.board._frame_mask;
-            crate::ui::Effect { frame, known, mask }
+
+            let moves: Vec<_> = frame.iter().filter_map(
+                |x| if let &Particle::Shift(x, y) = x { Some((x, y)) } else { None }).collect();
+            let sources = moves.iter().map(|x| x.0).collect();
+            let targets = moves.iter().map(|x| x.1).collect();
+
+            crate::ui::Effect { frame, known, mask, sources, targets }
         });
         self.ui.render(buffer, entity, effect.as_ref());
     }
