@@ -21,6 +21,7 @@ use crate::mapgen::mapgen_with_size as mapgen;
 use crate::pathing::Status;
 use crate::shadowcast::{INITIAL_VISIBILITY, VISIBILITY_LOSSES, Vision, VisionArgs};
 use crate::ui::{UI, get_direction};
+use crate::wg_mc::{heightmap, Block, HeightmapResult};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -28,7 +29,7 @@ use crate::ui::{UI, get_direction};
 
 pub const MOVE_TIMER: i32 = 960;
 pub const TURN_TIMER: i32 = 120;
-pub const WORLD_SIZE: i32 = 100;
+pub const WORLD_SIZE: i32 = 500;
 
 pub const FOV_RADIUS_NPC: i32 = 12;
 pub const FOV_RADIUS_PC_: i32 = 21;
@@ -38,8 +39,8 @@ const VISIBILITY_LOSS: i32 = VISIBILITY_LOSSES[FOV_RADIUS_IN_TALL_GRASS - 1];
 
 const LIGHT: Light = Light::Sun(Point(2, 0));
 const WEATHER: Weather = Weather::None;
-const NUM_PREDATORS: i32 = 2;
-const NUM_PREY: i32 = 18;
+const NUM_PREDATORS: i32 = 0;
+const NUM_PREY: i32 = 0;
 
 const UI_FLASH: i32 = 4;
 const UI_DAMAGE_FLASH: i32 = 6;
@@ -76,12 +77,17 @@ const FLAGS_TALL_GRASS: u32 = FLAG_LIMITS_VISION;
 pub struct Tile {
     pub flags: u32,
     pub glyph: Glyph,
+    pub height: i32,
     pub description: &'static str,
 }
 
 impl Tile {
     pub fn get(ch: char) -> &'static Tile { TILES.get(&ch).unwrap() }
     pub fn try_get(ch: char) -> Option<&'static Tile> { TILES.get(&ch) }
+
+    pub fn get_by_block(block: Block, height: i32) -> &'static Tile {
+        BLOCK_TILES.get(&(block, height)).unwrap()
+    }
 
     // Raw flags-based predicates.
     pub fn can_eat(&self) -> bool { self.flags & FLAG_CAN_EAT != 0 }
@@ -134,7 +140,34 @@ lazy_static! {
         let mut result = HashMap::default();
         for (ch, flags, glyph, description) in items {
             let glyph = Glyph::wdfg(glyph.0, glyph.1);
-            result.insert(ch, Tile { flags, glyph, description });
+            result.insert(ch, Tile { flags, glyph, height: 0, description });
+        }
+        result
+    };
+
+    static ref BLOCK_TILES: HashMap<(Block, i32), Tile> = {
+        let items = [
+            (Block::Bedrock, 0x404040, "bedrock"),
+            (Block::Dirt,    0xff8000, "dirt"),
+            (Block::Grass,   0x60c000, "grass"),
+            (Block::Sand,    0xffffc0, "sand"),
+            (Block::Snow,    0xffffff, "snow"),
+            (Block::Stone,   0xc0c0c0, "stone"),
+        ];
+        let mut result = HashMap::default();
+        for (block, color, description) in items {
+            let color = Color::from(color);
+            for height in 0..256 {
+                //let p = 8;
+                //let strength = (((height + 4) % p) as f64 + 1.) / p as f64;
+                //let glyph = Glyph::wdfg('.', color.fade(0.75 * strength + 0.25));
+
+                let ch = if height % 2 == 0 { ',' } else { '.' };
+                let glyph = Glyph::wdfg(ch, color);
+
+                let tile = Tile { flags: FLAGS_NONE, glyph, height, description };
+                result.insert((block, height), tile);
+            }
         }
         result
     };
@@ -227,7 +260,14 @@ impl FOV {
         } else {
             let map = &board.map;
             let dir = if player { Point::default() } else { dir };
-            let opacity_lookup = |x| map.get(x).tile.opacity();
+            let height = board.map.get(pos).tile.height;
+            let opacity_lookup = |x| {
+                let tile = map.get(x).tile;
+                let delta = std::cmp::max(tile.height - height, 0) as i64;
+                //let hidden = delta * delta > (x - pos).len_l2_squared();
+                let hidden = delta > 2;
+                if hidden { INITIAL_VISIBILITY } else { tile.opacity() }
+            };
             vision.compute(&VisionArgs { pos, dir, opacity_lookup });
             if !me.player { vision.sort_points_seen(pos); }
         }
@@ -1281,20 +1321,28 @@ impl State {
         let mut pos = Point(size.0 / 2, size.1 / 2);
         let mut board = Board::new(size, LIGHT);
 
-        loop {
-            let map = mapgen(size, &mut env.rng);
-            for x in 0..size.0 {
-                for y in 0..size.1 {
-                    let p = Point(x, y);
-                    board.set_tile(p, Tile::get(map.get(p)));
-                }
-            }
+        for x in 0..size.0 {
             for y in 0..size.1 {
-                let p = Point(0, y);
-                if map.get(p) == 'R' { pos = p; }
+                let result = heightmap(x, y);
+                let tile = Tile::get_by_block(result.block, result.height);
+                board.set_tile(Point(x, y), tile);
             }
-            if !board.get_tile(pos).blocks_movement() { break; }
         }
+
+        //loop {
+        //    let map = mapgen(size, &mut env.rng);
+        //    for x in 0..size.0 {
+        //        for y in 0..size.1 {
+        //            let p = Point(x, y);
+        //            board.set_tile(p, Tile::get(map.get(p)));
+        //        }
+        //    }
+        //    for y in 0..size.1 {
+        //        let p = Point(0, y);
+        //        if map.get(p) == 'R' { pos = p; }
+        //    }
+        //    if !board.get_tile(pos).blocks_movement() { break; }
+        //}
 
         let input = Action::WaitForInput;
         let (player, species) = (true, Species::get("Human"));
