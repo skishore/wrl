@@ -14,6 +14,7 @@ mod pathing;
 mod shadowcast;
 mod threats;
 mod ui;
+mod wg_simplex;
 
 pub mod base;
 pub mod game;
