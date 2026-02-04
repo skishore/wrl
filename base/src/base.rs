@@ -23,6 +23,14 @@ pub type RNG = rand::rngs::StdRng;
 pub type HashSet<K> = fxhash::FxHashSet<K>;
 pub type HashMap<K, V> = fxhash::FxHashMap<K, V>;
 
+pub fn fmax<T: PartialOrd>(x: T, y: T) -> T {
+    if x > y { x } else { y }
+}
+
+pub fn fmin<T: PartialOrd>(x: T, y: T) -> T {
+    if x < y { x } else { y }
+}
+
 pub fn clamp<T: PartialOrd>(x: T, min: T, max: T) -> T {
     if x < min { min } else if x > max { max } else { x }
 }
