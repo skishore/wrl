@@ -1009,6 +1009,18 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let player = entity.player;
             let target = source + step;
 
+            let sh = state.board.get_tile(source).height;
+            let th = state.board.get_tile(target).height;
+            if th > sh + 1 {
+                if player { state.ui.log.log_failure("That's too high a climb!"); }
+                state.board.entities[eid].face_direction(step);
+                return ActionResult::failure();
+            } else if th < sh - 1 {
+                if player { state.ui.log.log_failure("That's too steep a drop!"); }
+                state.board.entities[eid].face_direction(step);
+                return ActionResult::failure();
+            }
+
             match state.board.get_status(target) {
                 Status::Blocked | Status::Unknown => {
                     state.board.entities[eid].face_direction(step);
