@@ -1210,6 +1210,8 @@ impl UI {
         let is_source = effect.map(|x| x.sources.contains(&point)).unwrap_or(false);
         let is_target = effect.map(|x| x.targets.contains(&point)).unwrap_or(false);
 
+        let height = known.get(me.pos).cell().map(|x| x.tile.height).unwrap_or(0);
+
         let cell = known.get(point);
         let source = me.known.get(point).source();
         let source = if is_source { None } else { source };
@@ -1227,6 +1229,14 @@ impl UI {
             Self::knowledge_glyph(x, tile)
         } else if let Some(x) = cell.items().last() {
             show_item(x)
+        } else if tile.height > height + 1 {
+            tile.glyph.with_fg(tile.glyph.fg().brighten(0.5))
+        } else if tile.height > height {
+            tile.glyph.with_fg(tile.glyph.fg().brighten(0.25))
+        } else if tile.height < height - 1 {
+            tile.glyph.with_fg(tile.glyph.fg().fade(0.5))
+        } else if tile.height < height {
+            tile.glyph.with_fg(tile.glyph.fg().fade(0.75))
         } else {
             tile.glyph
         };
