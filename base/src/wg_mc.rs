@@ -102,7 +102,7 @@ pub fn heightmap(x: i32, z: i32) -> HeightmapResult {
     if falloff >= SEA_LEVEL as f64 { return result; }
 
     NOISES.with_borrow(|noises| {
-        let scale = 4.;
+        let scale = 1.;
         let (x, z) = (scale * x as f64, scale * z as f64);
 
         let cliff_select = (noises.mgv7_np_cliff_select)(x, z);

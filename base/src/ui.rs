@@ -653,6 +653,10 @@ impl UI {
                 let point = Point(x, y) + offset;
                 let glyph = Self::render_tile(me, point, effect);
                 slice.set(Point(2 * x, y), glyph);
+
+                if !glyph.ch().is_wide() {
+                    slice.set(Point(2 * x + 1, y), glyph);
+                }
             }
         }
 
@@ -1210,13 +1214,15 @@ impl UI {
         let is_source = effect.map(|x| x.sources.contains(&point)).unwrap_or(false);
         let is_target = effect.map(|x| x.targets.contains(&point)).unwrap_or(false);
 
-        let height = known.get(me.pos).cell().map(|x| x.tile.height).unwrap_or(0);
-
         let cell = known.get(point);
         let source = me.known.get(point).source();
         let source = if is_source { None } else { source };
 
         let Some(tile) = cell.tile() else { return Self::source_glyph(source) };
+
+        let height = known.get(me.pos).cell().map(|x| x.tile.height).unwrap_or(0);
+        let diff = 0.1 + 0.05 * (tile.height - height).abs() as f64;
+        let diff = if diff > 1. { 1. } else { diff };
 
         let entity = cell.entity();
         let entity = if let Some(x) = entity && x.visible { entity } else { None };
@@ -1229,14 +1235,10 @@ impl UI {
             Self::knowledge_glyph(x, tile)
         } else if let Some(x) = cell.items().last() {
             show_item(x)
-        } else if tile.height > height + 1 {
-            tile.glyph.with_fg(tile.glyph.fg().brighten(0.5))
         } else if tile.height > height {
-            tile.glyph.with_fg(tile.glyph.fg().brighten(0.25))
-        } else if tile.height < height - 1 {
-            tile.glyph.with_fg(tile.glyph.fg().fade(0.5))
+            tile.glyph.with_fg(tile.glyph.fg().brighten(diff))
         } else if tile.height < height {
-            tile.glyph.with_fg(tile.glyph.fg().fade(0.75))
+            tile.glyph.with_fg(tile.glyph.fg().fade(1. - diff))
         } else {
             tile.glyph
         };

@@ -85,8 +85,8 @@ impl Tile {
     pub fn get(ch: char) -> &'static Tile { TILES.get(&ch).unwrap() }
     pub fn try_get(ch: char) -> Option<&'static Tile> { TILES.get(&ch) }
 
-    pub fn get_by_block(block: Block, height: i32) -> &'static Tile {
-        BLOCK_TILES.get(&(block, height)).unwrap()
+    pub fn get_by_block(block: Block, height: i32, ch: char) -> &'static Tile {
+        BLOCK_TILES.get(&(block, height, ch)).unwrap()
     }
 
     // Raw flags-based predicates.
@@ -145,7 +145,8 @@ lazy_static! {
         result
     };
 
-    static ref BLOCK_TILES: HashMap<(Block, i32), Tile> = {
+    static ref BLOCK_TILES: HashMap<(Block, i32, char), Tile> = {
+        let chars = ['.', '-', '|', '\\', '/', 'x', '='];
         let items = [
             (Block::Bedrock, 0x404040, "bedrock"),
             (Block::Dirt,    0xff8000, "dirt"),
@@ -158,15 +159,11 @@ lazy_static! {
         for (block, color, description) in items {
             let color = Color::from(color);
             for height in 0..256 {
-                //let p = 8;
-                //let strength = (((height + 4) % p) as f64 + 1.) / p as f64;
-                //let glyph = Glyph::wdfg('.', color.fade(0.75 * strength + 0.25));
-
-                let ch = if height % 2 == 0 { ',' } else { '.' };
-                let glyph = Glyph::wdfg(ch, color);
-
-                let tile = Tile { flags: FLAGS_NONE, glyph, height, description };
-                result.insert((block, height), tile);
+                for ch in chars {
+                    let glyph = Glyph::wdfg(ch, color);
+                    let tile = Tile { flags: FLAGS_NONE, glyph, height, description };
+                    result.insert((block, height, ch), tile);
+                }
             }
         }
         result
@@ -1334,10 +1331,30 @@ impl State {
         let mut pos = Point(size.0 / 2, size.1 / 2);
         let mut board = Board::new(size, LIGHT);
 
+        let get_heightmap = |x, y| {
+            let mut result = heightmap(x, y);
+            result.height /= 4;
+            result
+        };
+
         for x in 0..size.0 {
             for y in 0..size.1 {
-                let result = heightmap(x, y);
-                let tile = Tile::get_by_block(result.block, result.height);
+                let result = get_heightmap(x, y);
+                let n = get_heightmap(x, y - 1).height < result.height;
+                let s = get_heightmap(x, y + 1).height < result.height;
+                let e = get_heightmap(x + 1, y).height < result.height;
+                let w = get_heightmap(x - 1, y).height < result.height;
+                let total = n as i32 + s as i32 + e as i32 + w as i32;
+                let ch = match total {
+                    0 => '.',
+                    1 => if n { '-' } else if s { '=' } else { '|' },
+                    2 => if n && s { '-' } else
+                         if e && w { '|' } else
+                         if (n && e) || (s && w) { '\\' } else { '/' },
+                    3 => if !n || !s { '|' } else { '-' },
+                    _ => 'x',
+                };
+                let tile = Tile::get_by_block(result.block, result.height, ch);
                 board.set_tile(Point(x, y), tile);
             }
         }

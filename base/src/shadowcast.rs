@@ -34,6 +34,8 @@ fn div_ceil(lhs: i32, rhs: i32) -> i32 {
 pub const INITIAL_VISIBILITY: i32 = 100;
 pub const VISIBILITY_LOSSES: [i32; 7] = [100, 75, 45, 30, 24, 19, 15];
 
+const EYE_HEIGHT: i32 = 3;
+
 #[derive(Clone, Copy, Debug)]
 struct Transform([[i32; 2]; 2]);
 
@@ -225,8 +227,8 @@ impl Vision {
     }
 
     fn seed_ranges(&mut self, dir: Point, target: Option<Point>) {
+        let z = Slope::new(-EYE_HEIGHT, 1);
         let visibility = self.initial_visibility;
-        let z = Slope::new(-3, 1);
 
         if dir == Point::default() {
             for transform in &TRANSFORMS {
@@ -332,7 +334,7 @@ impl Vision {
                         std::cmp::max(visibility - (r * opacity as f64) as i32, 0)
                     })();
 
-                    let next_z = Slope::new(2 * height - 3, 2 * depth);
+                    let next_z = Slope::new(2 * height - EYE_HEIGHT, 2 * depth);
 
                     if next_visibility >= 0 && next_z > z {
                         let entry = self.visibility.entry_mut(point + center).unwrap();
