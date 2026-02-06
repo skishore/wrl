@@ -19,7 +19,7 @@ use crate::knowledge::{AttackEvent, CallEvent, Event, EventData, MoveEvent};
 use crate::lighting::Lighting;
 use crate::mapgen::mapgen_with_size as mapgen;
 use crate::pathing::Status;
-use crate::shadowcast::{INITIAL_VISIBILITY, VISIBILITY_LOSSES, Vision, VisionArgs};
+use crate::shadowcast::{INITIAL_VISIBILITY, VISIBILITY_LOSSES, Lookup, Vision, VisionArgs};
 use crate::ui::{UI, get_direction};
 use crate::wg_mc::{heightmap, Block, HeightmapResult};
 
@@ -230,8 +230,12 @@ impl FOV {
 
         let map = &board.map;
         let dir = if player { Point::default() } else { dir };
-        let opacity_lookup = |x| map.get(x).tile.opacity();
-        vision.check_point(&VisionArgs { pos, dir, opacity_lookup }, point)
+        let height = board.map.get(pos).tile.height;
+        let lookup = |x| {
+            let tile = map.get(x).tile;
+            Lookup { height: tile.height - height, opacity: tile.opacity() }
+        };
+        vision.check_point(&VisionArgs { pos, dir, lookup }, point)
     }
 
     fn can_see_entity_at(&mut self, board: &Board, me: &Entity, point: Point) -> bool {
@@ -261,14 +265,11 @@ impl FOV {
             let map = &board.map;
             let dir = if player { Point::default() } else { dir };
             let height = board.map.get(pos).tile.height;
-            let opacity_lookup = |x| {
+            let lookup = |x| {
                 let tile = map.get(x).tile;
-                let delta = std::cmp::max(tile.height - height, 0) as i64;
-                //let hidden = delta * delta > (x - pos).len_l2_squared();
-                let hidden = delta > 2;
-                if hidden { INITIAL_VISIBILITY } else { tile.opacity() }
+                Lookup { height: tile.height - height, opacity: tile.opacity() }
             };
-            vision.compute(&VisionArgs { pos, dir, opacity_lookup });
+            vision.compute(&VisionArgs { pos, dir, lookup });
             if !me.player { vision.sort_points_seen(pos); }
         }
         vision

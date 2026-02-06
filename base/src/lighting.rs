@@ -1,5 +1,5 @@
 use crate::base::{Matrix, Point};
-use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
+use crate::shadowcast::{INITIAL_VISIBILITY, Lookup, Vision, VisionArgs};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -105,8 +105,9 @@ impl Lighting {
 
         let (pos, dir) = (point, Point::default());
         let opacity_lookup = |p: Point| { self.opacity.get(p) };
+        let lookup = |p: Point| Lookup { height: 0, opacity: opacity_lookup(p) };
         let vision = &mut self.visions[light as usize];
-        vision.compute(&VisionArgs { pos, dir, opacity_lookup });
+        vision.compute(&VisionArgs { pos, dir, lookup });
 
         for &p in vision.get_points_seen() {
             let Some(index) = self.light_values.index(p) else { continue };
@@ -224,7 +225,8 @@ mod tests {
 
                 let dir = Point::default();
                 let opacity_lookup = |x| lighting.opacity.get(x);
-                let args = VisionArgs { pos: other, dir, opacity_lookup };
+                let lookup = |x| Lookup { height: 0, opacity: opacity_lookup(x) };
+                let args = VisionArgs { pos: other, dir, lookup };
                 if vision.check_point(&args, point) { expected += 1; }
             }
         }

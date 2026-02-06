@@ -16,7 +16,7 @@ use crate::game::{Action, AttackAction, CallAction, EatAction, MoveAction};
 use crate::knowledge::{Call, Knowledge, ScentEvent, Sense, Timestamp};
 use crate::pathing::{AStar, AStarHeuristic, Status};
 use crate::pathing::{BFS, DijkstraLength, DijkstraMap, Neighborhood};
-use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
+use crate::shadowcast::{INITIAL_VISIBILITY, Lookup, Vision, VisionArgs};
 use crate::threats::{FightOrFlight, ThreatState};
 
 //////////////////////////////////////////////////////////////////////////////
@@ -255,12 +255,13 @@ fn ensure_vision(ctx: &mut Ctx) {
     if ctx.ran_vision { return; }
 
     let Ctx { known, pos, .. } = *ctx;
-    let opacity_lookup = |p: Point| {
+    let lookup = |p: Point| {
         let blocked = known.get(p + pos).status() == Status::Blocked;
-        if blocked { INITIAL_VISIBILITY } else { 0 }
+        let opacity = if blocked { INITIAL_VISIBILITY } else { 0 };
+        Lookup { height: 0, opacity }
     };
     let origin = Point::default();
-    let args = VisionArgs { pos: origin, dir: origin, opacity_lookup, };
+    let args = VisionArgs { pos: origin, dir: origin, lookup, };
 
     ctx.env.fov.compute(&args);
     ctx.ran_vision = true;

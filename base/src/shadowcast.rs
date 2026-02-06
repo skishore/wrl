@@ -98,6 +98,7 @@ impl PartialEq for Slope {
 
 #[derive(Clone, Copy, Debug)]
 struct SlopeRange {
+    z: Slope,
     min: Slope,
     max: Slope,
     transform: &'static Transform,
@@ -114,10 +115,15 @@ struct SlopeRanges {
 
 // Public API
 
-pub struct VisionArgs<F: Fn(Point) -> i32> {
+pub struct Lookup {
+    pub height: i32,
+    pub opacity: i32,
+}
+
+pub struct VisionArgs<F: Fn(Point) -> Lookup> {
     pub pos: Point,
     pub dir: Point,
-    pub opacity_lookup: F,
+    pub lookup: F,
 }
 
 pub struct Vision {
@@ -192,7 +198,7 @@ impl Vision {
         self.next.items.clear();
     }
 
-    pub fn check_point<F: Fn(Point) -> i32>(
+    pub fn check_point<F: Fn(Point) -> Lookup>(
             &mut self, args: &VisionArgs<F>, target: Point) -> bool {
         if args.pos == target { return true; }
 
@@ -204,14 +210,14 @@ impl Vision {
 
         self.clear(args.pos);
         self.seed_ranges(args.dir, Some(target - args.pos));
-        self.execute(args.pos, limit, &args.opacity_lookup);
+        self.execute(args.pos, limit, &args.lookup);
         self.can_see(target)
     }
 
-    pub fn compute<F: Fn(Point) -> i32>(&mut self, args: &VisionArgs<F>) {
+    pub fn compute<F: Fn(Point) -> Lookup>(&mut self, args: &VisionArgs<F>) {
         self.clear(args.pos);
         self.seed_ranges(args.dir, None);
-        self.execute(args.pos, self.range.radius, &args.opacity_lookup);
+        self.execute(args.pos, self.range.radius, &args.lookup);
     }
 
     pub fn sort_points_seen(&mut self, pos: Point) {
@@ -220,6 +226,7 @@ impl Vision {
 
     fn seed_ranges(&mut self, dir: Point, target: Option<Point>) {
         let visibility = self.initial_visibility;
+        let z = Slope::new(-3, 1);
 
         if dir == Point::default() {
             for transform in &TRANSFORMS {
@@ -238,7 +245,7 @@ impl Vision {
 
                 // If the range is still non-empty, scan it.
                 if max <= min { continue; }
-                self.prev.items.push(SlopeRange { min, max, transform, visibility });
+                self.prev.items.push(SlopeRange { z, min, max, transform, visibility });
             }
         } else {
             for transform in &TRANSFORMS {
@@ -277,19 +284,21 @@ impl Vision {
 
                 // If the range is still non-empty, scan it.
                 if max <= min { continue; }
-                self.prev.items.push(SlopeRange { min, max, transform, visibility });
+                self.prev.items.push(SlopeRange { z, min, max, transform, visibility });
             }
         }
     }
 
-    fn execute<F: Fn(Point) -> i32>(
+    fn execute<F: Fn(Point) -> Lookup>(
             &mut self, pos: Point, limit: i32, opacity_lookup: F) {
         let radius = self.range.radius;
         let center = Point(radius, radius);
 
         let push = |next: &mut SlopeRanges, s: SlopeRange| {
             if let Some(x) = next.items.last_mut() &&
-                x.max == s.min && x.visibility == s.visibility &&
+                x.z == s.z &&
+                x.max == s.min &&
+                x.visibility == s.visibility &&
                 x.transform as *const Transform == s.transform as *const Transform {
                     x.max = s.max;
             } else {
@@ -302,7 +311,9 @@ impl Vision {
 
             for range in &self.prev.items {
                 let mut prev_visibility = -1;
-                let SlopeRange { mut min, max, transform, visibility } = *range;
+                let mut prev_z = Slope::new(0, 1);
+
+                let SlopeRange { z, mut min, max, transform, visibility } = *range;
                 let start = div_floor(2 * min.num * depth + min.den, 2 * min.den);
                 let limit = div_ceil(2 * max.num * depth - max.den, 2 * max.den);
 
@@ -311,36 +322,43 @@ impl Vision {
                     let nearby = self.range.contains(source);
                     let point = *transform * source;
 
+                    let Lookup { height, opacity } = opacity_lookup(point + pos);
+
                     let next_visibility = (|| {
                         if !nearby { return -1; }
-                        let opacity = opacity_lookup(point + pos);
                         if opacity == 0 { return visibility; }
                         if opacity >= visibility { return 0; }
                         let r = 1.0 + (0.5 * source.1.abs() as f64) / (source.0 as f64);
                         std::cmp::max(visibility - (r * opacity as f64) as i32, 0)
                     })();
 
-                    if next_visibility >= 0 {
+                    let next_z = Slope::new(2 * height - 3, 2 * depth);
+
+                    if next_visibility >= 0 && next_z > z {
                         let entry = self.visibility.entry_mut(point + center).unwrap();
                         if *entry < 0 { self.points_seen.push(point + pos); }
                         *entry = std::cmp::max(*entry, next_visibility);
                     }
 
-                    if prev_visibility != next_visibility && prev_visibility >= 0 {
+                    let next_z = std::cmp::max(z, next_z);
+
+                    if prev_visibility >= 0 &&
+                       (prev_visibility != next_visibility || prev_z != next_z) {
                         let slope = Slope::new(2 * width - 1, 2 * depth);
                         if prev_visibility > 0 {
-                            let (max, visibility) = (slope, prev_visibility);
-                            let range = SlopeRange { min, max, transform, visibility };
+                            let (max, visibility, z) = (slope, prev_visibility, prev_z);
+                            let range = SlopeRange { z, min, max, transform, visibility };
                             push(&mut self.next, range);
                         }
                         min = slope;
                     }
                     prev_visibility = next_visibility;
+                    prev_z = next_z;
                 }
 
                 if prev_visibility > 0 {
-                    let visibility = prev_visibility;
-                    let range = SlopeRange { min, max, transform, visibility };
+                    let (visibility, z) = (prev_visibility, prev_z);
+                    let range = SlopeRange { z, min, max, transform, visibility };
                     push(&mut self.next, range);
                 }
             }
@@ -368,13 +386,18 @@ mod tests {
     fn run_fov(pos: Point, dir: Point, map: &Matrix<char>,
                radius: i32, check_point_lookups: bool) -> Matrix<bool> {
         // Wrapper around Vision to make it easier to test.
-        let opacity_lookup = |p: Point| {
+        let opacity = |p: Point| {
             let tile = if map.contains(p) { map.get(p) } else { '#' };
             if tile == '#' { return INITIAL_VISIBILITY; }
             if tile == ',' { return VISIBILITY_LOSS; }
             0
         };
-        let args = VisionArgs { pos, dir, opacity_lookup };
+        let height = |p: Point| {
+            let tile = if map.contains(p) { map.get(p) } else { '#' };
+            if '0' <= tile && tile <= '9' { (tile as u32 - '0' as u32) as i32 } else { 0 }
+        };
+        let lookup = |p: Point| Lookup { height: height(p), opacity: opacity(p) };
+        let args = VisionArgs { pos, dir, lookup };
 
         let mut vision = Vision::new(radius);
         vision.compute(&args);
@@ -445,6 +468,19 @@ mod tests {
             result.push(row);
         }
         result
+    }
+
+    #[test]
+    fn test_height() {
+        test_fov(&[
+            "@...",
+            "3...",
+            "....",
+        ], &[
+            "@...",
+            "3...",
+            "%...",
+        ]);
     }
 
     #[test]
@@ -862,8 +898,9 @@ mod tests {
             if tile.limits_vision() { return VISIBILITY_LOSS; }
             0
         };
+        let lookup = |p: Point| Lookup { height: 0, opacity: opacity_lookup(p) };
         let dir = if directional { Point(1, 1) } else { Point::default() };
-        let args = VisionArgs { pos, dir, opacity_lookup };
+        let args = VisionArgs { pos, dir, lookup };
 
         let mut vision = Vision::new(pos.0);
         if point_lookups {

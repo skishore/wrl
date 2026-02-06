@@ -12,7 +12,7 @@ use crate::game::{Input, Tile, show_item};
 use crate::knowledge::{Call, PointLookup, Sound};
 use crate::knowledge::{EntityKnowledge, Knowledge, SourceKnowledge};
 use crate::pathing::Status;
-use crate::shadowcast::{Vision, VisionArgs};
+use crate::shadowcast::{Lookup, Vision, VisionArgs};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -479,7 +479,8 @@ impl Focused {
         } else {
             let floor = Tile::get('.');
             let opacity_lookup = |x| known.get(x).tile().unwrap_or(floor).opacity();
-            self.vision.compute(&VisionArgs { pos, dir, opacity_lookup });
+            let lookup = |p: Point| Lookup { height: 0, opacity: opacity_lookup(p) };
+            self.vision.compute(&VisionArgs { pos, dir, lookup });
         }
     }
 }
