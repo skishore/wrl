@@ -178,8 +178,8 @@ class DebugTrace {
     if (mouseEvent.target !== this.terminal.app.canvas) return null;
 
     // Non-integral - we use distance-to-center to match to an entity.
-    const x = mouseEvent.layerX / (2 * this.terminal.unitX);
-    const y = mouseEvent.layerY / this.terminal.unitY;
+    const x = mouseEvent.offsetX / (2 * this.terminal.unitX);
+    const y = mouseEvent.offsetY / this.terminal.unitY;
 
     const unit = this.terminal.unitY;
     const cell = this.ui.selection.offsetWidth;

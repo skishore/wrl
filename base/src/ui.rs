@@ -5,7 +5,7 @@ use rand::Rng;
 
 use crate::base::{HashMap, HashSet, LOS, Point, RNG, dirs};
 use crate::base::{Bound, Buffer, Color, Glyph, Matrix, Rect, Slice};
-use crate::effect::{Frame, Particle};
+use crate::effect::{Frame, ParticleData, RenderData};
 use crate::entity::{EID, Entity};
 use crate::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_};
 use crate::game::{Input, Tile, show_item};
@@ -671,6 +671,29 @@ impl UI {
             }
         }
 
+        // During animations, render all particles and drop other UI elements.
+        let mut render_particle = |p: Point, r: &RenderData| match r {
+            RenderData::Dummy => {},
+            &RenderData::Flash(color) => {
+                let Some(p) = remap(p, slice) else { return };
+                slice.set(p, slice.get(p).with_fg(Color::black()).with_bg(color));
+            },
+            &RenderData::Glyph(glyph) => {
+                let Some(p) = remap(p, slice) else { return };
+                slice.set(p, glyph);
+            },
+        };
+        if let Some(effect) = effect {
+            assert!(effect.frame.len() == effect.mask.len());
+            effect.frame.iter().zip(effect.mask).filter(|x| *x.1).for_each(|x| match &x.0.data {
+                ParticleData::Light(..) => {},
+                ParticleData::Shift(..) => {},
+                ParticleData::Sight(r) => render_particle(x.0.point, r),
+                ParticleData::Sound(_, r) => render_particle(x.0.point, r),
+            });
+            return;
+        }
+
         // Helpers used for the map overlay UIs.
         let set = |slice: &mut Slice, point: Point, glyph: Glyph| {
             let Some(point) = remap(point, slice) else { return };
@@ -695,37 +718,8 @@ impl UI {
             highlight(slice, point, Color::gray(UI_TARGET_SHADE));
         }
 
-        // Render any animation that's currently running. Otherwise, if we're
-        // still alive, render arrows showing NPC facing.
-        if let Some(effect) = effect {
-            assert!(effect.frame.len() == effect.mask.len());
-            effect.frame.iter().zip(effect.mask).filter(|x| *x.1).for_each(|x| match x.0 {
-                &Particle::Highlight(point, color) => {
-                    if color == Color::black() { return; }
-                    let Some(point) = remap(point, slice) else { return };
-                    slice.set(point, slice.get(point).with_fg(0).with_bg(color));
-                },
-                &Particle::Glyph(point, glyph) => {
-                    let Some(point) = remap(point, slice) else { return };
-                    slice.set(point, glyph);
-                },
-                &Particle::Noise(point, color, _) => {
-                    let Some(point) = remap(point, slice) else { return };
-                    let entity = known.get(point).entity();
-                    let mut glyph = if let Some(x) = entity && x.visible {
-                        x.species.glyph
-                    } else {
-                        Glyph::wide('?')
-                    };
-                    if color != Color::black() {
-                        glyph = glyph.with_fg(Color::black()).with_bg(color);
-                    }
-                    slice.set(point, glyph);
-                },
-                &Particle::Light(..) => {},
-                &Particle::Shift(..) => {},
-            });
-        } else if me.cur_hp > 0 {
+        // If we're still alive, render arrows showing NPC facing.
+        if me.cur_hp > 0 {
             self.render_arrows(known, offset, slice);
         }
 

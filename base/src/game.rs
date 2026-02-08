@@ -12,7 +12,7 @@ use crate::base::{Bound, Buffer, Color, Glyph};
 use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs, sample, weighted};
 use crate::dex::{Attack, Species};
 use crate::debug::DebugFile;
-use crate::effect::{CB, Effect, Frame, FT, Particle, self};
+use crate::effect::{CB, Effect, Frame, FT, Particle, ParticleData, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
 use crate::knowledge::{Call, Knowledge, Scent, Sense, Timedelta, Timestamp};
 use crate::knowledge::{AttackEvent, CallEvent, Event, EventData, MoveEvent};
@@ -350,7 +350,7 @@ impl Board {
 
         self.time = self.time.bump();
         let frame = self._effect.frames.remove(0);
-        env.debug.as_mut().map(|x| x.record_frame(self.time, &frame));
+        env.debug.as_mut().map(|x| x.record_frame(self, &frame));
         self._effect.events.iter_mut().for_each(|x| x.update_frame(|y| y - 1));
         self._frame_mask.clear();
 
@@ -386,12 +386,11 @@ impl Board {
         let Some(frame) = self._effect.frames.get(0) else { return };
 
         let vision = &env.fov.select_vision(me);
-        self._frame_mask = frame.iter().map(|x| match x {
-            &Particle::Highlight(point, _) => vision.can_see(point),
-            &Particle::Glyph(point, _) => vision.can_see(point),
-            &Particle::Noise(point, _, volume) => volume.contains(point - me.pos),
-            &Particle::Light(..) => false,
-            &Particle::Shift(_, target) => vision.can_see(target),
+        self._frame_mask = frame.iter().map(|x| match &x.data {
+            ParticleData::Light(..) => false,
+            ParticleData::Shift(..) => vision.can_see(x.point),
+            ParticleData::Sight(..) => vision.can_see(x.point),
+            ParticleData::Sound(volume, ..) => volume.contains(x.point - me.pos),
         }).collect();
     }
 
@@ -415,24 +414,24 @@ impl Board {
     fn _enter_effect_frame(&mut self, active: bool) {
         let Some(frame) = self._effect.frames.get(0).cloned() else { return };
 
-        frame.iter().for_each(|x| match x {
-            &Particle::Light(point, light) => {
-                let eid = self.get_cell(point).eid;
+        frame.iter().for_each(|x| match &x.data {
+            &ParticleData::Light(light) => {
+                let eid = self.get_cell(x.point).eid;
                 let prev = eid.map(|x| self.entities[x].species.light.radius).unwrap_or(-1);
                 let next = std::cmp::max(prev, light.radius);
                 if prev == next { return; }
 
                 let radius = if active { next } else { prev };
-                self.lighting.set_light(point, radius);
+                self.lighting.set_light(x.point, radius);
             },
-            &Particle::Shift(mut source, mut target) => {
+            &ParticleData::Shift(mut source) => {
+                let mut target = x.point;
                 if !active { std::mem::swap(&mut source, &mut target); }
                 let eid = self.get_cell(source).eid.unwrap();
                 self.move_entity(eid, target);
             },
-            &Particle::Glyph(..) => {},
-            &Particle::Noise(..) => {},
-            &Particle::Highlight(..) => {},
+            ParticleData::Sight(..) => {},
+            ParticleData::Sound(..) => {},
         });
     }
 
@@ -1081,19 +1080,19 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 // Animation
 
 fn apply_flash<T: Into<Color>>(target: Point, color: T, cb: Option<CB>) -> Effect {
-    let particle = Particle::visible_highlight(target, color.into());
+    let particle = Particle::flash(target, color.into());
     let mut effect = Effect::constant(particle, UI_FLASH);
     if let Some(x) = cb { effect.sub_on_finished(x); }
     effect
 }
 
 fn apply_noise<T: Into<Color>>(target: Point, color: T, volume: Bound) -> Effect {
-    let particle = Particle::audible_highlight(target, color.into(), volume);
+    let particle = Particle::noise(target, color.into(), volume);
     Effect::constant(particle, UI_FLASH)
 }
 
 fn apply_damage(target: Point, cb: CB) -> Effect {
-    let particle = Particle::visible_highlight(target, 0xff0000.into());
+    let particle = Particle::flash(target, 0xff0000.into());
     let restored = Particle::dummy(target);
     let mut effect = Effect::serial(vec![
         Effect::constant(particle, UI_DAMAGE_FLASH),
@@ -1357,8 +1356,10 @@ impl State {
             let known = &*self.env.known;
             let mask = &self.board._frame_mask;
 
-            let moves: Vec<_> = frame.iter().filter_map(
-                |x| if let &Particle::Shift(x, y) = x { Some((x, y)) } else { None }).collect();
+            let moves: Vec<_> = frame.iter().filter_map(|x| match &x.data {
+                &ParticleData::Shift(source) => Some((source, x.point)),
+                _ => None,
+            }).collect();
             let sources = moves.iter().map(|x| x.0).collect();
             let targets = moves.iter().map(|x| x.1).collect();
 

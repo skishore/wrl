@@ -20,41 +20,50 @@ pub enum Event {
 }
 
 #[derive(Copy, Clone)]
-pub enum Particle {
-    Glyph(Point, Glyph),
-    Light(Point, Bound),
-    Noise(Point, Color, Bound),
-    Shift(Point, Point),
-    Highlight(Point, Color),
+pub enum RenderData {
+    Dummy,
+    Flash(Color),
+    Glyph(Glyph),
+}
+
+#[derive(Copy, Clone)]
+pub enum ParticleData {
+    Light(Bound),
+    Shift(Point),
+    Sight(RenderData),
+    Sound(Bound, RenderData),
+}
+
+#[derive(Copy, Clone)]
+pub struct Particle {
+    pub point: Point,
+    pub data: ParticleData,
 }
 
 impl Particle {
     pub fn new(point: Point, glyph: Glyph) -> Self {
-        Self::Glyph(point, glyph)
+        Self { point, data: ParticleData::Sight(RenderData::Glyph(glyph)) }
+    }
+
+    pub fn flash(point: Point, color: Color) -> Self {
+        Self { point, data: ParticleData::Sight(RenderData::Flash(color)) }
     }
 
     pub fn light(point: Point, light: Bound) -> Self {
-        Self::Light(point, light)
+        Self { point, data: ParticleData::Light(light) }
     }
 
-    pub fn noise(point: Point, volume: Bound) -> Self {
-        Self::Noise(point, Color::black(), volume)
+    pub fn noise(point: Point, color: Color, volume: Bound) -> Self {
+        Self { point, data: ParticleData::Sound(volume, RenderData::Flash(color)) }
     }
 
     pub fn shift(source: Point, target: Point) -> Self {
-        if source == target { Self::dummy(source) } else { Self::Shift(source, target) }
+        if source == target { return Self::dummy(target); }
+        Self { point: target, data: ParticleData::Shift(source) }
     }
 
     pub fn dummy(point: Point) -> Self {
-        Self::Highlight(point, Color::black())
-    }
-
-    pub fn audible_highlight(point: Point, color: Color, volume: Bound) -> Self {
-        Self::Noise(point, color, volume)
-    }
-
-    pub fn visible_highlight(point: Point, color: Color) -> Self {
-        Self::Highlight(point, color)
+        Self { point, data: ParticleData::Sight(RenderData::Dummy) }
     }
 }
 

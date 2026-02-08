@@ -6,10 +6,10 @@ use flate2::Compression;
 use flate2::write::GzEncoder;
 
 use crate::base::{Color, Glyph, Matrix, Point};
-use crate::effect::{Frame, Particle};
+use crate::effect::{Frame, ParticleData, RenderData};
 use crate::entity::{EID, Entity};
-use crate::game::{WORLD_SIZE, Action, Board};
-use crate::knowledge::{EntityKnowledge, Timestamp};
+use crate::game::{WORLD_SIZE, Action, Board, Cell, show_item};
+use crate::knowledge::EntityKnowledge;
 use crate::ui::UI;
 
 //////////////////////////////////////////////////////////////////////////////
@@ -55,7 +55,7 @@ impl DebugLog {
 // DebugFile
 
 pub struct DebugFile {
-    animation: Vec<Frame>,
+    animation: Vec<Vec<(Point, Glyph)>>,
     utilities: Vec<(i32, Point)>,
     dir: &'static str,
     file: BufWriter<File>,
@@ -79,8 +79,8 @@ impl DebugFile {
         self.try_record(action, board, me).unwrap();
     }
 
-    pub fn record_frame(&mut self, time: Timestamp, frame: &Frame) {
-        self.try_record_frame(time, frame).unwrap();
+    pub fn record_frame(&mut self, board: &Board, frame: &Frame) {
+        self.try_record_frame(board, frame).unwrap();
     }
 
     pub fn record_utility(&mut self, utilities: &[(i32, Point)]) {
@@ -103,13 +103,44 @@ impl DebugFile {
         self.file.flush()
     }
 
-    fn try_record_frame(&mut self, time: Timestamp, frame: &Frame) -> Result<()> {
-        self.animation.push(frame.clone());
+    fn try_record_frame(&mut self, board: &Board, frame: &Frame) -> Result<()> {
+        let render_move = |source: Point, target: Point| {
+            if source == target { return vec![]; }
+
+            let cell = board.get_cell(source);
+            let Some(eid) = cell.eid else { return vec![] };
+
+            let s = Self::underlying_glyph(cell);
+            let t = Self::entity_glyph(&board.entities[eid]);
+            vec![(source, s), (target, t)]
+        };
+        let render_particle = |p: Point, r: &RenderData| match r {
+            RenderData::Dummy => None,
+            &RenderData::Glyph(g) => Some((p, g)),
+            &RenderData::Flash(c) => {
+                let cell = board.get_cell(p);
+                let glyph = if let Some(eid) = cell.eid {
+                    Self::entity_glyph(&board.entities[eid])
+                } else {
+                    Self::underlying_glyph(cell)
+                };
+                Some((p, glyph.with_fg(Color::black()).with_bg(c)))
+            },
+        };
+        let mut xs = vec![];
+        xs.reserve(frame.len());
+        frame.iter().for_each(|x| match &x.data {
+            ParticleData::Light(_) => {},
+            ParticleData::Shift(s) => xs.append(&mut render_move(*s, x.point)),
+            ParticleData::Sight(r) => { render_particle(x.point, r).map(|x| xs.push(x)); }
+            ParticleData::Sound(_, r) => { render_particle(x.point, r).map(|x| xs.push(x)); }
+        });
+        self.animation.push(xs);
 
         write!(self.file, "{{")?;
         write!(self.file, r#""index":{},"#, self.next_tick)?;
         write!(self.file, r#""type":"animation","#)?;
-        write!(self.file, r#""time":"{}","#, time.nsec())?;
+        write!(self.file, r#""time":"{}","#, board.time.nsec())?;
         write!(self.file, r#""frame":{}"#, self.animation.len() - 1)?;
         write!(self.file, "}}\n")?;
         self.file.flush()
@@ -123,13 +154,9 @@ impl DebugFile {
             let mut file = GzEncoder::new(file, Compression::default());
 
             Self::write_bin(&mut file, &(self.animation.len() as i32))?;
-            for _frame in &self.animation {
-                Self::write_bin(&mut file, &(0 as i32))?;
-
-                //Self::write_bin(&mut file, &(frame.len() as i32))?;
-                //for &Particle { point, glyph, .. } in frame {
-                //    Self::write_bin(&mut file, &(point, glyph))?;
-                //}
+            for frame in &self.animation {
+                Self::write_bin(&mut file, &(frame.len() as i32))?;
+                Self::write_array(&mut file, &frame)?;
             }
             file.flush()?;
         }
@@ -241,6 +268,10 @@ impl DebugFile {
     fn knowledge_glyph(entity: &EntityKnowledge) -> Glyph {
         let sneaking = entity.species.human() && entity.sneaking;
         if sneaking { Glyph::wide('e') } else { entity.species.glyph }
+    }
+
+    fn underlying_glyph(cell: &Cell) -> Glyph {
+        if let Some(x) = cell.items.last() { show_item(x) } else { cell.tile.glyph }
     }
 }
 
