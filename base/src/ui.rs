@@ -1202,6 +1202,7 @@ impl UI {
         let known = effect.map(|x| x.known).unwrap_or(&*me.known);
         let is_source = effect.map(|x| x.sources.contains(&point)).unwrap_or(false);
         let is_target = effect.map(|x| x.targets.contains(&point)).unwrap_or(false);
+        let is_source = is_source && !is_target;
 
         let cell = known.get(point);
         let source = me.known.get(point).source();

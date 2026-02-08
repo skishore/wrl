@@ -426,8 +426,13 @@ impl Board {
             },
             &ParticleData::Shift(mut source) => {
                 let mut target = x.point;
-                if !active { std::mem::swap(&mut source, &mut target); }
-                let eid = self.get_cell(source).eid.unwrap();
+                if source == target { return; }
+
+                if !active { swap(&mut source, &mut target); }
+
+                let None = self.get_cell(target).eid else { return };
+                let Some(eid) = self.get_cell(source).eid else { return };
+
                 self.move_entity(eid, target);
             },
             ParticleData::Sight(..) => {},
@@ -886,8 +891,8 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let color = 0x0080ff;
             let board = &mut state.board;
             let effect = Effect::serial(vec![
-                apply_flash(target, color, None),
-                apply_flash(source, color, None).delay(UI_FLASH / 2),
+                flash_tile(target, color, None),
+                flash_entity(source, color).delay(UI_FLASH / 2),
             ]);
             board.add_effect(effect, &mut state.env);
             ActionResult::success()
@@ -911,8 +916,8 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 board.remove_item(target, item);
             });
             let effect = Effect::serial(vec![
-                apply_flash(target, color, Some(cb)),
-                apply_flash(source, color, None).delay(UI_FLASH / 2),
+                flash_tile(target, color, Some(cb)),
+                flash_entity(source, color).delay(UI_FLASH / 2),
             ]);
             board.add_effect(effect, &mut state.env);
             ActionResult::success()
@@ -1079,24 +1084,35 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
 // Animation
 
-fn apply_flash<T: Into<Color>>(target: Point, color: T, cb: Option<CB>) -> Effect {
-    let particle = Particle::flash(target, color.into());
-    let mut effect = Effect::constant(particle, UI_FLASH);
+fn flash_entity<T: Into<Color>>(target: Point, color: T) -> Effect {
+    let frame = vec![
+        Particle::shift(target, target),
+        Particle::flash(target, color.into()),
+    ];
+    Effect::repeat(frame, UI_FLASH)
+}
+
+fn flash_tile<T: Into<Color>>(target: Point, color: T, cb: Option<CB>) -> Effect {
+    let frame = vec![Particle::flash(target, color.into())];
+    let mut effect = Effect::repeat(frame, UI_FLASH);
     if let Some(x) = cb { effect.sub_on_finished(x); }
     effect
 }
 
-fn apply_noise<T: Into<Color>>(target: Point, color: T, volume: Bound) -> Effect {
-    let particle = Particle::noise(target, color.into(), volume);
-    Effect::constant(particle, UI_FLASH)
+fn apply_noise<T: Copy + Into<Color>>(target: Point, color: T, volume: Bound) -> Effect {
+    let frame = vec![Particle::noise(target, color.into(), volume)];
+    Effect::new(vec![frame]).scale(UI_FLASH as f64)
 }
 
 fn apply_damage(target: Point, cb: CB) -> Effect {
-    let particle = Particle::flash(target, 0xff0000.into());
-    let restored = Particle::dummy(target);
+    let dummy = vec![Particle::dummy(target)];
+    let frame = vec![
+        Particle::shift(target, target),
+        Particle::flash(target, 0xff0000.into()),
+    ];
     let mut effect = Effect::serial(vec![
-        Effect::constant(particle, UI_DAMAGE_FLASH),
-        Effect::constant(restored, UI_DAMAGE_TICKS),
+        Effect::repeat(frame, UI_DAMAGE_FLASH),
+        Effect::repeat(dummy, UI_DAMAGE_TICKS),
     ]);
     effect.sub_on_finished(cb);
     effect

@@ -58,7 +58,6 @@ impl Particle {
     }
 
     pub fn shift(source: Point, target: Point) -> Self {
-        if source == target { return Self::dummy(target); }
         Self { point: target, data: ParticleData::Shift(source) }
     }
 
@@ -130,6 +129,11 @@ impl Effect {
     }
 
     // Implementations for Effect::Constant, Effect::Pause, etc.
+
+    pub fn repeat(frame: Frame, n: i32) -> Effect {
+        if n <= 0 { return Effect::default(); }
+        Effect::new(vec![frame; n as usize])
+    }
 
     pub fn constant(particle: Particle, n: i32) -> Effect {
         if n <= 0 { return Effect::default(); }
