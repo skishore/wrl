@@ -201,8 +201,9 @@ impl FOV {
         vision.check_point(&VisionArgs { pos, dir, opacity_lookup }, point)
     }
 
-    fn can_see_entity_at(&mut self, board: &Board, me: &Entity, point: Point) -> bool {
+    fn can_see_entity(&mut self, board: &Board, me: &Entity, other: &Entity) -> bool {
         // If we can't see the cell at all, we can't see entities there.
+        let point = other.pos;
         if !self.can_see(board, me, point) { return false; }
 
         // Entities can't hide if we're adjacent to them.
@@ -211,7 +212,7 @@ impl FOV {
 
         // If they're hidden due to tall grass, then we can't see them.
         let cell = board.get_cell(point);
-        if cell.tile.is_cover() { return false; }
+        if cell.tile.is_cover() && !other.too_big_to_hide() { return false; }
 
         // If they're hidden due to being in shadow, we can't see them.
         let unlit = matches!(board.get_light(), Light::None);
@@ -554,24 +555,31 @@ impl Board {
     }
 
     fn observe_event(&mut self, eid: EID, s: &Senses, e: &mut Event, env: &mut UpdateEnv) {
-        let known = &mut env.known;
-        let entity = &mut self.entities[eid];
+        let Some(entity) = self.entities.get_mut(eid) else { return };
+
         let (heard, seen) = (s.heard(), s.seen() && !entity.player);
         if !heard && !seen { return; }
 
+        let known = &mut env.known;
         swap(known, &mut entity.known);
+
         e.sense = if seen { Sense::Sight } else { Sense::Sound };
         known.observe_event(&mut self.entities[eid], e);
+
         swap(known, &mut self.entities[eid].known);
     }
 
     fn remove_known_entity(&mut self, eid: EID, oid: EID) {
-        self.entities[eid].known.remove_entity(oid, self.time);
+        let Some(entity) = self.entities.get_mut(eid) else { return };
+
+        entity.known.remove_entity(oid, self.time);
     }
 
     fn update_known(&mut self, eid: EID, env: &mut UpdateEnv) {
+        let Some(entity) = self.entities.get_mut(eid) else { return };
+
         let UpdateEnv { known, fov, rng, .. } = env;
-        swap(known, &mut self.entities[eid].known);
+        swap(known, &mut entity.known);
 
         let me = &self.entities[eid];
         let vision = fov.compute(&self, me);
@@ -610,6 +618,8 @@ impl Board {
 
 // Event delivery
 
+type SenseMap = HashMap<EID, Senses>;
+
 const SENSE_SEEN: u8 = 1 << 0;
 const SENSE_HEARD: u8 = 1 << 1;
 
@@ -630,6 +640,7 @@ impl std::ops::BitOr for Senses {
 
 struct Noise {
     cause: Option<EID>,
+    check: Option<EID>,
     point: Point,
     volume: Bound,
 }
@@ -641,18 +652,36 @@ struct Sighting {
     target: Senses,
 }
 
-type SenseMap = HashMap<EID, Senses>;
+impl Noise {
+    fn from_eid(eid: EID, point: Point, volume: Bound) -> Self {
+        Self { cause: Some(eid), check: Some(eid), point, volume }
+    }
+
+    fn from_entity(entity: &Entity, volume: Bound) -> Self {
+        Self::from_eid(entity.eid, entity.pos, volume)
+    }
+
+    fn for_target(entity: &Entity, point: Point, volume: Bound, target: Option<EID>) -> Self {
+        Self { cause: Some(entity.eid), check: target, point, volume }
+    }
+}
 
 fn detect(board: &Board, noise: &Noise, env: &mut UpdateEnv) -> SenseMap {
-    let Noise { cause, point, volume } = *noise;
+    let Noise { cause, check, point, volume } = *noise;
     let mut result = SenseMap::default();
 
-    for (eid, entity) in &board.entities {
-        if cause == Some(eid) { continue; }
-        if entity.asleep && volume.radius == 1 && point != entity.pos { continue; }
+    let other = check.and_then(|x| board.entities.get(x));
 
-        let seen = env.fov.can_see_entity_at(board, entity, point);
-        let heard = volume.contains(point - entity.pos);
+    for (eid, me) in &board.entities {
+        if cause == Some(eid) { continue; }
+        if me.asleep && volume.radius == 1 && point != me.pos { continue; }
+
+        let seen = if let Some(other) = other {
+            env.fov.can_see_entity(board, me, other)
+        } else {
+            env.fov.can_see(board, me, point)
+        };
+        let heard = volume.contains(point - me.pos);
         if !seen && !heard { continue; }
 
         let seen = if seen { SENSE_SEEN } else { 0 };
@@ -710,14 +739,13 @@ fn hit_entity(board: &mut Board, env: &mut UpdateEnv, attack: &Attack, logged: b
     target.cur_hp = std::cmp::max(target.cur_hp - damage, 0);
     let fainted = target.cur_hp == 0;
 
+    let noise = Noise::from_entity(target, ATTACK_VOLUME);
+    let sightings = get_sightings(board, &noise, env);
+
     if fainted {
         board.remove_entity(tid);
         board.add_item(pos, Item::Corpse);
     }
-
-    let volume = ATTACK_VOLUME;
-    let noise = Noise { cause: Some(tid), point: pos, volume };
-    let sightings = get_sightings(board, &noise, env);
 
     for s in &sightings {
         let oid = s.eid;
@@ -860,9 +888,8 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
         Action::Rest => ActionResult::success(),
         Action::WaitForInput => ActionResult::failure(),
         Action::SniffAround => {
-            let (pos, color) = (entity.pos, 0xffff00);
+            let noise = Noise::from_entity(entity, SNIFF_VOLUME);
             let board = &mut state.board;
-            let noise = Noise { cause: Some(eid), point: source, volume: SNIFF_VOLUME };
             let sightings = get_sightings(board, &noise, &mut state.env);
 
             // Deliver a SniffEvent to each entity that heard the sniff.
@@ -872,7 +899,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 board.observe_event(s.eid, &s.merged, event, &mut state.env);
             }
 
-            let effect = apply_noise(pos, color, SNIFF_VOLUME);
+            let effect = apply_noise(source, 0xffff00, noise.volume);
             board.add_effect(effect, &mut state.env);
             ActionResult::success()
         }
@@ -898,7 +925,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             ActionResult::success()
         }
         Action::Eat(EatAction { target, item }) => {
-            let (source, dir) = (entity.pos, target - entity.pos);
+            let dir = target - source;
             if dir.len_l1() > 1 { return ActionResult::failure(); }
 
             entity.face_direction(dir);
@@ -924,8 +951,8 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
         }
         Action::Call(CallAction { call, look }) => {
             let species = entity.species;
+            let noise = Noise::from_entity(entity, CALL_VOLUME);
             let board = &mut state.board;
-            let noise = Noise { cause: Some(eid), point: source, volume: CALL_VOLUME };
             let sightings = get_sightings(board, &noise, &mut state.env);
 
             // Deliver a CallEvent to each entity that heard the call.
@@ -987,12 +1014,12 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                     board.time = board.time.bump();
 
                     let volume = if noisy { MOVE_VOLUME } else { SNEAK_VOLUME };
-                    let noise = Noise { cause: Some(eid), point: source, volume };
+                    let noise = Noise::from_eid(eid, source, volume);
                     let saw_source = detect(board, &noise, &mut state.env);
 
                     board.move_entity(eid, target);
 
-                    let noise = Noise { cause: Some(eid), point: target, volume };
+                    let noise = Noise::from_eid(eid, target, volume);
                     let saw_target = detect(board, &noise, &mut state.env);
                     let sightings = merge_views(board, &saw_source, &saw_target);
 
@@ -1023,14 +1050,14 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             board.time = board.time.bump();
 
             let volume = ATTACK_VOLUME;
-            let noise = Noise { cause: Some(eid), point: source, volume };
+            let noise = Noise::from_entity(entity, volume);
             let saw_source = detect(board, &noise, &mut state.env);
 
             let tid = board.get_cell(target).eid;
             let entity = &mut board.entities[eid];
             entity.face_direction(target - source);
 
-            let noise = Noise { cause: Some(eid), point: target, volume };
+            let noise = Noise::for_target(entity, target, volume, tid);
             let saw_target = detect(board, &noise, &mut state.env);
             let sightings = merge_views(board, &saw_source, &saw_target);
 
