@@ -983,21 +983,22 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                     ActionResult::failure()
                 }
                 Status::Free => {
-                    state.board.time = state.board.time.bump();
+                    let board = &mut state.board;
+                    board.time = board.time.bump();
 
                     let volume = if noisy { MOVE_VOLUME } else { SNEAK_VOLUME };
                     let noise = Noise { cause: Some(eid), point: source, volume };
-                    let saw_source = detect(&state.board, &noise, &mut state.env);
+                    let saw_source = detect(board, &noise, &mut state.env);
 
-                    state.board.move_entity(eid, target);
+                    board.move_entity(eid, target);
 
                     let noise = Noise { cause: Some(eid), point: target, volume };
-                    let saw_target = detect(&state.board, &noise, &mut state.env);
-                    let sightings = merge_views(&state.board, &saw_source, &saw_target);
+                    let saw_target = detect(board, &noise, &mut state.env);
+                    let sightings = merge_views(board, &saw_source, &saw_target);
 
                     // Deliver a MoveEvent to each entity that saw the move.
                     let data = EventData::Move(MoveEvent { from: source });
-                    let event = &mut state.board.create_event(eid, data, target);
+                    let event = &mut board.create_event(eid, data, target);
                     for s in &sightings {
                         state.board.observe_event(s.eid, &s.merged, event, &mut state.env);
                         if s.eid != state.player { continue; }
@@ -1011,31 +1012,32 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             }
         }
         Action::Attack(action) => {
-            let entity = &state.board.entities[eid];
+            let board = &mut state.board;
+            let entity = &board.entities[eid];
             let AttackAction { attack, target } = action;
-            if !can_attack(&state.board, entity, &action) {
-                state.board.entities[eid].face_direction(target - source);
+            if !can_attack(board, entity, &action) {
+                board.entities[eid].face_direction(target - source);
                 return ActionResult::failure();
             }
 
-            state.board.time = state.board.time.bump();
+            board.time = board.time.bump();
 
             let volume = ATTACK_VOLUME;
             let noise = Noise { cause: Some(eid), point: source, volume };
-            let saw_source = detect(&state.board, &noise, &mut state.env);
+            let saw_source = detect(board, &noise, &mut state.env);
 
-            let tid = state.board.get_cell(target).eid;
-            let entity = &mut state.board.entities[eid];
+            let tid = board.get_cell(target).eid;
+            let entity = &mut board.entities[eid];
             entity.face_direction(target - source);
 
             let noise = Noise { cause: Some(eid), point: target, volume };
-            let saw_target = detect(&state.board, &noise, &mut state.env);
-            let sightings = merge_views(&state.board, &saw_source, &saw_target);
+            let saw_target = detect(board, &noise, &mut state.env);
+            let sightings = merge_views(board, &saw_source, &saw_target);
 
             // Deliver the AttackEvent to each entity in the list.
             let combat = tid.is_some();
             let data = EventData::Attack(AttackEvent { combat, target: None });
-            let event = &mut state.board.create_event(eid, data, source);
+            let event = &mut board.create_event(eid, data, source);
             let mut logged = false;
             for s in &sightings {
                 let oid = s.eid;
@@ -1204,9 +1206,10 @@ fn update_state(state: &mut State) {
     if state.env.ui.update_target(player) { return; }
 
     while game_loop_active(state) {
-        let Some(eid) = advance_turn(&mut state.board) else { break };
+        let board = &mut state.board;
+        let Some(eid) = advance_turn(board) else { break };
 
-        let entity = &state.board.entities[eid];
+        let entity = &board.entities[eid];
         let player = entity.player;
         if player && needs_input(state) { break; }
 
@@ -1216,23 +1219,23 @@ fn update_state(state: &mut State) {
         let result = act(state, eid, action);
         if player && !result.success { break; }
 
-        let Some(entity) = state.board.entities.get_mut(eid) else { continue };
+        let board = &mut state.board;
+        let Some(entity) = board.entities.get_mut(eid) else { continue };
 
         let Entity { pos, speed, .. } = *entity;
         entity.known.mark_turn_boundary(player, speed);
 
-        let time = state.board.time.bump();
-        state.board.time = time;
+        board.time = board.time.bump();
 
         let trail = &mut entity.trail;
         if trail.len() == trail.capacity() { trail.pop_back(); }
-        trail.push_front(Scent { pos, time });
+        trail.push_front(Scent { pos, time: board.time });
 
-        state.board.active_entity = None;
+        board.active_entity = None;
         drain(entity, &result);
 
         let pov = state.player;
-        state.board.start_effect(pov, &mut state.env);
+        board.start_effect(pov, &mut state.env);
     }
     if update { update_player_knowledge(state); }
 }
