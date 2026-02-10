@@ -7,7 +7,7 @@ use rand_distr::{Distribution, Normal};
 use rand_distr::num_traits::Pow;
 
 use crate::{act, cb, cond, pri, run, seq, util};
-use crate::base::{Bound, LOS, Point, RNG, dirs, sample, weighted};
+use crate::base::{Bound, HashMap, LOS, Point, RNG, dirs, sample, weighted};
 use crate::bhv::{Bhv, Result};
 use crate::debug::{DebugFile, DebugLine, DebugLog};
 use crate::entity::Entity;
@@ -94,6 +94,8 @@ struct Blackboard {
     hunger: bool,
     thirst: bool,
     weary_: bool,
+
+    last_seen: HashMap<PathKind, Point>,
 }
 
 impl Blackboard {
@@ -129,6 +131,8 @@ impl Blackboard {
             hunger: false,
             thirst: false,
             weary_: rng.random_bool(0.5),
+
+            last_seen: HashMap::default(),
         }
     }
 
@@ -151,6 +155,14 @@ impl Blackboard {
             debug.append(format!("path: {:?}", self.path.kind));
             debug.newline();
         });
+
+        debug.append("LastSeen:");
+        debug.indent(1, |debug| {
+            let mut items: Vec<_> = self.last_seen.iter().collect();
+            items.sort_by_key(|x| *x.0 as i32);
+            for (&k, &v) in items { debug.append(format!("{:?}: {:?}", k, v)); }
+        });
+        debug.newline();
 
         if let Some(x) = &self.flight {
             debug.append("Flight:");
@@ -498,6 +510,38 @@ fn ForceThreatState(ctx: &mut Ctx, state: FightOrFlight) {
 
 //////////////////////////////////////////////////////////////////////////////
 
+// Last-seen cache:
+
+#[allow(non_snake_case)]
+fn UpdateLastSeen<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> Result {
+    for cell in &ctx.known.cells {
+        if !cell.visible { break; }
+        if !valid(ctx, cell.point) { continue; }
+        ctx.blackboard.last_seen.insert(kind, cell.point);
+        return Result::Success;
+    }
+
+    let Some(&last) = ctx.blackboard.last_seen.get(&kind) else { return Result::Failed };
+
+    if valid(ctx, last) { return Result::Running; }
+
+    ctx.blackboard.last_seen.remove(&kind);
+    Result::Failed
+}
+
+#[allow(non_snake_case)]
+fn CheckLastSeen(ctx: &mut Ctx, kind: PathKind) -> bool {
+    ctx.blackboard.last_seen.contains_key(&kind)
+}
+
+#[allow(non_snake_case)]
+fn ClearLastSeen(ctx: &mut Ctx, kind: PathKind) -> Result {
+    ctx.blackboard.last_seen.remove(&kind);
+    Result::Failed
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 // Wandering:
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -622,7 +666,7 @@ fn WarnOffThreats(ctx: &mut Ctx) -> Option<Action> {
 
 // Pathfinding:
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 enum PathKind {
     Enemy,
     Hide,
@@ -1368,6 +1412,7 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
 // TODO list:
 //
 //  - Last-seen cache for cells satisfying a need, to skip repeated searches.
+//    We have this cache, now, but we should add a "last failed" time too.
 //
 //  - Periodically re-plan a path to a need if there is a closer one?
 //
@@ -1427,12 +1472,17 @@ fn AttackOrFollowPath(kind: PathKind) -> impl Bhv {
 }
 
 macro_rules! path {
-    ($k:expr, $v:expr, $f:expr) => {
-        crate::bhv::Node::new((), crate::bhv::Composite::new(
-            crate::bhv::PriPolicy {},
-            seq!["FollowExistingPath", cond!("CheckPath", |x| CheckPathTarget(x, $k, $v)), $f],
-            seq!["FindNewPath", cond!("FindPath", |x| FindNeed(x, $k, $v)), $f],
-        ))
+    ($n:expr, $k:expr, $v:expr, $f:expr) => {
+        seq![
+            concat!("Find(", $n, ")"),
+            cond!("CheckLastSeen", |x| CheckLastSeen(x, $k)),
+            pri![
+                concat!("PathTo(", $n, ")"),
+                seq!["FollowOldPath", cond!("CheckPath", |x| CheckPathTarget(x, $k, $v)), $f],
+                seq!["FindNewPath", cond!("FindPath", |x| FindNeed(x, $k, $v)), $f],
+                cb!("ClearLastSeen", |x| ClearLastSeen(x, $k)),
+            ],
+        ]
     };
 }
 
@@ -1442,7 +1492,7 @@ fn ForageForBerries() -> impl Bhv {
     pri![
         "ForageForBerries",
         act!("FindNearbyBerryTree", FindNearbyBerryTree),
-        path!(KIND, HasBerryTree, AttackOrFollowPath(KIND)),
+        path!("BerryTree", KIND, HasBerryTree, AttackOrFollowPath(KIND)),
     ]
 }
 
@@ -1452,7 +1502,7 @@ fn EatBerries() -> impl Bhv {
     pri![
         "EatBerries",
         act!("EatBerryNearby", EatBerryNearby),
-        path!(KIND, HasBerry, act!("FollowPath", |x| FollowPath(x, KIND))),
+        path!("Berry", KIND, HasBerry, act!("FollowPath", |x| FollowPath(x, KIND))),
     ]
 }
 
@@ -1469,7 +1519,7 @@ fn DrinkWater() -> impl Bhv {
     pri![
         "DrinkWater",
         act!("DrinkWaterNearby", DrinkWaterNearby),
-        path!(KIND, HasWater, act!("FollowPath", |x| FollowPath(x, KIND))),
+        path!("Water", KIND, HasWater, act!("FollowPath", |x| FollowPath(x, KIND))),
     ]
     .on_tick(|x| x.blackboard.finding_water = true)
     .on_exit(|x| x.blackboard.finding_water = false)
@@ -1481,7 +1531,7 @@ fn GetRest() -> impl Bhv {
     pri![
         "GetRest",
         act!("RestHere", RestHere),
-        path!(KIND, CanRestAt, act!("FollowPath", |x| FollowPath(x, KIND))),
+        path!("RestArea", KIND, CanRestAt, act!("FollowPath", |x| FollowPath(x, KIND))),
     ]
     .on_tick(|x| x.blackboard.getting_rest_ = true)
     .on_exit(|x| x.blackboard.getting_rest_ = false)
@@ -1548,8 +1598,8 @@ fn HuntSelectedTarget() -> impl Bhv {
         "HuntSelectedTarget",
         act!("AttackEnemy", AttackEnemy),
         act!("TrackPreyByScent", TrackEnemyByScent),
-        act!("Follow(Prey)", |x| FollowPath(x, PathKind::Enemy)),
-        act!("Search(Prey)", SearchForEnemy),
+        act!("Follow(Enemy)", |x| FollowPath(x, PathKind::Enemy)),
+        act!("Search(Enemy)", SearchForEnemy),
     ]
 }
 
@@ -1564,7 +1614,7 @@ fn HuntForMeat() -> impl Bhv {
             pri![
                 "EatMeat",
                 act!("EatMeatNearby", EatMeatNearby),
-                path!(KIND, HasMeat, act!("FollowPath", |x| FollowPath(x, KIND))),
+                path!("Meat", KIND, HasMeat, act!("FollowPath", |x| FollowPath(x, KIND))),
             ],
             seq![
                 "HuntForPrey",
@@ -1652,6 +1702,15 @@ fn Root() -> impl Bhv {
         "Root",
         cb!("TickBasicNeeds", TickBasicNeeds),
         cb!("RunCombatAnalysis", RunCombatAnalysis),
+        run!(
+            "UpdateLastSeen",
+            cb!("SpotMeat", |x| UpdateLastSeen(x, PathKind::Meat, HasMeat)),
+            cb!("SpotWater", |x| UpdateLastSeen(x, PathKind::Water, HasWater)),
+            cb!("SpotBerry", |x| UpdateLastSeen(x, PathKind::Berry, HasBerry)),
+            cb!("SpotBerryTree", |x| UpdateLastSeen(x, PathKind::BerryTree, HasBerryTree)),
+            cb!("SpotRestArea", |x| UpdateLastSeen(x, PathKind::Rest, CanRestAt)),
+            cb!("Fail", |_| Result::Failed),
+        ),
         FightOrFlight(),
         HuntForMeat(),
         LookForTarget(),
