@@ -334,7 +334,7 @@ macro_rules! pri {
         use $crate::bhv::{Composite, Node, PriPolicy};
         Node::new($name, Composite::new(PriPolicy {}, $x, pri![@go () $(,$xs)+]))
     }};
-    ($name:literal $(,$xs:expr)+ $(,)?) => { pri![@go concat!("? ", $name) $(,$xs)+] };
+    ($name:expr $(,$xs:expr)+ $(,)?) => { pri![@go concat!("? ", $name) $(,$xs)+] };
 }
 
 #[macro_export]
@@ -344,7 +344,7 @@ macro_rules! run {
         use $crate::bhv::{Composite, Node, RunPolicy};
         Node::new($name, Composite::new(RunPolicy {}, $x, run![@go () $(,$xs)+]))
     }};
-    ($name:literal $(,$xs:expr)+ $(,)?) => { run![@go concat!("* ", $name) $(,$xs)+] };
+    ($name:expr $(,$xs:expr)+ $(,)?) => { run![@go concat!("* ", $name) $(,$xs)+] };
 }
 
 #[macro_export]
@@ -354,5 +354,5 @@ macro_rules! seq {
         use $crate::bhv::{Composite, Node, SeqPolicy};
         Node::new($name, Composite::new(SeqPolicy {}, $x, seq![@go () $(,$xs)+]))
     }};
-    ($name:literal $(,$xs:expr)+ $(,)?) => { seq![@go concat!("> ", $name) $(,$xs)+] };
+    ($name:expr $(,$xs:expr)+ $(,)?) => { seq![@go concat!("> ", $name) $(,$xs)+] };
 }
