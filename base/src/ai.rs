@@ -643,7 +643,7 @@ fn WarnOffThreats(ctx: &mut Ctx) -> Option<Action> {
     for threat in &mut threats.threats {
         if threat.time <= limit { break; }
 
-        if !threat.unknown() { continue; }
+        if !threat.uncertain() { continue; }
         if !CALL_VOLUME.contains(threat.pos - pos) { continue; }
 
         let warn = !stare && threat.time > bb.last_warning;
@@ -1715,7 +1715,7 @@ fn Root() -> impl Bhv {
         HuntForMeat(),
         LookForTarget(),
         act!("WarnOffThreats", WarnOffThreats),
-        //InvestigateNoises(),
+        InvestigateNoises(),
         InvestigateScents(),
         Wander(),
     ]

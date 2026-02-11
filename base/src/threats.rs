@@ -22,7 +22,7 @@ pub const CALL_RETRY_TURNS: i32 = 16;
 // Threat
 
 #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-enum Confidence { Low, Mid, High }
+enum Confidence { Zero, Low, Mid, High }
 
 #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Valence { Friendly, Neutral, Menacing, Hostile }
@@ -75,7 +75,7 @@ impl Threat {
             warnings: 0,
 
             // See status accessors:
-            confidence: Confidence::Low,
+            confidence: Confidence::Zero,
             valence: Valence::Neutral,
         }
     }
@@ -119,8 +119,12 @@ impl Threat {
         self.confidence == Confidence::High
     }
 
-    pub fn unknown(&self) -> bool {
+    pub fn uncertain(&self) -> bool {
         self.confidence == Confidence::Low
+    }
+
+    pub fn unknown(&self) -> bool {
+        self.confidence == Confidence::Zero
     }
 
     pub fn mark_warned(&mut self, rng: &mut RNG) {
@@ -331,7 +335,7 @@ impl ThreatState {
 
             let menacing = x.menacing();
             let hostile = x.hostile();
-            let unknown = x.unknown();
+            let unknown = x.unknown() || x.uncertain();
             let foe = hostile || menacing;
 
             if foe { self.menacing.push(x.clone()); }
@@ -363,6 +367,7 @@ impl ThreatState {
             self.hostile.extend_from_slice(&self.unknown);
             self.hostile.sort_by_key(|x| me.known.time - x.time);
         }
+        self.unknown.retain(|x| x.unknown());
 
         let strength = |x: &Threat| {
             if x.human { 0. } else { 1.75f64.powi(x.delta.signum()) * x.hp }
