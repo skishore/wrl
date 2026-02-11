@@ -85,8 +85,6 @@ struct Blackboard {
     till_weary_: i32,
 
     chasing_enemy: bool,
-    chasing_prey_: bool,
-    chasing_scent: bool,
     finding_food_: bool,
     finding_water: bool,
     getting_rest_: bool,
@@ -122,8 +120,6 @@ impl Blackboard {
             till_weary_: rng.random_range(0..MAX_WEARY_),
 
             chasing_enemy: false,
-            chasing_prey_: false,
-            chasing_scent: false,
             finding_food_: false,
             finding_water: false,
             getting_rest_: false,
@@ -1074,7 +1070,7 @@ struct ChaseTarget {
 #[allow(non_snake_case)]
 fn CleanupChaseState(ctx: &mut Ctx) {
     let bb = &mut ctx.blackboard;
-    if bb.chasing_enemy || bb.chasing_prey_ || bb.chasing_scent { return; }
+    if std::mem::take(&mut bb.chasing_enemy) { return; }
 
     let chasing = bb.path.kind == PathKind::Enemy;
     if chasing { bb.path = Default::default(); }
@@ -1566,8 +1562,6 @@ fn InvestigateScents() -> impl Bhv {
         HuntSelectedTarget(),
     ]
     .on_tick(ClearTargets)
-    .on_tick(|x| x.blackboard.chasing_scent = true)
-    .on_exit(|x| x.blackboard.chasing_scent = false)
 }
 
 #[allow(non_snake_case)]
@@ -1601,6 +1595,7 @@ fn HuntSelectedTarget() -> impl Bhv {
         act!("Follow(Enemy)", |x| FollowPath(x, PathKind::Enemy)),
         act!("Search(Enemy)", SearchForEnemy),
     ]
+    .on_running(|x| x.blackboard.chasing_enemy = true)
 }
 
 #[allow(non_snake_case)]
@@ -1628,8 +1623,6 @@ fn HuntForMeat() -> impl Bhv {
                 HuntSelectedTarget(),
             ]
             .on_tick(ClearTargets)
-            .on_tick(|x| x.blackboard.chasing_prey_ = true)
-            .on_exit(|x| x.blackboard.chasing_prey_ = false)
         ],
     ]
 }
@@ -1648,8 +1641,6 @@ fn FightAgainstThreats() -> impl Bhv {
     ]
     .on_tick(ClearTargets)
     .on_tick(|x| ForceThreatState(x, FightOrFlight::Fight))
-    .on_tick(|x| x.blackboard.chasing_enemy = true)
-    .on_exit(|x| x.blackboard.chasing_enemy = false)
 }
 
 #[allow(non_snake_case)]

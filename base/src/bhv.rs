@@ -50,6 +50,10 @@ impl<S: Label, T: Bhv> Node<S, T> {
         Node::new(self.label, OnTick(f, self.tree))
     }
 
+    pub fn on_running<F: Fn(&mut Ctx) -> ()>(self, f: F) -> Node<S, OnRunning<F, T>> {
+        Node::new(self.label, OnRunning(f, self.tree))
+    }
+
     pub fn post_tick<F: Fn(&mut Ctx) -> ()>(self, f: F) -> Node<S, PostTick<F, T>> {
         Node::new(self.label, PostTick(f, self.tree))
     }
@@ -109,6 +113,18 @@ impl<S: Fn(&mut Ctx) -> (), T: Bhv> Bhv for OnTick<S, T> {
     fn debug(&self, debug: &mut DebugLog) { self.1.debug(debug) }
     fn reset(&mut self, ctx: &mut Ctx) { self.1.reset(ctx) }
     fn tick(&mut self, ctx: &mut Ctx) -> Result { (self.0)(ctx); self.1.tick(ctx) }
+}
+
+pub struct OnRunning<S, T>(S, T);
+
+impl<S: Fn(&mut Ctx) -> (), T: Bhv> Bhv for OnRunning<S, T> {
+    fn debug(&self, debug: &mut DebugLog) { self.1.debug(debug) }
+    fn reset(&mut self, ctx: &mut Ctx) { self.1.reset(ctx) }
+    fn tick(&mut self, ctx: &mut Ctx) -> Result {
+        let result = self.1.tick(ctx);
+        if result == Result::Running { (self.0)(ctx); }
+        result
+    }
 }
 
 pub struct PostTick<S, T>(S, T);
