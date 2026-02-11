@@ -7,7 +7,7 @@ use rand_distr::{Distribution, Normal};
 use rand_distr::num_traits::Pow;
 
 use crate::{act, cb, cond, pri, run, seq, util};
-use crate::base::{Bound, HashMap, LOS, Point, RNG, dirs, sample, weighted};
+use crate::base::{Bound, HashMap, LOS, Point, RNG, clamp, dirs, sample, weighted};
 use crate::bhv::{Bhv, Result};
 use crate::debug::{DebugFile, DebugLine, DebugLog};
 use crate::entity::Entity;
@@ -40,6 +40,8 @@ const MAX_ASSESS: i32 = 32;
 const MAX_HUNGER: i32 = 1024;
 const MAX_THIRST: i32 = 256;
 const MAX_WEARY_: i32 = 4096;
+
+const HUNGRY_FOR_MEAT: i32 = MAX_HUNGER / 2;
 
 const ASSESS_GAIN: RangeInclusive<i32> = (MAX_ASSESS / 2)..=MAX_ASSESS;
 const HUNGER_GAIN: RangeInclusive<i32> = (MAX_HUNGER / 4)..=(MAX_HUNGER / 2);
@@ -78,27 +80,23 @@ struct Blackboard {
     turn_time: Timestamp,
     last_warning: Timestamp,
 
-    // Basic needs:
-    till_assess: i32,
-    till_hunger: i32,
-    till_thirst: i32,
-    till_weary_: i32,
+    // Timers:
+    assess: Timer,
+    hunger: Timer,
+    thirst: Timer,
+    weariness: Timer,
 
     chasing_enemy: bool,
     finding_food_: bool,
     finding_water: bool,
     getting_rest_: bool,
 
-    hunger: bool,
-    thirst: bool,
-    weary_: bool,
-
     last_seen: HashMap<PathKind, Point>,
 }
 
 impl Blackboard {
     fn new(rng: &mut RNG) -> Self {
-        Self {
+        let mut result = Self {
             dirs: Default::default(),
             path: Default::default(),
             threats: Default::default(),
@@ -114,22 +112,20 @@ impl Blackboard {
             last_warning: Timestamp::default(),
 
             // Basic needs:
-            till_assess: rng.random_range(0..MAX_ASSESS),
-            till_hunger: rng.random_range(0..MAX_HUNGER),
-            till_thirst: rng.random_range(0..MAX_THIRST),
-            till_weary_: rng.random_range(0..MAX_WEARY_),
+            assess: Timer::new(rng, MAX_ASSESS),
+            hunger: Timer::new(rng, MAX_HUNGER),
+            thirst: Timer::new(rng, MAX_THIRST),
+            weariness: Timer::new(rng, MAX_WEARY_),
 
             chasing_enemy: false,
             finding_food_: false,
             finding_water: false,
             getting_rest_: false,
 
-            hunger: false,
-            thirst: false,
-            weary_: rng.random_bool(0.5),
-
             last_seen: HashMap::default(),
-        }
+        };
+        result.weariness.active = rng.random_bool(0.5);
+        result
     }
 
     fn debug(&self, debug: &mut DebugLog, known: &Knowledge) {
@@ -139,20 +135,32 @@ impl Blackboard {
             debug.append(format!("last_warning: {}", known.debug_time(self.last_warning)));
             debug.append(format!("finding_food_: {}", self.finding_food_));
             debug.append(format!("finding_water: {}", self.finding_water));
-            debug.append(format!("till_assess: {} / {}", self.till_assess, MAX_ASSESS));
-            debug.append(format!("till_hunger: {} / {}{}", self.till_hunger, MAX_HUNGER,
-                                 if self.hunger { " (hungry)" } else { "" }));
-            debug.append(format!("till_thirst: {} / {}{}", self.till_thirst, MAX_THIRST,
-                                 if self.thirst { " (thirsty)" } else { "" }));
-            debug.append(format!("till_weary_: {} / {}{}", self.till_weary_, MAX_WEARY_,
-                                 if self.weary_ { " (weary)" } else { "" }));
             debug.append(format!("dirs: {:?} ({} items)",
                                  self.dirs.kind, self.dirs.dirs.len()));
             debug.append(format!("path: {:?}", self.path.kind));
             debug.newline();
         });
 
-        debug.append("LastSeen:");
+        debug.append("Timers:");
+        debug.indent(1, |debug| {
+            let mut show = |prefix: &str, timer: &Timer| {
+                let width = 20;
+                let Timer { active, cur, max } = *timer;
+                let count = (width as f64 * cur as f64 / max as f64).round() as usize;
+                let eq = '='.to_string().repeat(count);
+                let sp = ' '.to_string().repeat(width - count);
+                let suffix = if active { " *" } else { "" };
+                debug.append(format!("{}[{}{}] {} / {}{}", prefix, eq, sp, cur, max, suffix));
+                if active && let Some(x) = debug.lines.last_mut() { x.color = 0x80c0ff.into() }
+            };
+            show("assess:    ", &self.assess);
+            show("hunger:    ", &self.hunger);
+            show("thirst:    ", &self.thirst);
+            show("weariness: ", &self.weariness);
+        });
+        debug.newline();
+
+        debug.append("Last seen:");
         debug.indent(1, |debug| {
             let mut items: Vec<_> = self.last_seen.iter().collect();
             items.sort_by_key(|x| *x.0 as i32);
@@ -474,19 +482,11 @@ fn TickBasicNeeds(ctx: &mut Ctx) -> Result {
     bb.prev_time = bb.turn_time;
     bb.turn_time = ctx.entity.known.time;
 
-    if !entity.asleep {
-        bb.till_assess = max(bb.till_assess - 1, 0);
-        bb.till_hunger = max(bb.till_hunger - 1, 0);
-        bb.till_thirst = max(bb.till_thirst - 1, 0);
-        bb.till_weary_ = max(bb.till_weary_ - 1, 0);
-    }
-
-    if bb.till_hunger < MAX_HUNGER / 8 { bb.hunger = true; }
-    if bb.till_thirst < MAX_THIRST / 8 { bb.thirst = true; }
-    if bb.till_weary_ < MAX_WEARY_ / 8 { bb.weary_ = true; }
-    if bb.till_hunger >= 7 * MAX_HUNGER / 8 { bb.hunger = false; }
-    if bb.till_thirst >= 7 * MAX_THIRST / 8 { bb.thirst = false; }
-    if bb.till_weary_ >= 7 * MAX_WEARY_ / 8 { bb.weary_ = false; }
+    let delta = if entity.asleep { 0 } else { -1 };
+    bb.assess.update(delta);
+    bb.hunger.update(delta);
+    bb.thirst.update(delta);
+    bb.weariness.update(delta);
 
     Result::Failed
 }
@@ -538,6 +538,32 @@ fn ClearLastSeen(ctx: &mut Ctx, kind: PathKind) -> Result {
 
 //////////////////////////////////////////////////////////////////////////////
 
+// Timer:
+
+struct Timer {
+    active: bool,
+    cur: i32,
+    max: i32,
+}
+
+impl Timer {
+    fn new(rng: &mut RNG, max: i32) -> Self {
+        Self { active: false, cur: rng.random_range(0..=max), max }
+    }
+
+    fn percent(&self) -> i64 {
+        (100 * (self.max - self.cur) / max(self.max, 1)) as i64
+    }
+
+    fn update(&mut self, delta: i32) {
+        self.cur = clamp(self.cur + delta, 0, self.max);
+        if self.cur == self.max { self.active = false; }
+        if self.cur == 0 { self.active = true; }
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 // Wandering:
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -564,8 +590,8 @@ fn FollowDirs(ctx: &mut Ctx, kind: DirsKind) -> Option<Action> {
     let dir = bb.dirs.dirs.pop()?;
 
     if bb.dirs.dirs.is_empty() {
-        let gain = rng.random_range(ASSESS_GAIN);
-        bb.till_assess = min(bb.till_assess + gain, MAX_ASSESS);
+        bb.assess.update(rng.random_range(ASSESS_GAIN));
+        bb.assess.active = false;
     } else {
         bb.dirs.used = true;
     }
@@ -575,7 +601,7 @@ fn FollowDirs(ctx: &mut Ctx, kind: DirsKind) -> Option<Action> {
 #[allow(non_snake_case)]
 fn Assess(ctx: &mut Ctx) -> Option<Action> {
     let (bb, rng) = (&mut *ctx.blackboard, &mut *ctx.env.rng);
-    if bb.till_assess > 0 { return None; }
+    if !bb.assess.active { return None; }
 
     let kind = DirsKind::Assess;
     let dirs = assess_directions(&[ctx.dir], ASSESS_TURNS_EXPLORE, rng);
@@ -896,31 +922,28 @@ fn PathToTarget<F: Fn(Point) -> bool>(
 
 #[allow(non_snake_case)]
 fn HungryForMeat(ctx: &Ctx) -> bool {
-    ctx.entity.species.predator() && ctx.blackboard.till_hunger < MAX_HUNGER / 2
+    ctx.entity.species.predator() && ctx.blackboard.hunger.cur < HUNGRY_FOR_MEAT
 }
 
 #[allow(non_snake_case)]
-fn Hunger(x: &mut Ctx) -> i64 {
-    if !x.blackboard.hunger { return -1; }
-    if x.blackboard.finding_food_ { return 101; }
-    let (limit, value) = (MAX_HUNGER, x.blackboard.till_hunger);
-    (100 * (limit - value) / limit) as i64
+fn Hunger(ctx: &mut Ctx) -> i64 {
+    if !ctx.blackboard.hunger.active { return -1; }
+    if ctx.blackboard.finding_food_ { return 101; }
+    ctx.blackboard.hunger.percent()
 }
 
 #[allow(non_snake_case)]
-fn Thirst(x: &mut Ctx) -> i64 {
-    if !x.blackboard.thirst { return -1; }
-    if x.blackboard.finding_water { return 101; }
-    let (limit, value) = (MAX_THIRST, x.blackboard.till_thirst);
-    (100 * (limit - value) / limit) as i64
+fn Thirst(ctx: &mut Ctx) -> i64 {
+    if !ctx.blackboard.thirst.active { return -1; }
+    if ctx.blackboard.finding_water { return 101; }
+    ctx.blackboard.thirst.percent()
 }
 
 #[allow(non_snake_case)]
-fn Weariness(x: &mut Ctx) -> i64 {
-    if !x.blackboard.weary_ { return -1; }
-    if x.blackboard.getting_rest_ { return 101; }
-    let (limit, value) = (MAX_WEARY_, x.blackboard.till_weary_);
-    (100 * (limit - value) / limit) as i64
+fn Weariness(ctx: &mut Ctx) -> i64 {
+    if !ctx.blackboard.weariness.active { return -1; }
+    if ctx.blackboard.getting_rest_ { return 101; }
+    ctx.blackboard.weariness.percent()
 }
 
 #[allow(non_snake_case)]
@@ -999,7 +1022,8 @@ fn EatMeatNearby(ctx: &mut Ctx) -> Option<Action> {
     let target = ChooseNeighbor(ctx, PathKind::Meat, HasMeat)?;
     if !known.get(target).visible() { return Some(Action::Look(target - pos)); }
 
-    ctx.blackboard.till_hunger = MAX_HUNGER;
+    ctx.blackboard.hunger.update(MAX_HUNGER);
+
     Some(Action::Eat(EatAction { target, item: Some(Item::Corpse) }))
 }
 
@@ -1009,8 +1033,15 @@ fn EatBerryNearby(ctx: &mut Ctx) -> Option<Action> {
     let target = ChooseNeighbor(ctx, PathKind::Berry, HasBerry)?;
     if !known.get(target).visible() { return Some(Action::Look(target - pos)); }
 
+    let prev = ctx.blackboard.hunger.cur;
     let gain = ctx.env.rng.random_range(HUNGER_GAIN);
-    ctx.blackboard.till_hunger = min(ctx.blackboard.till_hunger + gain, MAX_HUNGER);
+    ctx.blackboard.hunger.update(gain);
+
+    if ctx.entity.species.predator() && ctx.blackboard.hunger.cur > HUNGRY_FOR_MEAT {
+        ctx.blackboard.hunger.cur = max(prev, HUNGRY_FOR_MEAT);
+        ctx.blackboard.hunger.active = false;
+    }
+
     Some(Action::Eat(EatAction { target, item: Some(Item::Berry) }))
 }
 
@@ -1021,7 +1052,8 @@ fn DrinkWaterNearby(ctx: &mut Ctx) -> Option<Action> {
     if !known.get(target).visible() { return Some(Action::Look(target - pos)); }
 
     let gain = ctx.env.rng.random_range(THIRST_GAIN);
-    ctx.blackboard.till_thirst = min(ctx.blackboard.till_thirst + gain, MAX_THIRST);
+    ctx.blackboard.thirst.update(gain);
+
     Some(Action::Drink(target))
 }
 
@@ -1044,7 +1076,8 @@ fn RestHere(ctx: &mut Ctx) -> Option<Action> {
     if !CanRestAt(ctx, ctx.pos) { return None; }
 
     let gain = ctx.env.rng.random_range(RESTED_GAIN);
-    ctx.blackboard.till_weary_ = min(ctx.blackboard.till_weary_ + gain, MAX_WEARY_);
+    ctx.blackboard.weariness.update(gain);
+
     Some(Action::Rest)
 }
 
@@ -1438,8 +1471,6 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
 //    chains of warnings over nothing. Investigate unseen sources instead.
 //
 //  - Push "if nowhere to look, look ahead" logic into assess_directions.
-//
-//  - Predators should never be satiated by just berries.
 //
 //  - If we can't path to a valid target, we repeatedly run the "scan last
 //    target direction" logic.
