@@ -1408,8 +1408,6 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
 //  - Only warn seen-but-unknown-valence sources. As is, we can have long
 //    chains of warnings over nothing. Investigate unseen sources instead.
 //
-//  - Push "if nowhere to look, look ahead" logic into assess_directions.
-//
 //  - If we can't path to a valid target, we repeatedly run the "scan last
 //    target direction" logic.
 //
