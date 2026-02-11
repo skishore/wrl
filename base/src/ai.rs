@@ -1,3 +1,5 @@
+#![allow(non_snake_case)]
+
 use std::cmp::{max, min};
 use std::f64::consts::TAU;
 use std::ops::RangeInclusive;
@@ -476,7 +478,6 @@ fn select_flight_target(ctx: &mut Ctx, hiding: bool) -> Option<Point> {
 
 // Basic state updates
 
-#[allow(non_snake_case)]
 fn TickBasicNeeds(ctx: &mut Ctx) -> Result {
     let (bb, entity) = (&mut *ctx.blackboard, ctx.entity);
     bb.prev_time = bb.turn_time;
@@ -491,14 +492,12 @@ fn TickBasicNeeds(ctx: &mut Ctx) -> Result {
     Result::Failed
 }
 
-#[allow(non_snake_case)]
 fn RunCombatAnalysis(ctx: &mut Ctx) -> Result {
     let (bb, entity) = (&mut *ctx.blackboard, ctx.entity);
     bb.threats.update(entity, bb.prev_time);
     Result::Failed
 }
 
-#[allow(non_snake_case)]
 fn ForceThreatState(ctx: &mut Ctx, state: FightOrFlight) {
     let threats = &mut ctx.blackboard.threats;
     if threats.state != FightOrFlight::Safe { threats.state = state; }
@@ -508,7 +507,6 @@ fn ForceThreatState(ctx: &mut Ctx, state: FightOrFlight) {
 
 // Last-seen cache:
 
-#[allow(non_snake_case)]
 fn UpdateLastSeen<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> Result {
     for cell in &ctx.known.cells {
         if !cell.visible { break; }
@@ -525,12 +523,10 @@ fn UpdateLastSeen<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> 
     Result::Failed
 }
 
-#[allow(non_snake_case)]
 fn CheckLastSeen(ctx: &mut Ctx, kind: PathKind) -> bool {
     ctx.blackboard.last_seen.contains_key(&kind)
 }
 
-#[allow(non_snake_case)]
 fn ClearLastSeen(ctx: &mut Ctx, kind: PathKind) -> Result {
     ctx.blackboard.last_seen.remove(&kind);
     Result::Failed
@@ -576,14 +572,12 @@ struct CachedDirs {
     used: bool,
 }
 
-#[allow(non_snake_case)]
 fn CleanupDirs(ctx: &mut Ctx) {
     let dirs = &mut ctx.blackboard.dirs;
     if !dirs.used { *dirs = Default::default(); }
     dirs.used = false;
 }
 
-#[allow(non_snake_case)]
 fn FollowDirs(ctx: &mut Ctx, kind: DirsKind) -> Option<Action> {
     let (bb, rng) = (&mut *ctx.blackboard, &mut *ctx.env.rng);
     if bb.dirs.kind != kind { return None; }
@@ -598,7 +592,6 @@ fn FollowDirs(ctx: &mut Ctx, kind: DirsKind) -> Option<Action> {
     Some(Action::Look(dir))
 }
 
-#[allow(non_snake_case)]
 fn Assess(ctx: &mut Ctx) -> Option<Action> {
     let (bb, rng) = (&mut *ctx.blackboard, &mut *ctx.env.rng);
     if !bb.assess.active { return None; }
@@ -609,14 +602,12 @@ fn Assess(ctx: &mut Ctx) -> Option<Action> {
     FollowDirs(ctx, kind)
 }
 
-#[allow(non_snake_case)]
 fn Explore(ctx: &mut Ctx) -> Option<Action> {
     let kind = PathKind::Explore;
     let target = select_explore_target(ctx)?;
     if FindPath(ctx, target, kind) { FollowPath(ctx, kind) } else { None }
 }
 
-#[allow(non_snake_case)]
 fn HeardUnknownNoise(ctx: &mut Ctx) -> bool {
     let bb = &mut ctx.blackboard;
     if bb.threats.unknown.is_empty() { return false; }
@@ -627,7 +618,6 @@ fn HeardUnknownNoise(ctx: &mut Ctx) -> bool {
     true
 }
 
-#[allow(non_snake_case)]
 fn LookForLastTarget(ctx: &mut Ctx) -> Option<Action> {
     let (bb, rng) = (&mut *ctx.blackboard, &mut *ctx.env.rng);
     if !bb.had_target { return None; }
@@ -638,7 +628,6 @@ fn LookForLastTarget(ctx: &mut Ctx) -> Option<Action> {
     FollowDirs(ctx, kind)
 }
 
-#[allow(non_snake_case)]
 fn LookForNoises(ctx: &mut Ctx) -> Option<Action> {
     let threats = &ctx.blackboard.threats;
     let (pos, rng) = (ctx.pos, &mut ctx.env.rng);
@@ -653,7 +642,6 @@ fn LookForNoises(ctx: &mut Ctx) -> Option<Action> {
     FollowDirs(ctx, kind)
 }
 
-#[allow(non_snake_case)]
 fn WarnOffThreats(ctx: &mut Ctx) -> Option<Action> {
     let bb = &mut ctx.blackboard;
     let (known, pos) = (ctx.known, ctx.pos);
@@ -710,7 +698,6 @@ struct CachedPath {
     step: usize,
 }
 
-#[allow(non_snake_case)]
 fn AStarHelper(ctx: &mut Ctx, target: Point, kind: PathKind) -> Option<Vec<Point>> {
     // Try using A* to find the best path:
     let source = ctx.pos;
@@ -755,7 +742,6 @@ fn AStarHelper(ctx: &mut Ctx, target: Point, kind: PathKind) -> Option<Vec<Point
     Some(path)
 }
 
-#[allow(non_snake_case)]
 fn FindPath(ctx: &mut Ctx, target: Point, kind: PathKind) -> bool {
     ensure_vision(ctx);
     let path = AStarHelper(ctx, target, kind);
@@ -770,7 +756,6 @@ fn FindPath(ctx: &mut Ctx, target: Point, kind: PathKind) -> bool {
     true
 }
 
-#[allow(non_snake_case)]
 fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
     if ctx.blackboard.path.kind != kind { return None; }
 
@@ -831,14 +816,12 @@ fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
 
 // Attacking:
 
-#[allow(non_snake_case)]
 fn AttackPathTarget(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
     if ctx.blackboard.path.kind != kind { return None; }
     let target = *ctx.blackboard.path.path.last()?;
     AttackTarget(ctx, target)
 }
 
-#[allow(non_snake_case)]
 fn AttackTarget(ctx: &mut Ctx, target: Point) -> Option<Action> {
     let Ctx { entity, known, pos: source, .. } = *ctx;
     if !known.get(target).visible() { return None; }
@@ -855,7 +838,6 @@ fn AttackTarget(ctx: &mut Ctx, target: Point) -> Option<Action> {
     PathToTarget(ctx, target, attack.range, valid)
 }
 
-#[allow(non_snake_case)]
 fn CanAttackTarget(source: Point, target: Point, known: &Knowledge, range: Bound) -> bool {
     if !range.contains(source - target) { return false; }
     if source == target { return false; }
@@ -864,7 +846,6 @@ fn CanAttackTarget(source: Point, target: Point, known: &Knowledge, range: Bound
     los.iter().skip(1).rev().skip(1).all(|&p| known.get(p).status() == Status::Free)
 }
 
-#[allow(non_snake_case)]
 fn PathToTarget<F: Fn(Point) -> bool>(
         ctx: &mut Ctx, target: Point, range: Bound, valid: F) -> Option<Action> {
     let Ctx { known, pos: source, .. } = *ctx;
@@ -920,53 +901,44 @@ fn PathToTarget<F: Fn(Point) -> bool>(
 
 // Basic needs:
 
-#[allow(non_snake_case)]
 fn HungryForMeat(ctx: &Ctx) -> bool {
     ctx.entity.species.predator() && ctx.blackboard.hunger.cur < HUNGRY_FOR_MEAT
 }
 
-#[allow(non_snake_case)]
 fn Hunger(ctx: &mut Ctx) -> i64 {
     if !ctx.blackboard.hunger.active { return -1; }
     if ctx.blackboard.finding_food_ { return 101; }
     ctx.blackboard.hunger.percent()
 }
 
-#[allow(non_snake_case)]
 fn Thirst(ctx: &mut Ctx) -> i64 {
     if !ctx.blackboard.thirst.active { return -1; }
     if ctx.blackboard.finding_water { return 101; }
     ctx.blackboard.thirst.percent()
 }
 
-#[allow(non_snake_case)]
 fn Weariness(ctx: &mut Ctx) -> i64 {
     if !ctx.blackboard.weariness.active { return -1; }
     if ctx.blackboard.getting_rest_ { return 101; }
     ctx.blackboard.weariness.percent()
 }
 
-#[allow(non_snake_case)]
 fn HasMeat(ctx: &Ctx, point: Point) -> bool {
     ctx.known.get(point).cell().map(|x| x.items.contains(&Item::Corpse)).unwrap_or(false)
 }
 
-#[allow(non_snake_case)]
 fn HasBerry(ctx: &Ctx, point: Point) -> bool {
     ctx.known.get(point).cell().map(|x| x.items.contains(&Item::Berry)).unwrap_or(false)
 }
 
-#[allow(non_snake_case)]
 fn HasWater(ctx: &Ctx, point: Point) -> bool {
     ctx.known.get(point).cell().map(|x| x.tile.can_drink()).unwrap_or(false)
 }
 
-#[allow(non_snake_case)]
 fn HasBerryTree(ctx: &Ctx, point: Point) -> bool {
     ctx.known.get(point).cell().map(|x| x.tile.drops_berries()).unwrap_or(false)
 }
 
-#[allow(non_snake_case)]
 fn CanRestAt(ctx: &Ctx, point: Point) -> bool {
     if !is_hiding_place(ctx, point) { return false; }
     point == ctx.pos || ctx.known.get(point).status() == Status::Free
@@ -974,7 +946,6 @@ fn CanRestAt(ctx: &Ctx, point: Point) -> bool {
 
 trait CellPredicate = Fn(&Ctx, Point) -> bool;
 
-#[allow(non_snake_case)]
 fn FindNeed<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> bool {
     ensure_neighborhood(ctx);
 
@@ -985,7 +956,6 @@ fn FindNeed<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> bool {
     false
 }
 
-#[allow(non_snake_case)]
 fn CheckPathTarget<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> bool {
     if ctx.blackboard.path.kind != kind { return false; }
 
@@ -994,7 +964,6 @@ fn CheckPathTarget<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) ->
     okay
 }
 
-#[allow(non_snake_case)]
 fn ChooseNeighbor<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> Option<Point> {
     let Ctx { pos, dir, .. } = *ctx;
     let path = &ctx.blackboard.path;
@@ -1016,7 +985,6 @@ fn ChooseNeighbor<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> 
     Some(result)
 }
 
-#[allow(non_snake_case)]
 fn EatMeatNearby(ctx: &mut Ctx) -> Option<Action> {
     let Ctx { known, pos, .. } = *ctx;
     let target = ChooseNeighbor(ctx, PathKind::Meat, HasMeat)?;
@@ -1027,7 +995,6 @@ fn EatMeatNearby(ctx: &mut Ctx) -> Option<Action> {
     Some(Action::Eat(EatAction { target, item: Some(Item::Corpse) }))
 }
 
-#[allow(non_snake_case)]
 fn EatBerryNearby(ctx: &mut Ctx) -> Option<Action> {
     let Ctx { known, pos, .. } = *ctx;
     let target = ChooseNeighbor(ctx, PathKind::Berry, HasBerry)?;
@@ -1045,7 +1012,6 @@ fn EatBerryNearby(ctx: &mut Ctx) -> Option<Action> {
     Some(Action::Eat(EatAction { target, item: Some(Item::Berry) }))
 }
 
-#[allow(non_snake_case)]
 fn DrinkWaterNearby(ctx: &mut Ctx) -> Option<Action> {
     let Ctx { known, pos, .. } = *ctx;
     let target = ChooseNeighbor(ctx, PathKind::Water, HasWater)?;
@@ -1057,7 +1023,6 @@ fn DrinkWaterNearby(ctx: &mut Ctx) -> Option<Action> {
     Some(Action::Drink(target))
 }
 
-#[allow(non_snake_case)]
 fn FindNearbyBerryTree(ctx: &mut Ctx) -> Option<Action> {
     let Ctx { known, pos, .. } = *ctx;
     let (kind, valid) = (PathKind::BerryTree, HasBerryTree);
@@ -1071,7 +1036,6 @@ fn FindNearbyBerryTree(ctx: &mut Ctx) -> Option<Action> {
     if !known.get(target).visible() { Some(Action::Look(target - pos)) } else { None }
 }
 
-#[allow(non_snake_case)]
 fn RestHere(ctx: &mut Ctx) -> Option<Action> {
     if !CanRestAt(ctx, ctx.pos) { return None; }
 
@@ -1100,7 +1064,6 @@ struct ChaseTarget {
     target: Target,
 }
 
-#[allow(non_snake_case)]
 fn CleanupChaseState(ctx: &mut Ctx) {
     let bb = &mut ctx.blackboard;
     if std::mem::take(&mut bb.chasing_enemy) { return; }
@@ -1110,17 +1073,14 @@ fn CleanupChaseState(ctx: &mut Ctx) {
     bb.target = None;
 }
 
-#[allow(non_snake_case)]
 fn CleanupTarget(ctx: &mut Ctx) {
     ctx.blackboard.had_target = false;
 }
 
-#[allow(non_snake_case)]
 fn ClearTargets(ctx: &mut Ctx) {
     ctx.blackboard.options.clear();
 }
 
-#[allow(non_snake_case)]
 fn MarkSafeIfLostView(ctx: &mut Ctx) -> bool {
     if !ctx.blackboard.options.is_empty() { return false; }
     ctx.blackboard.threats.state = FightOrFlight::Safe;
@@ -1136,7 +1096,6 @@ macro_rules! check_time {
     }}
 }
 
-#[allow(non_snake_case)]
 fn ListThreatsBySight(ctx: &mut Ctx) -> bool {
     let initial = ctx.blackboard.options.len();
     for other in &ctx.blackboard.threats.hostile {
@@ -1149,7 +1108,6 @@ fn ListThreatsBySight(ctx: &mut Ctx) -> bool {
     ctx.blackboard.options.len() > initial
 }
 
-#[allow(non_snake_case)]
 fn ListPreyBySight(ctx: &mut Ctx) -> bool {
     let initial = ctx.blackboard.options.len();
     for other in &ctx.known.entities {
@@ -1163,7 +1121,6 @@ fn ListPreyBySight(ctx: &mut Ctx) -> bool {
     ctx.blackboard.options.len() > initial
 }
 
-#[allow(non_snake_case)]
 fn ListPreyBySound(ctx: &mut Ctx) -> bool {
     let initial = ctx.blackboard.options.len();
     for other in &ctx.blackboard.threats.threats {
@@ -1178,17 +1135,14 @@ fn ListPreyBySound(ctx: &mut Ctx) -> bool {
     ctx.blackboard.options.len() > initial
 }
 
-#[allow(non_snake_case)]
 fn ListPreyByScent(ctx: &mut Ctx) -> bool {
     ListTargetsByScent(ctx, |x| x.delta < 0)
 }
 
-#[allow(non_snake_case)]
 fn ListHumansByScent(ctx: &mut Ctx) -> bool {
     ListTargetsByScent(ctx, |x| x.species.human())
 }
 
-#[allow(non_snake_case)]
 fn ListTargetsByScent<F: Fn(&ScentEvent) -> bool>(ctx: &mut Ctx, f: F) -> bool {
     let initial = ctx.blackboard.options.len();
     if let Some(x) = &ctx.blackboard.target && let Some(s) = &x.target.scent && f(s) &&
@@ -1206,7 +1160,6 @@ fn ListTargetsByScent<F: Fn(&ScentEvent) -> bool>(ctx: &mut Ctx, f: F) -> bool {
     ctx.blackboard.options.len() > initial
 }
 
-#[allow(non_snake_case)]
 fn SelectBestTarget(ctx: &mut Ctx) -> bool {
     let options = &mut ctx.blackboard.options;
     if options.is_empty() { return false; }
@@ -1236,7 +1189,6 @@ fn SelectBestTarget(ctx: &mut Ctx) -> bool {
     true
 }
 
-#[allow(non_snake_case)]
 fn AttackEnemy(ctx: &mut Ctx) -> Option<Action> {
     let state = ctx.blackboard.target.as_ref()?;
     if state.target.sense == Sense::Smell { return None; }
@@ -1244,14 +1196,12 @@ fn AttackEnemy(ctx: &mut Ctx) -> Option<Action> {
     AttackTarget(ctx, state.target.last)
 }
 
-#[allow(non_snake_case)]
 fn TrackEnemyByScent(ctx: &mut Ctx) -> Option<Action> {
     let state = ctx.blackboard.target.as_ref()?;
     if !state.fresh || state.target.sense != Sense::Smell { return None; }
     Some(Action::SniffAround)
 }
 
-#[allow(non_snake_case)]
 fn SearchForEnemy(ctx: &mut Ctx) -> Option<Action> {
     let Ctx { known, pos, .. } = *ctx;
     let target = select_chase_target(ctx)?;
@@ -1277,20 +1227,17 @@ struct FlightState {
     turn_limit: i32,
 }
 
-#[allow(non_snake_case)]
 fn CheckFlightLimit(ctx: &mut Ctx) -> bool {
     let Some(x) = &ctx.blackboard.flight else { return false };
     x.since_seen >= x.turn_limit
 }
 
-#[allow(non_snake_case)]
 fn ClearFlightPath(ctx: &mut Ctx) -> Result {
     let Some(x) = &mut ctx.blackboard.flight else { return Result::Failed };
     x.needs_path = false;
     Result::Failed
 }
 
-#[allow(non_snake_case)]
 fn ClearFlightState(ctx: &mut Ctx) {
     let bb = &mut ctx.blackboard;
     let fleeing = bb.path.kind == PathKind::Hide || bb.path.kind == PathKind::Flee;
@@ -1301,7 +1248,6 @@ fn ClearFlightState(ctx: &mut Ctx) {
     bb.flight = None;
 }
 
-#[allow(non_snake_case)]
 fn UpdateFlightState(ctx: &mut Ctx) -> bool {
     let bb = &mut ctx.blackboard;
     let prev = bb.flight.take();
@@ -1342,7 +1288,6 @@ fn UpdateFlightState(ctx: &mut Ctx) -> bool {
     true
 }
 
-#[allow(non_snake_case)]
 fn LookForThreats(ctx: &mut Ctx) -> Option<Action> {
     let threats = &ctx.blackboard.threats.menacing;
     let (pos, rng, time) = (ctx.pos, &mut *ctx.env.rng, ctx.known.time);
@@ -1365,7 +1310,6 @@ fn LookForThreats(ctx: &mut Ctx) -> Option<Action> {
     FollowDirs(ctx, kind)
 }
 
-#[allow(non_snake_case)]
 fn FleeToLocation(ctx: &mut Ctx, target: Point, kind: PathKind) -> Result {
     if target == ctx.pos { return Result::Success; }
 
@@ -1375,7 +1319,6 @@ fn FleeToLocation(ctx: &mut Ctx, target: Point, kind: PathKind) -> Result {
     ctx.choose_action(action)
 }
 
-#[allow(non_snake_case)]
 fn HideFromThreats(ctx: &mut Ctx) -> Result {
     let check = get_sneak_check(ctx);
     ctx.sneakable = DijkstraMap(ctx.pos, check, HIDING_CELLS, HIDING_LIMIT);
@@ -1385,7 +1328,6 @@ fn HideFromThreats(ctx: &mut Ctx) -> Result {
     FleeToLocation(ctx, target, PathKind::Hide)
 }
 
-#[allow(non_snake_case)]
 fn FleeFromThreats(ctx: &mut Ctx) -> Result {
     ensure_neighborhood(ctx);
     let target = select_flight_target(ctx, /*hiding=*/false);
@@ -1398,14 +1340,12 @@ fn FleeFromThreats(ctx: &mut Ctx) -> Result {
 
 // Fight-or-flight:
 
-#[allow(non_snake_case)]
 fn CallStrength(ctx: &mut Ctx) -> i64 {
     if ctx.blackboard.threats.hostile.is_empty() { return -1; }
 
     if ctx.blackboard.threats.call_for_help { 2 } else { -1 }
 }
 
-#[allow(non_snake_case)]
 fn FightStrength(ctx: &mut Ctx) -> i64 {
     if ctx.blackboard.threats.hostile.is_empty() { return -1; }
 
@@ -1416,7 +1356,6 @@ fn FightStrength(ctx: &mut Ctx) -> i64 {
     }
 }
 
-#[allow(non_snake_case)]
 fn FlightStrength(ctx: &mut Ctx) -> i64 {
     match ctx.blackboard.threats.state {
         FightOrFlight::Safe   => -1,
@@ -1425,7 +1364,6 @@ fn FlightStrength(ctx: &mut Ctx) -> i64 {
     }
 }
 
-#[allow(non_snake_case)]
 fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
     let threats = &mut ctx.blackboard.threats;
     threats.on_call_for_help(ctx.pos, ctx.known.time);
@@ -1489,7 +1427,6 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
 //    and follows it. It ignores any other prey it sees while it's
 //    investigating the sound.
 
-#[allow(non_snake_case)]
 fn AttackOrFollowPath(kind: PathKind) -> impl Bhv {
     pri![
         "AttackOrFollowPath",
@@ -1513,7 +1450,6 @@ macro_rules! path {
     };
 }
 
-#[allow(non_snake_case)]
 fn ForageForBerries() -> impl Bhv {
     const KIND: PathKind = PathKind::BerryTree;
     pri![
@@ -1523,7 +1459,6 @@ fn ForageForBerries() -> impl Bhv {
     ]
 }
 
-#[allow(non_snake_case)]
 fn EatBerries() -> impl Bhv {
     const KIND: PathKind = PathKind::Berry;
     pri![
@@ -1533,14 +1468,12 @@ fn EatBerries() -> impl Bhv {
     ]
 }
 
-#[allow(non_snake_case)]
 fn EatFood() -> impl Bhv {
     pri!["EatFood", EatBerries(), ForageForBerries()]
         .on_tick(|x| x.blackboard.finding_food_ = true)
         .on_exit(|x| x.blackboard.finding_food_ = false)
 }
 
-#[allow(non_snake_case)]
 fn DrinkWater() -> impl Bhv {
     const KIND: PathKind = PathKind::Water;
     pri![
@@ -1552,7 +1485,6 @@ fn DrinkWater() -> impl Bhv {
     .on_exit(|x| x.blackboard.finding_water = false)
 }
 
-#[allow(non_snake_case)]
 fn GetRest() -> impl Bhv {
     const KIND: PathKind = PathKind::Rest;
     pri![
@@ -1564,7 +1496,6 @@ fn GetRest() -> impl Bhv {
     .on_exit(|x| x.blackboard.getting_rest_ = false)
 }
 
-#[allow(non_snake_case)]
 fn Wander() -> impl Bhv {
     pri![
         "Wander",
@@ -1581,7 +1512,6 @@ fn Wander() -> impl Bhv {
     ]
 }
 
-#[allow(non_snake_case)]
 fn InvestigateScents() -> impl Bhv {
     seq![
         "InvestigateScents",
@@ -1595,7 +1525,6 @@ fn InvestigateScents() -> impl Bhv {
     .on_tick(ClearTargets)
 }
 
-#[allow(non_snake_case)]
 fn InvestigateNoises() -> impl Bhv {
     seq![
         "InvestigateNoises",
@@ -1608,7 +1537,6 @@ fn InvestigateNoises() -> impl Bhv {
     ]
 }
 
-#[allow(non_snake_case)]
 fn LookForTarget() -> impl Bhv {
     pri![
         "LookForTarget",
@@ -1617,7 +1545,6 @@ fn LookForTarget() -> impl Bhv {
     ]
 }
 
-#[allow(non_snake_case)]
 fn HuntSelectedTarget() -> impl Bhv {
     pri![
         "HuntSelectedTarget",
@@ -1629,7 +1556,6 @@ fn HuntSelectedTarget() -> impl Bhv {
     .on_running(|x| x.blackboard.chasing_enemy = true)
 }
 
-#[allow(non_snake_case)]
 fn HuntForMeat() -> impl Bhv {
     const KIND: PathKind = PathKind::Meat;
     seq![
@@ -1658,7 +1584,6 @@ fn HuntForMeat() -> impl Bhv {
     ]
 }
 
-#[allow(non_snake_case)]
 fn FightAgainstThreats() -> impl Bhv {
     seq![
         "FightAgainstThreats",
@@ -1674,7 +1599,6 @@ fn FightAgainstThreats() -> impl Bhv {
     .on_tick(|x| ForceThreatState(x, FightOrFlight::Fight))
 }
 
-#[allow(non_snake_case)]
 fn EscapeFromThreats() -> impl Bhv {
     seq![
         "EscapeFromThreats",
@@ -1708,7 +1632,6 @@ fn EscapeFromThreats() -> impl Bhv {
     .on_exit(ClearFlightState)
 }
 
-#[allow(non_snake_case)]
 fn FightOrFlight() -> impl Bhv {
     util![
         "FightOrFlight",
@@ -1718,7 +1641,6 @@ fn FightOrFlight() -> impl Bhv {
     ]
 }
 
-#[allow(non_snake_case)]
 fn Root() -> impl Bhv {
     pri![
         "Root",

@@ -1,3 +1,5 @@
+#![allow(non_snake_case)]
+
 use std::cell::RefCell;
 use std::cmp::{max, min};
 use std::num::NonZeroI32;
@@ -19,7 +21,6 @@ pub struct BFSResult {
     pub targets: Vec<Point>,
 }
 
-#[allow(non_snake_case)]
 pub fn BFS<F: Fn(Point) -> bool, G: Fn(Point) -> Status>(
         source: Point, target: F, limit: i32, check: G) -> Option<BFSResult> {
     let kUnknown = -1;
@@ -234,7 +235,6 @@ const ASTAR_DIAGONAL_PENALTY: i32 = 6;
 const ASTAR_LOS_DIFF_PENALTY: i32 = 1;
 const ASTAR_OCCUPIED_PENALTY: i32 = 64;
 
-#[allow(non_snake_case)]
 fn AStarLength(p: Point) -> i32 {
     let (x, y) = (p.0.abs(), p.1.abs());
     ASTAR_UNIT_COST * max(x, y) + ASTAR_DIAGONAL_PENALTY * min(x, y)
@@ -256,7 +256,6 @@ fn AStarLength(p: Point) -> i32 {
 //      more appealing than alternatives (e.g. that interleave cardinal and
 //      diagonal steps, rather than doing all the diagonal steps first).
 //
-#[allow(non_snake_case)]
 pub fn AStarHeuristic(p: Point, los: &[Point]) -> i32 {
     let Point(px, py) = p;
     let Point(sx, sy) = los[0];
@@ -283,7 +282,6 @@ pub fn AStarHeuristic(p: Point, los: &[Point]) -> i32 {
    ASTAR_LOS_DIFF_PENALTY * diff + AStarLength(p - Point(tx, ty))
 }
 
-#[allow(non_snake_case)]
 pub fn AStar<F: Fn(Point) -> Status>(
         source: Point, target: Point, limit: i32, check: F) -> Option<Vec<Point>> {
     // Try line-of-sight - if that path is clear, then we don't need to search.
@@ -304,7 +302,6 @@ pub fn AStar<F: Fn(Point) -> Status>(
 //
 // TODO: If it's AStar, and we haven't found a target, return a path that gets
 // us as close as possible to the target.
-#[allow(non_snake_case)]
 pub fn Dijkstra<F: Fn(Point) -> bool, G: Fn(Point) -> Status, H: Fn(Point) -> i32>(
         source: Point, target: F, limit: i32, check: G, heuristic: H) -> Option<Vec<Point>> {
     CACHE.with_borrow_mut(|cache|{
@@ -321,7 +318,6 @@ pub fn Dijkstra<F: Fn(Point) -> bool, G: Fn(Point) -> Status, H: Fn(Point) -> i3
     })
 }
 
-#[allow(non_snake_case)]
 fn CachedDijkstra<F: Fn(Point) -> bool, G: Fn(Point) -> Status, H: Fn(Point) -> i32>(
         state: &mut AStarState, source: Point, target: F,
         limit: i32, check: G, heuristic: H) -> Option<Vec<Point>> {
@@ -447,13 +443,11 @@ pub struct Neighborhood {
 }
 
 // Expose a distance function for use in other heuristics.
-#[allow(non_snake_case)]
 pub fn DijkstraLength(p: Point) -> i32 {
     let (x, y) = (p.0.abs(), p.1.abs());
     DIJKSTRA_COST * max(x, y) + DIJKSTRA_DIAGONAL_PENALTY * min(x, y)
 }
 
-#[allow(non_snake_case)]
 pub fn DijkstraMap<F: Fn(Point) -> Status>(
         source: Point, check: F, cells: i32, limit: i32) -> Neighborhood {
     CACHE.with_borrow_mut(|cache|{
@@ -473,7 +467,6 @@ pub fn DijkstraMap<F: Fn(Point) -> Status>(
     })
 }
 
-#[allow(non_snake_case)]
 fn CachedDijkstraMap<F: Fn(Point) -> Status>(
         state: &mut DijkstraState, source: Point,
         check: F, cells: i32, limit: i32) -> Neighborhood {
