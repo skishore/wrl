@@ -1,3 +1,5 @@
+#![allow(non_snake_case)]
+
 use std::cmp::{max, min};
 
 use rand::Rng;
@@ -235,7 +237,6 @@ pub fn ray_character(delta: Point) -> char {
     if (x > 0) == (y > 0) { '\\' } else { '/' }
 }
 
-#[allow(non_snake_case)]
 fn ExplosionEffect(point: Point) -> Effect {
     let glyph = |ch: char| Glyph::wdfg(ch, 0xff0000);
     let base = vec![
@@ -261,7 +262,6 @@ fn ExplosionEffect(point: Point) -> Effect {
     Effect::new(base).scale(4.0)
 }
 
-#[allow(non_snake_case)]
 fn ImplosionEffect(point: Point) -> Effect {
     let glyph = |ch: char| Glyph::wdfg(ch, 0xff0000);
     let base = vec![
@@ -285,7 +285,6 @@ fn ImplosionEffect(point: Point) -> Effect {
     Effect::new(base).scale(3.0)
 }
 
-#[allow(non_snake_case)]
 fn RayEffect(source: Point, target: Point, speed: i32) -> Effect {
     let line = LOS(source, target);
     if line.len() <= 2 { return Effect::default(); }
@@ -300,7 +299,6 @@ fn RayEffect(source: Point, target: Point, speed: i32) -> Effect {
     Effect::new(result)
 }
 
-#[allow(non_snake_case)]
 pub fn SummonEffect(source: Point, target: Point) -> Effect {
     let mut effect = Effect::default();
     let line = LOS(source, target);
@@ -313,7 +311,6 @@ pub fn SummonEffect(source: Point, target: Point) -> Effect {
     effect.then(ExplosionEffect(target))
 }
 
-#[allow(non_snake_case)]
 pub fn WithdrawEffect(source: Point, target: Point) -> Effect {
     let mut implode  = ImplosionEffect(target);
     let frame = max(implode.frames.len() as i32 - 6, 0);
@@ -333,7 +330,6 @@ pub fn WithdrawEffect(source: Point, target: Point) -> Effect {
     ])
 }
 
-#[allow(non_snake_case)]
 fn SwitchEffect(source: Point, target: Point) -> Effect {
     Effect::serial(vec![
         WithdrawEffect(source, target),
@@ -342,7 +338,6 @@ fn SwitchEffect(source: Point, target: Point) -> Effect {
     ])
 }
 
-#[allow(non_snake_case)]
 pub fn EmberEffect(rng: &mut RNG, source: Point, target: Point) -> Effect {
     let mut effect = Effect::default();
     let line = LOS(source, target);
@@ -379,7 +374,6 @@ pub fn EmberEffect(rng: &mut RNG, source: Point, target: Point) -> Effect {
     effect
 }
 
-#[allow(non_snake_case)]
 pub fn IceBeamEffect(_: &mut RNG, source: Point, target: Point) -> Effect {
     let mut effect = Effect::default();
     let line = LOS(source, target);
@@ -412,7 +406,6 @@ pub fn IceBeamEffect(_: &mut RNG, source: Point, target: Point) -> Effect {
     effect
 }
 
-#[allow(non_snake_case)]
 pub fn BlizzardEffect(rng: &mut RNG, source: Point, target: Point) -> Effect {
     let mut effect = Effect::default();
     let ray = ray_character(target - source).to_string();
@@ -456,7 +449,6 @@ pub fn BlizzardEffect(rng: &mut RNG, source: Point, target: Point) -> Effect {
     effect.scale(2.0 / 3.0)
 }
 
-#[allow(non_snake_case)]
 pub fn HeadbuttEffect(_: &mut RNG, source: Point, target: Point) -> Effect {
     let init = 0.75;
     let gray = |value: f64| {
