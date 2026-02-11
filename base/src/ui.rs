@@ -671,29 +671,6 @@ impl UI {
             }
         }
 
-        // During animations, render all particles and drop other UI elements.
-        let mut render_particle = |p: Point, r: &RenderData| match r {
-            RenderData::Dummy => {},
-            &RenderData::Flash(color) => {
-                let Some(p) = remap(p, slice) else { return };
-                slice.set(p, slice.get(p).with_fg(Color::black()).with_bg(color));
-            },
-            &RenderData::Glyph(glyph) => {
-                let Some(p) = remap(p, slice) else { return };
-                slice.set(p, glyph);
-            },
-        };
-        if let Some(effect) = effect {
-            assert!(effect.frame.len() == effect.mask.len());
-            effect.frame.iter().zip(effect.mask).filter(|x| *x.1).for_each(|x| match &x.0.data {
-                ParticleData::Light(..) => {},
-                ParticleData::Shift(..) => {},
-                ParticleData::Sight(r) => render_particle(x.0.point, r),
-                ParticleData::Sound(_, r) => render_particle(x.0.point, r),
-            });
-            return;
-        }
-
         // Helpers used for the map overlay UIs.
         let set = |slice: &mut Slice, point: Point, glyph: Glyph| {
             let Some(point) = remap(point, slice) else { return };
@@ -714,12 +691,36 @@ impl UI {
 
         // Render the focused entity on the map.
         let focused_vision = self.focused.vision.get_points_seen();
-        if self.focused.active && let Some(&point) = focused_vision.first() {
+        if self.focused.active &&
+           let Some(&point) = focused_vision.first() &&
+           !effect.map(|x| x.sources.contains(&point)).unwrap_or(false) {
             highlight(slice, point, Color::gray(UI_TARGET_SHADE));
         }
 
+        // Render all of the current animation's particles.
+        let mut render_particle = |p: Point, r: &RenderData| match r {
+            RenderData::Dummy => {},
+            &RenderData::Flash(color) => {
+                let Some(p) = remap(p, slice) else { return };
+                slice.set(p, slice.get(p).with_fg(Color::black()).with_bg(color));
+            },
+            &RenderData::Glyph(glyph) => {
+                let Some(p) = remap(p, slice) else { return };
+                slice.set(p, glyph);
+            },
+        };
+        if let Some(effect) = effect {
+            assert!(effect.frame.len() == effect.mask.len());
+            effect.frame.iter().zip(effect.mask).filter(|x| *x.1).for_each(|x| match &x.0.data {
+                ParticleData::Light(..) => {},
+                ParticleData::Shift(..) => {},
+                ParticleData::Sight(r) => render_particle(x.0.point, r),
+                ParticleData::Sound(_, r) => render_particle(x.0.point, r),
+            });
+        }
+
         // If we're still alive, render arrows showing NPC facing.
-        if me.cur_hp > 0 {
+        if effect.is_none() && me.cur_hp > 0 {
             self.render_arrows(known, offset, slice);
         }
 
