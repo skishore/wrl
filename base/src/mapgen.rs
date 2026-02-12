@@ -615,11 +615,17 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
         let mut weediness = 0.2;
         let mut grassiness = rng.random::<f64>();
         if i < l1 {
+            let mut num_berry_trees = rng.random_range(1..=3);
             generate_blue_noise(24, &trees, &mut blue_noise, rng);
             for &p in &trees {
                 if blue_noise.get(p) == 0. { continue; }
-                has_grove = true;
-                map.set(p, 'B');
+                if num_berry_trees > 0 {
+                    num_berry_trees -= 1;
+                    has_grove = true;
+                    map.set(p, 'B');
+                } else {
+                    map.set(p, '#');
+                }
             }
             weediness = 0.4;
             grassiness = 0.0 + 0.1 * grassiness;

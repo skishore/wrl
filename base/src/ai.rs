@@ -35,13 +35,13 @@ const SEARCH_LIMIT: i32 = 64;
 
 const ASSESS_ANGLE: f64 = TAU / 18.;
 const ASSESS_STEPS: i32 = 4;
-const ASSESS_TURNS_EXPLORE: i32 = 8;
+const ASSESS_TURNS_EXPLORE: i32 = 2;
 const ASSESS_TURNS_FLIGHT: i32 = 1;
 
 const MAX_ASSESS: i32 = 32;
-const MAX_HUNGER: i32 = 1024;
-const MAX_THIRST: i32 = 256;
-const MAX_WEARY_: i32 = 4096;
+const MAX_HUNGER: i32 = 512;
+const MAX_THIRST: i32 = 128;
+const MAX_WEARY_: i32 = 2048;
 
 const HUNGRY_FOR_MEAT: i32 = MAX_HUNGER / 2;
 
