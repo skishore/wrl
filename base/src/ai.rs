@@ -786,11 +786,16 @@ fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
     if seen { return None; }
 
     // The path is good! Follow it. Look ahead as far as possible on the path.
+    //
+    // Special case: don't let an enemy kite you around a one-tile obstacle.
     let next = path.path[j];
     let mut target = next;
     for &point in path.path.iter().skip(j).take(8) {
         let los = LOS(pos, point);
         if los.iter().all(|&x| known.get(x).unblocked()) { target = point; }
+    }
+    if kind == PathKind::Enemy && path.path.len() == j + 2 {
+        target = path.path[j + 1];
     }
     let (look, step) = (target - pos, next - pos);
 
