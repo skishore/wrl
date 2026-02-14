@@ -105,8 +105,6 @@ impl DebugFile {
 
     fn try_record_frame(&mut self, board: &Board, frame: &Frame) -> Result<()> {
         let render_move = |source: Point, target: Point| {
-            if source == target { return vec![]; }
-
             let cell = board.get_cell(source);
             let Some(eid) = cell.eid else { return vec![] };
 

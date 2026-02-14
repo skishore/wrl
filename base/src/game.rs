@@ -9,7 +9,7 @@ use thin_vec::{ThinVec, thin_vec};
 use crate::static_assert_size;
 use crate::ai::{AIEnv, AIState};
 use crate::base::{Bound, Buffer, Color, Glyph};
-use crate::base::{HashMap, LOS, Matrix, Point, RNG, dirs, sample, weighted};
+use crate::base::{HashMap, HashSet, LOS, Matrix, Point, RNG, dirs, sample, weighted};
 use crate::dex::{Attack, Species};
 use crate::debug::DebugFile;
 use crate::effect::{CB, Effect, Frame, FT, Particle, ParticleData, self};
@@ -413,7 +413,9 @@ impl Board {
     }
 
     fn _enter_effect_frame(&mut self, active: bool) {
-        let Some(frame) = self._effect.frames.get(0).cloned() else { return };
+        let Some(mut frame) = self._effect.frames.get(0).cloned() else { return };
+
+        if !active { frame.reverse(); }
 
         frame.iter().for_each(|x| match &x.data {
             &ParticleData::Light(light) => {
@@ -1102,7 +1104,9 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             };
 
             let rng = &mut state.env.rng;
+            let shift = Particle::shift(source, source);
             let effect = (attack.effect)(rng, source, target);
+            let effect = Effect::constant(shift, effect.frames.len() as i32).and(effect);
             state.add_effect(apply_effect(effect, FT::Hit, Box::new(cb)));
             ActionResult::success_moves(1.)
         }
@@ -1402,13 +1406,17 @@ impl State {
             let known = &*self.env.known;
             let mask = &self.board._frame_mask;
 
-            let moves: Vec<_> = frame.iter().filter_map(|x| match &x.data {
-                &ParticleData::Shift(source) => Some((source, x.point)),
-                _ => None,
-            }).collect();
-            let sources = moves.iter().map(|x| x.0).collect();
-            let targets = moves.iter().map(|x| x.1).collect();
+            let mut sources = HashSet::default();
+            let mut targets = HashSet::default();
 
+            for particle in frame {
+                let target = particle.point;
+                let &ParticleData::Shift(source) = &particle.data else { continue };
+
+                targets.remove(&source);
+                sources.insert(source);
+                targets.insert(target);
+            }
             crate::ui::Effect { frame, known, mask, sources, targets }
         });
         self.ui.render(buffer, entity, effect.as_ref());
