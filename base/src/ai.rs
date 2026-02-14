@@ -271,6 +271,8 @@ fn ensure_neighborhood(ctx: &mut Ctx) {
     ensure_vision(ctx);
     let (pos, check) = (ctx.pos, get_basic_check(ctx));
     ctx.neighborhood = DijkstraMap(pos, check, SEARCH_CELLS, SEARCH_LIMIT);
+
+    if let Some(x) = &mut ctx.env.debug { x.record_neighborhood(&ctx.neighborhood); }
 }
 
 fn ensure_vision(ctx: &mut Ctx) {

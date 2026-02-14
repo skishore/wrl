@@ -20,6 +20,7 @@ class DebugTrace {
       entities: [],
       map: [],
       sightings: [],
+      neighborhood: new Set(),
       utility: new Map(),
     };
     this.animBatch = [];
@@ -27,6 +28,7 @@ class DebugTrace {
     this.showAll = true;
     this.showSeen = true;
     this.showUtility = true;
+    this.showNeighborhood = false;
 
     this.animIndex = 0;
     this.tickIndex = 0;
@@ -45,6 +47,7 @@ class DebugTrace {
       showAll: document.getElementById('show-all-entities'),
       showSeen: document.getElementById('show-sightings'),
       showUtility: document.getElementById('show-utility'),
+      showNeighborhood: document.getElementById('show-neighborhood'),
       timelineWrapper: document.getElementById('timeline-wrapper'),
       timeline: document.getElementById('timeline'),
       view: document.getElementById('view'),
@@ -62,6 +65,9 @@ class DebugTrace {
 
     this.ui.showUtility.onchange = this.onShowUtilityChange.bind(this);
     this.ui.showUtility.checked = this.showUtility;
+
+    this.ui.showNeighborhood.onchange = this.onShowNeighborhoodChange.bind(this);
+    this.ui.showNeighborhood.checked = this.showNeighborhood;
   }
 
   onShowAllChange() {
@@ -76,6 +82,11 @@ class DebugTrace {
 
   onShowUtilityChange() {
     this.showUtility = this.ui.showUtility.checked;
+    this.dirty = true;
+  }
+
+  onShowNeighborhoodChange() {
+    this.showNeighborhood = this.ui.showNeighborhood.checked;
     this.dirty = true;
   }
 
@@ -107,6 +118,10 @@ class DebugTrace {
     } else if (key === 'u') {
       this.ui.showUtility.checked = !this.ui.showUtility.checked;
       this.onShowUtilityChange();
+      return;
+    } else if (key === 'n') {
+      this.ui.showNeighborhood.checked = !this.ui.showNeighborhood.checked;
+      this.onShowNeighborhoodChange();
       return;
     }
 
@@ -370,9 +385,20 @@ class DebugTrace {
     }
 
     const {mapX, mapY} = this;
-    const numUtilityEntries = reader.readInt();
+    const neighborhoodSize = reader.readInt();
+    this.tickState.neighborhood.clear();
+    for (let i = 0; i < neighborhoodSize; i++) {
+      const x = reader.readInt();
+      const y = reader.readInt();
+
+      if (!(0 <= x && x < mapX && 0 <= y && y < mapY)) continue;
+      const index = x + y * mapX;
+      this.tickState.neighborhood.add(index);
+    }
+
+    const utilitySize = reader.readInt();
     this.tickState.utility.clear();
-    for (let i = 0; i < numUtilityEntries; i++) {
+    for (let i = 0; i < utilitySize; i++) {
       const value = reader.readInt();
       const x = reader.readInt();
       const y = reader.readInt();
@@ -466,6 +492,15 @@ class DebugTrace {
       for (let x = 0; x < this.mapX; x++) {
         let glyph0 = map[index];
         let glyph1 = map[index + 1];
+
+        if (this.showNeighborhood && this.tickState.neighborhood.has(index >> 1)) {
+          const m = 0x20;
+          const r = (glyph1 >> 24) & 0xff;
+          const g = (glyph1 >> 16) & 0xff;
+          const b = (glyph1 >> 8) & 0xff;
+          const color = (Math.max(r, m) << 16) | (Math.max(g, m) << 8) | (Math.max(b, m) << 0);
+          glyph1 = (glyph1 & 0xff) | (color << 8);
+        }
 
         if (this.showUtility) {
           const target = this.tickState.utility.get(index >> 1) ?? 0;

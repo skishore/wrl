@@ -10,6 +10,7 @@ use crate::effect::{Frame, ParticleData, RenderData};
 use crate::entity::{EID, Entity};
 use crate::game::{WORLD_SIZE, Action, Board, Cell, show_item};
 use crate::knowledge::EntityKnowledge;
+use crate::pathing::Neighborhood;
 use crate::ui::UI;
 
 //////////////////////////////////////////////////////////////////////////////
@@ -54,9 +55,15 @@ impl DebugLog {
 
 // DebugFile
 
-pub struct DebugFile {
+#[derive(Default)]
+struct DebugDetail {
     animation: Vec<Vec<(Point, Glyph)>>,
     utilities: Vec<(i32, Point)>,
+    neighborhood: Vec<Point>,
+}
+
+pub struct DebugFile {
+    detail: DebugDetail,
     dir: &'static str,
     file: BufWriter<File>,
     map: Matrix<Glyph>,
@@ -70,7 +77,7 @@ impl Default for DebugFile {
         std::fs::create_dir_all(dir).unwrap();
         let file = BufWriter::new(File::create(format!("{}/ticks.txt", dir)).unwrap());
         let map = Matrix::new(Point(WORLD_SIZE, WORLD_SIZE), Glyph::wide(' '));
-        Self { animation: vec![], utilities: vec![], dir, file, map, next_tick: 0 }
+        Self { detail: Default::default(), dir, file, map, next_tick: 0 }
     }
 }
 
@@ -83,15 +90,18 @@ impl DebugFile {
         self.try_record_frame(board, frame).unwrap();
     }
 
+    pub fn record_neighborhood(&mut self, neighborhood: &Neighborhood) {
+        self.detail.neighborhood = neighborhood.visited.iter().map(|x| x.0).collect();
+    }
+
     pub fn record_utility(&mut self, utilities: &[(i32, Point)]) {
-        self.utilities = utilities.into()
+        self.detail.utilities = utilities.into()
     }
 
     fn try_record(&mut self, action: &Action, board: &Board, me: &Entity) -> Result<()> {
         self.record_tick(action, board, me)?;
 
-        self.animation.clear();
-        self.utilities.clear();
+        self.detail = Default::default();
         self.next_tick += 1;
 
         write!(self.file, "{{")?;
@@ -133,26 +143,26 @@ impl DebugFile {
             ParticleData::Sight(r) => { render_particle(x.point, r).map(|x| xs.push(x)); }
             ParticleData::Sound(_, r) => { render_particle(x.point, r).map(|x| xs.push(x)); }
         });
-        self.animation.push(xs);
+        self.detail.animation.push(xs);
 
         write!(self.file, "{{")?;
         write!(self.file, r#""index":{},"#, self.next_tick)?;
         write!(self.file, r#""type":"animation","#)?;
         write!(self.file, r#""time":"{}","#, board.time.nsec())?;
-        write!(self.file, r#""frame":{}"#, self.animation.len() - 1)?;
+        write!(self.file, r#""frame":{}"#, self.detail.animation.len() - 1)?;
         write!(self.file, "}}\n")?;
         self.file.flush()
     }
 
     fn record_tick(&mut self, action: &Action, board: &Board, me: &Entity) -> Result<()> {
         // Dump binary data for all animations happening prior to this tick.
-        if !self.animation.is_empty() {
+        if !self.detail.animation.is_empty() {
             let filename = format!("{}/animation-{}.bin.gz", self.dir, self.next_tick);
             let file = BufWriter::new(File::create(&filename).unwrap());
             let mut file = GzEncoder::new(file, Compression::default());
 
-            Self::write_bin(&mut file, &(self.animation.len() as i32))?;
-            for frame in &self.animation {
+            Self::write_bin(&mut file, &(self.detail.animation.len() as i32))?;
+            for frame in &self.detail.animation {
                 Self::write_bin(&mut file, &(frame.len() as i32))?;
                 Self::write_array(&mut file, &frame)?;
             }
@@ -221,9 +231,13 @@ impl DebugFile {
             Self::write_str(&mut file, &line.text)?;
         }
 
+        // Dump the neighborhood of cells that we searched this turn.
+        Self::write_bin(&mut file, &(self.detail.neighborhood.len() as i32))?;
+        Self::write_array(&mut file, self.detail.neighborhood.as_slice())?;
+
         // Dump a utility map, if this behavior tree tick used one.
-        Self::write_bin(&mut file, &(self.utilities.len() as i32))?;
-        Self::write_array(&mut file, self.utilities.as_slice())?;
+        Self::write_bin(&mut file, &(self.detail.utilities.len() as i32))?;
+        Self::write_array(&mut file, self.detail.utilities.as_slice())?;
 
         // Anything we scribble on the map shows up in the debug UI.
         for y in 0..self.map.size.1 {
