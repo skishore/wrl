@@ -4,6 +4,7 @@ use rand::Rng;
 
 use crate::base::{HashMap, Point, RNG};
 use crate::debug::DebugLog;
+use crate::dex::Species;
 use crate::entity::{Entity, EID};
 use crate::knowledge::{AttackEvent, Call, CallEvent, Event, EventData, Sense};
 use crate::knowledge::{EntityKnowledge, Knowledge, Timestamp, UID};
@@ -33,6 +34,7 @@ pub struct Threat {
     pub time: Timestamp,
     pub sense: Sense,
     pub combat: Timestamp,
+    pub species: Option<&'static Species>,
 
     // Stats:
     pub hp: f64,
@@ -40,7 +42,6 @@ pub struct Threat {
 
     // Flags:
     pub asleep: bool,
-    pub human: bool,
     pub seen: bool,
 
     // Warnings:
@@ -60,6 +61,7 @@ impl Threat {
             time: Default::default(),
             sense: Sense::Sight,
             combat: Default::default(),
+            species: None,
 
             // Stats:
             hp: 0.,
@@ -67,7 +69,6 @@ impl Threat {
 
             // Flags:
             asleep: false,
-            human: false,
             seen: false,
 
             // Warnings:
@@ -220,15 +221,15 @@ impl Threat {
         self.pos = other.pos;
         self.time = other.time;
         self.sense = other.sense;
+        self.species = Some(other.species);
 
         self.hp = other.hp;
         self.delta = other.delta;
 
         self.asleep = other.asleep;
-        self.human = other.species.human();
         self.seen = true;
 
-        let (confidence, valence) = if self.human {
+        let (confidence, valence) = if other.species.human() {
             (Confidence::Low, Valence::Neutral)
         } else if other.delta > 0 {
             let combat = self.combat > me.known.time_at_turn(ACTIVE_THREAT_TURNS);
@@ -367,7 +368,8 @@ impl ThreatState {
         self.unknown.retain(|x| x.unknown());
 
         let strength = |x: &Threat| {
-            if x.human { 0. } else { 1.75f64.powi(x.delta.signum()) * x.hp }
+            if let Some(x) = x.species && x.human() { return 0.; }
+            1.75f64.powi(x.delta.signum()) * x.hp
         };
         let mut hidden_count = max(hidden_hostile - seen_hostile, 0);
         let mut team_strength = me.hp_fraction();

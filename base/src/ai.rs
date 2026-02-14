@@ -9,9 +9,10 @@ use rand_distr::{Distribution, Normal};
 use rand_distr::num_traits::Pow;
 
 use crate::{act, cb, cond, pri, run, seq, util};
-use crate::base::{Bound, HashMap, LOS, Point, RNG, clamp, dirs, sample, weighted};
+use crate::base::{Bound, HashMap, HashSet, LOS, Point, RNG, clamp, dirs, sample, weighted};
 use crate::bhv::{Bhv, Result};
 use crate::debug::{DebugFile, DebugLine, DebugLog};
+use crate::dex::Species;
 use crate::entity::Entity;
 use crate::game::{FOV_RADIUS_NPC, CALL_VOLUME, MOVE_VOLUME, Item, move_ready};
 use crate::game::{Action, AttackAction, CallAction, EatAction, MoveAction};
@@ -1112,6 +1113,13 @@ fn ListThreatsBySight(ctx: &mut Ctx) -> bool {
     ctx.blackboard.options.len() > initial
 }
 
+fn ListThreatsByScent(ctx: &mut Ctx) -> bool {
+    let hostile = &ctx.blackboard.threats.hostile;
+    let threats: HashSet<_> = hostile.iter().filter_map(
+        |x| x.species.map(|x| x as *const Species)).collect();
+    ListTargetsByScent(ctx, |x| threats.contains(&(x.species as *const Species)))
+}
+
 fn ListPreyBySight(ctx: &mut Ctx) -> bool {
     let initial = ctx.blackboard.options.len();
     for other in &ctx.known.entities {
@@ -1384,7 +1392,7 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
 //  - Periodically re-plan a path to a need if there is a closer one?
 //
 //  - Update CachedPath to do "look at the target for a path w/ skip = 1",
-//    then get rid of the Look actions for basic needs and `SearchForPrey`.
+//    then get rid of the Look actions for basic needs and `SearchForEnemy`.
 //
 //  - Make the our-team-strength logic quadratic in team size.
 //
@@ -1398,8 +1406,6 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
 //    (in fight-or-flight): if we defeat the main threat, but the unknown
 //    source is Menacing-not-Hostile, then we'll immediately switch from
 //    fighting to fleeing instead of actually fighting back.
-//
-//  - Include potentially-matching scents when chasing down enemies.
 //
 //  - Compare distance vs. turns-since-seen when chasing down enemies.
 //
@@ -1588,6 +1594,7 @@ fn FightAgainstThreats() -> impl Bhv {
         run![
             "SelectThreatTarget",
             cond!("ListThreatsBySight", ListThreatsBySight),
+            cond!("ListThreatsByScent", ListThreatsByScent),
             cond!("MarkSafeIfLostView", MarkSafeIfLostView),
             cond!("SelectBestTarget", SelectBestTarget),
         ],
