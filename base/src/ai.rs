@@ -1420,7 +1420,15 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
 //    chains of warnings over nothing. Investigate unseen sources instead.
 //
 //  - If we can't path to a valid target, we repeatedly run the "scan last
-//    target direction" logic.
+//    target direction" logic. We have an instance of this failure mode right
+//    now saved to wasm/debug-saved - follow the fourth predator about 20% in.
+//
+//    In this failing trace, the target cell of the entity is a search
+//    candidate (because we detected a hidden entity by scent), so we select
+//    that cell as the search target but cannot path to it. This failure mode
+//    makes sense. There's another similar one: if we can see the entity but
+//    cannot find a path to it (to get there or to attack), we'd have similar
+//    pathological behavior.
 //
 //  - If, on pathing to a valid target (e.g. a berry tree), we take a step
 //    such that the tree is no longer visible, we unnecessarily re-plan...
