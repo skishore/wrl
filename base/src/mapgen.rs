@@ -916,7 +916,6 @@ mod tests {
     const NUM_SEEDS: u64 = 8;
 
     #[test]
-    #[ignore]
     fn bench_mapgen() {
         let iterations = 3 * NUM_SEEDS;
         let start = Instant::now();
