@@ -15,7 +15,7 @@ use crate::debug::{DebugFile, DebugLine, DebugLog};
 use crate::entity::Entity;
 use crate::game::{FOV_RADIUS_NPC, CALL_VOLUME, MOVE_VOLUME, Item, move_ready};
 use crate::game::{Action, AttackAction, CallAction, EatAction, MoveAction};
-use crate::knowledge::{Call, Knowledge, ScentEvent, Sense, Timestamp};
+use crate::knowledge::{Call, Knowledge, ScentKnowledge, Sense, Timestamp};
 use crate::pathing::{AStar, AStarHeuristic, Status};
 use crate::pathing::{BFS, DijkstraLength, DijkstraMap, Neighborhood};
 use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
@@ -1059,7 +1059,6 @@ struct Target {
     last: Point,
     time: Timestamp,
     sense: Sense,
-    scent: Option<ScentEvent>,
 }
 
 struct ChaseTarget {
@@ -1107,7 +1106,7 @@ fn ListThreatsBySight(ctx: &mut Ctx) -> bool {
         if !check_time!(ctx, other.time, MIN_SEARCH_TURNS) { break; }
 
         let (last, time, sense) = (other.pos, other.time, other.sense);
-        let target = Target { last, time, sense, scent: None };
+        let target = Target { last, time, sense };
         ctx.blackboard.options.push(target);
     }
     ctx.blackboard.options.len() > initial
@@ -1120,7 +1119,7 @@ fn ListPreyBySight(ctx: &mut Ctx) -> bool {
         if !check_time!(ctx, other.time, MAX_SEARCH_TURNS) { break; }
 
         let (last, time, sense) = (other.pos, other.time, other.sense);
-        let target = Target { last, time, sense, scent: None };
+        let target = Target { last, time, sense };
         ctx.blackboard.options.push(target);
     }
     ctx.blackboard.options.len() > initial
@@ -1134,7 +1133,7 @@ fn ListPreyBySound(ctx: &mut Ctx) -> bool {
         if !check_time!(ctx, other.time, MAX_SEARCH_TURNS) { break; }
 
         let (last, time, sense) = (other.pos, other.time, other.sense);
-        let target = Target { last, time, sense, scent: None };
+        let target = Target { last, time, sense };
         ctx.blackboard.options.push(target);
     }
     ctx.blackboard.options.len() > initial
@@ -1148,18 +1147,14 @@ fn ListHumansByScent(ctx: &mut Ctx) -> bool {
     ListTargetsByScent(ctx, |x| x.species.human())
 }
 
-fn ListTargetsByScent<F: Fn(&ScentEvent) -> bool>(ctx: &mut Ctx, f: F) -> bool {
+fn ListTargetsByScent<F: Fn(&ScentKnowledge) -> bool>(ctx: &mut Ctx, f: F) -> bool {
     let initial = ctx.blackboard.options.len();
-    if let Some(x) = &ctx.blackboard.target && let Some(s) = &x.target.scent && f(s) &&
-       check_time!(ctx, x.target.time, MAX_TRACKING_TURNS) {
-        ctx.blackboard.options.push(x.target);
-    }
-    for event in &ctx.known.scents {
-        if !f(event) { continue; }
-        if !check_time!(ctx, event.scent.time, MAX_TRACKING_TURNS) { continue; }
+    for scent in &ctx.known.scents {
+        if !f(scent) { continue; }
+        if !check_time!(ctx, scent.time, MAX_TRACKING_TURNS) { continue; }
 
-        let (last, time, sense) = (event.scent.pos, event.scent.time, Sense::Smell);
-        let target = Target { last, time, sense, scent: Some(*event) };
+        let (last, time, sense) = (scent.pos, scent.time, Sense::Smell);
+        let target = Target { last, time, sense };
         ctx.blackboard.options.push(target);
     }
     ctx.blackboard.options.len() > initial

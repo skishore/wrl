@@ -156,9 +156,6 @@ impl Threat {
     //     from it, and then spot a player within ACTIVE_THREAT_TURNS, we'll
     //     incorrectly flee from the player because of the other threat.
     //
-    //   - Can we make scent just another event type? Can we tie scent to an
-    //     EID / TID and disable further updates once we identify it?
-    //
     //   - Can we make call-for-help carry information about target EID(s)?
     //     Seems hard - we can call based on unknown threats.
 

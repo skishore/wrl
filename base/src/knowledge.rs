@@ -7,7 +7,7 @@ use rand::Rng;
 use thin_vec::{ThinVec, thin_vec};
 
 use crate::static_assert_size;
-use crate::base::{HashMap, Point, RNG, clamp};
+use crate::base::{HashMap, HashSet, Point, RNG, clamp};
 use crate::dex::Species;
 use crate::entity::{EID, Entity};
 use crate::game::{MOVE_TIMER, Board, Item, Light, Tile};
@@ -27,6 +27,8 @@ const MAX_TURN_MEMORY: usize = 256;
 const SOURCE_LIMIT_PC_: i32 = 2;
 const SOURCE_LIMIT_NPC: i32 = 72;
 const SOURCE_TRACKING_LIMIT: i32 = 16;
+
+const SCENT_TRACKING_LIMIT: i32 = 64;
 
 fn trophic_level(x: &Entity) -> i32 {
     if x.species.human() { 0 } else if !x.species.predator() { 1 } else { 2 }
@@ -198,10 +200,11 @@ pub struct Scent {
 }
 
 #[derive(Clone, Copy)]
-pub struct ScentEvent {
+pub struct ScentKnowledge {
     pub delta: i32,
-    pub scent: Scent,
+    pub pos: Point,
     pub species: &'static Species,
+    pub time: Timestamp,
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -254,7 +257,9 @@ pub struct EntityKnowledge {
 #[cfg(target_pointer_width = "64")]
 static_assert_size!(EntityKnowledge, 72);
 
-// Minimal knowledge about an entity that we're tracking by scent or sound.
+// Minimal knowledge about entities that we're only tracking indirectly.
+// We may have heard or glimpsed the entity, but we did not see it clearly.
+//
 // Used to tag events with a UID such that same UID => same event source.
 pub struct SourceKnowledge {
     pub uid: UID,
@@ -285,8 +290,8 @@ pub struct Knowledge {
     pub cells: List<CellKnowledge>,
     pub entities: List<EntityKnowledge>,
     pub sources: List<SourceKnowledge>,
+    pub scents: Vec<ScentKnowledge>,
     pub events: Vec<Event>,
-    pub scents: Vec<ScentEvent>,
     pub time: Timestamp,
 
     turn_times: VecDeque<Timestamp>,
@@ -389,8 +394,6 @@ impl Knowledge {
     // Writes
 
     pub fn mark_turn_boundary(&mut self, player: bool, speed: f64) {
-        self.forget_old_sources(player);
-
         if self.turn_times.len() < MAX_TURN_MEMORY {
             let min = 1e-2;
             let speed = if speed < min { min } else { speed };
@@ -407,6 +410,9 @@ impl Knowledge {
         assert!(self.turn_times.capacity() == MAX_TURN_MEMORY);
         self.turn_times.pop_back();
         self.turn_times.push_front(self.time);
+
+        self.forget_old_scents();
+        self.forget_old_sources(player);
     }
 
     pub fn update(&mut self, me: &Entity, board: &Board, vision: &Vision, rng: &mut RNG) {
@@ -416,8 +422,7 @@ impl Knowledge {
         let (pos, time) = (me.pos, board.time);
         let unlit = matches!(board.get_light(), Light::None);
 
-        // Clear and recompute scents. Only prey gives off a scent.
-        self.scents.clear();
+        // Detect entities that were recently nearby by scent.
         self.populate_scents(me, board, rng);
 
         // Clear visibility flags. Visible cells come first in the list so we
@@ -655,6 +660,14 @@ impl Knowledge {
         self.forget_event(None, Some(x.uid), x.pos);
     }
 
+    fn forget_old_scents(&mut self) {
+        let limit = self.time_at_turn(SCENT_TRACKING_LIMIT);
+
+        while let Some(x) = self.scents.last() && x.time <= limit {
+            self.scents.pop();
+        }
+    }
+
     fn forget_old_sources(&mut self, player: bool) {
         for x in &mut self.sources { x.turns += 1; }
 
@@ -666,9 +679,13 @@ impl Knowledge {
     }
 
     fn populate_scents(&mut self, me: &Entity, board: &Board, rng: &mut RNG) {
-        if me.asleep { return; }
+        if me.asleep || me.player { return; }
+
+        let initial = self.scents.len();
 
         for (_, other) in &board.entities {
+            if other.eid == me.eid { continue; }
+
             let mut remainder = rng.random::<f64>();
 
             for (scent, value) in other.get_scent_trail(me.pos) {
@@ -676,12 +693,19 @@ impl Knowledge {
                 if remainder >= 0. { continue; }
 
                 let species = other.species;
+                let &Scent { pos, time } = scent;
                 let delta = trophic_level(other) - trophic_level(me);
-                let event = ScentEvent { delta, scent: *scent, species };
-                self.scents.push(event);
+                self.scents.push(ScentKnowledge { delta, pos, species, time });
                 break;
             }
         }
+
+        if self.scents.len() == initial { return; }
+
+        // Keep scents sorted by time and de-duplicated by species.
+        let mut seen = HashSet::default();
+        self.scents.sort_by_key(|x| self.time - x.time);
+        self.scents.retain(|x| seen.insert(x.species as *const Species));
     }
 
     fn see_entity(&mut self, me: &Entity, other: &Entity) -> EntityHandle {
@@ -790,6 +814,7 @@ impl Knowledge {
         check_sorted(self.cells.iter().map(|x| x.last_seen).collect());
         check_sorted(self.entities.iter().map(|x| x.time).collect());
         check_sorted(self.sources.iter().map(|x| x.time).collect());
+        check_sorted(self.scents.iter().map(|x| x.time).collect());
         check_sorted(self.events.iter().rev().map(|x| x.time).collect());
 
         // Check that every cell and entity is indexed:

@@ -184,6 +184,11 @@ impl DebugFile {
 
         // Dump info about our view of other entities.
         let mut sightings = vec![];
+        for other in &me.known.scents {
+            let color = 0xff8000;
+            let glyph = other.species.glyph.with_fg(Color::black()).with_bg(color);
+            sightings.push((other.pos, glyph));
+        }
         for other in &me.known.sources {
             let color = {
                 let current = me.known.get(other.pos).source();
