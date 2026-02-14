@@ -238,8 +238,11 @@ fn all_threats_asleep(ctx: &Ctx) -> bool {
 fn is_hiding_place(ctx: &Ctx, point: Point) -> bool {
     if ctx.blackboard.threats.menacing.iter().any(
         |x| (x.pos - point).len_l1() <= 1) { return false; }
+
     let cell = ctx.known.get(point);
-    (cell.is_shadow_cover()) || matches!(cell.tile(), Some(x) if x.is_cover())
+    if matches!(cell.tile(), Some(x) if x.is_cover()) { return true; }
+
+    cell.is_shadow_cover() && ctx.entity.species.light.is_empty()
 }
 
 fn get_basic_check<'a>(ctx: &'a Ctx) -> impl Fn(Point) -> Status + use<'a> {
