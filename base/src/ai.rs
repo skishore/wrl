@@ -1078,6 +1078,7 @@ struct Target {
     last: Point,
     time: Timestamp,
     sense: Sense,
+    sure: bool,
 }
 
 struct ChaseTarget {
@@ -1125,7 +1126,7 @@ fn ListThreatsBySight(ctx: &mut Ctx) -> bool {
         if !check_time!(ctx, other.time, MIN_SEARCH_TURNS) { break; }
 
         let (last, time, sense) = (other.pos, other.time, other.sense);
-        let target = Target { last, time, sense };
+        let target = Target { last, time, sense, sure: other.hostile() };
         ctx.blackboard.options.push(target);
     }
     ctx.blackboard.options.len() > initial
@@ -1145,7 +1146,7 @@ fn ListPreyBySight(ctx: &mut Ctx) -> bool {
         if !check_time!(ctx, other.time, MAX_SEARCH_TURNS) { break; }
 
         let (last, time, sense) = (other.pos, other.time, other.sense);
-        let target = Target { last, time, sense };
+        let target = Target { last, time, sense, sure: true };
         ctx.blackboard.options.push(target);
     }
     ctx.blackboard.options.len() > initial
@@ -1159,7 +1160,7 @@ fn ListPreyBySound(ctx: &mut Ctx) -> bool {
         if !check_time!(ctx, other.time, MAX_SEARCH_TURNS) { break; }
 
         let (last, time, sense) = (other.pos, other.time, other.sense);
-        let target = Target { last, time, sense };
+        let target = Target { last, time, sense, sure: false };
         ctx.blackboard.options.push(target);
     }
     ctx.blackboard.options.len() > initial
@@ -1180,7 +1181,7 @@ fn ListTargetsByScent<F: Fn(&ScentKnowledge) -> bool>(ctx: &mut Ctx, f: F) -> bo
         if !check_time!(ctx, scent.time, MAX_TRACKING_TURNS) { continue; }
 
         let (last, time, sense) = (scent.pos, scent.time, Sense::Smell);
-        let target = Target { last, time, sense };
+        let target = Target { last, time, sense, sure: false };
         ctx.blackboard.options.push(target);
     }
     ctx.blackboard.options.len() > initial
@@ -1193,10 +1194,11 @@ fn SelectBestTarget(ctx: &mut Ctx) -> bool {
     let Ctx { known, pos, .. } = *ctx;
     let prev = ctx.blackboard.target.as_ref();
     let score = |x: &Target| {
+        let age = known.time_to_turn(x.time);
+        let bonus = x.sure as i32 as f64;
         let d0 = (x.last - pos).len_l2();
         let d1 = prev.map(|y| (x.last - y.target.last).len_l2()).unwrap_or(0.0);
-        let age = known.time_to_turn(x.time);
-        0.5 * d0 + 0.5 * d1 + 1.0 * age
+        1.0 * age - 2.0 * bonus + 0.5 * d0 + 0.25 * d1
     };
     let target = *options.select_nth_unstable_by_key(0, |x| sortable(score(x))).1;
 
