@@ -9,7 +9,8 @@ use rand_distr::{Distribution, Normal};
 use rand_distr::num_traits::Pow;
 
 use crate::{act, cb, cond, pri, run, seq, util};
-use crate::base::{Bound, HashMap, HashSet, LOS, Point, RNG, clamp, dirs, sample, weighted};
+use crate::base::{Bound, HashMap, HashSet, LOS, Point, RNG};
+use crate::base::{clamp, dirs, sample, sortable, weighted};
 use crate::bhv::{Bhv, Result};
 use crate::debug::{DebugFile, DebugLine, DebugLog};
 use crate::dex::Species;
@@ -1190,12 +1191,15 @@ fn SelectBestTarget(ctx: &mut Ctx) -> bool {
     if options.is_empty() { return false; }
 
     let Ctx { known, pos, .. } = *ctx;
+    let prev = ctx.blackboard.target.as_ref();
     let score = |x: &Target| {
-        (known.time - x.time, (pos - x.last).len_l2_squared())
+        let d0 = (x.last - pos).len_l2();
+        let d1 = prev.map(|y| (x.last - y.target.last).len_l2()).unwrap_or(0.0);
+        let age = known.time_to_turn(x.time);
+        0.5 * d0 + 0.5 * d1 + 1.0 * age
     };
-    let target = *options.select_nth_unstable_by_key(0, score).1;
+    let target = *options.select_nth_unstable_by_key(0, |x| sortable(score(x))).1;
 
-    let prev = &ctx.blackboard.target;
     let recent = target.time > ctx.blackboard.prev_time;
     let change = if let Some(x) = prev { x.target.last != target.last } else { true };
     let fresh = change || (recent && target.sense != Sense::Smell);
@@ -1422,12 +1426,12 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
 //    source is Menacing-not-Hostile, then we'll immediately switch from
 //    fighting to fleeing instead of actually fighting back.
 //
-//  - Compare distance vs. turns-since-seen when chasing down enemies.
-//
 //  - Only run InvestigateNoises for recent unknown sources.
 //
 //  - Only warn seen-but-unknown-valence sources. As is, we can have long
 //    chains of warnings over nothing. Investigate unseen sources instead.
+//
+//  - If we detect an enemy by scent but can't path to it, we repeatedly sniff.
 //
 //  - If we can't path to a valid target, we repeatedly run the "scan last
 //    target direction" logic. We have an instance of this failure mode right

@@ -363,15 +363,14 @@ impl Knowledge {
     pub fn debug_time(&self, time: Timestamp) -> String {
         if time == Timestamp::default() { return "<never>".into(); }
 
-        for i in 0..=MAX_TURN_MEMORY {
-            let prev = self.time_at_turn(i as i32);
-            if time < prev { continue; }
+        let turns = self.time_to_turn(time);
+        let (age, limit) = (self.time - time, MAX_TURN_MEMORY);
+        if turns >= limit as f64 { return format!("{:?} - >{} turns ago", age, limit); }
 
-            let label = if time == prev { "" } else { "<" };
-            let turns = if i == 1 { "turn" } else { "turns" };
-            return format!("{:?} - {}{} {} ago", self.time - time, label, i, turns);
-        }
-        return format!("{:?} - >{} turns ago", self.time - time, MAX_TURN_MEMORY);
+        let count = turns.ceil() as i32;
+        let suffix = if count == 1 { "turn" } else { "turns" };
+        let prefix = if turns == count as f64 { "" } else { "<" };
+        format!("{:?} - {}{} {} ago", age, prefix, count, suffix)
     }
 
     pub fn default(&self) -> PointLookup<'_> {
@@ -389,6 +388,23 @@ impl Knowledge {
     pub fn time_at_turn(&self, turn: i32) -> Timestamp {
         if turn <= 0 { return self.time; }
         self.turn_times.get((turn - 1) as usize).map(|&x| x).unwrap_or_default()
+    }
+
+    pub fn time_to_turn(&self, time: Timestamp) -> f64 {
+        let mut next = self.time;
+
+        for i in 0..=MAX_TURN_MEMORY {
+            let prev = next;
+            next = self.time_at_turn(i as i32);
+            if time < next { continue; }
+
+            let base = i as f64;
+            if time == next { return base; }
+
+            return base - 1. + (prev - time).0 as f64 / (prev - next).0 as f64;
+        }
+
+        MAX_TURN_MEMORY as f64
     }
 
     // Writes
