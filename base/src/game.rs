@@ -52,6 +52,7 @@ pub const CALL_VOLUME: Bound = Bound::new(FOV_RADIUS_NPC);
 pub const MOVE_VOLUME: Bound = Bound::new(8);
 pub const SNEAK_VOLUME: Bound = Bound::new(1);
 pub const SNIFF_VOLUME: Bound = Bound::new(8);
+pub const FOLLOW_DISTANCE: i32 = 4;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Input { Escape, BackTab, Char(char), Click(Point) }
