@@ -1426,7 +1426,8 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
 //  - Another weird effect of seeing unknown sources while fighting
 //    (in fight-or-flight): if we defeat the main threat, but the unknown
 //    source is Menacing-not-Hostile, then we'll immediately switch from
-//    fighting to fleeing instead of actually fighting back.
+//    fighting to fleeing instead of actually fighting back. We should fix
+//    this case by marking threats from which we've successfully fled.
 //
 //  - Only run InvestigateNoises for recent unknown sources.
 //
@@ -1452,13 +1453,6 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
 //    The reason is that a) AttackTarget fails because it requires the target
 //    to be visible, but then b) FollowPath fails because we constructed a
 //    path, then ignored it in favor of running AttackTarget...
-//
-//  - Target selection and fight-or-flight vs. hunt is terrible. Example: a
-//    predator starts hunting because it's hungry. A prey hears it and issues
-//    a warning call. The predator treats the warning entity as a hostile
-//    entity (until it's seen it and confirmed it's a prey - see threats.rs)
-//    and follows it. It ignores any other prey it sees while it's
-//    investigating the sound.
 
 fn AttackOrFollowPath(kind: PathKind) -> impl Bhv {
     pri![

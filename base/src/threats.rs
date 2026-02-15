@@ -204,7 +204,7 @@ impl Threat {
                 if ThreatState::call_for_us(me, x) {
                     self.merge_status(Confidence::High, Valence::Friendly);
                 } else if x.call == Call::Warning {
-                    let valence = if self.timid { Valence::Menacing } else { Valence::Hostile };
+                    let valence = if self.timid { Valence::Menacing } else { Valence::Neutral };
                     self.merge_status(Confidence::Mid, valence);
                 }
                 if x.call == Call::Help { self.mark_combat(event.time); }
