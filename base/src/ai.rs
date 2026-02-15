@@ -452,9 +452,9 @@ fn select_flight_target(ctx: &mut Ctx, hiding: bool) -> Option<Point> {
             if z < threat_distance { (threat, threat_distance) = (x.pos, z); }
         }
 
-        let blocked = {
+        let blocked = (threat - p).len_l1() > 1 && {
             let los = LOS(threat, p);
-            (1..los.len() - 1).any(|i| known.get(los[i]).blocked())
+            los[1..los.len() - 1].iter().any(|&x| known.get(x).blocked())
         };
         let frontier = dirs::ALL.iter().any(|&x| known.get(p + x).unknown());
         let hidden = hiding || is_hiding_place(ctx, p);
@@ -517,7 +517,19 @@ fn UpdateLastSeen<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> 
     for cell in &ctx.known.cells {
         if !cell.visible { break; }
         if !valid(ctx, cell.point) { continue; }
+
         ctx.blackboard.last_seen.insert(kind, cell.point);
+
+        // If we spot a path that's a clear improvement, switch to it.
+        let Ctx { known, pos, .. } = *ctx;
+        let path = &mut ctx.blackboard.path;
+        if path.kind == kind && let Some(&target) = path.path.last() &&
+           (cell.point - pos).len_l2_squared() < (target - pos).len_l2_squared() {
+            let los = LOS(ctx.pos, cell.point);
+            let free = los.len() <= 2 || los[1..los.len() - 1].iter().all(
+                |&x| known.get(x).status() == Status::Free);
+            if free { *path = CachedPath { kind, path: los, skip: path.skip, step: 0 }; }
+        }
         return Result::Success;
     }
 
@@ -1393,8 +1405,6 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
 //
 //  - Last-seen cache for cells satisfying a need, to skip repeated searches.
 //    We have this cache, now, but we should add a "last failed" time too.
-//
-//  - Periodically re-plan a path to a need if there is a closer one?
 //
 //  - Update CachedPath to do "look at the target for a path w/ skip = 1",
 //    then get rid of the Look actions for basic needs and `SearchForEnemy`.
