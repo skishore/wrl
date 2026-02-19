@@ -1289,7 +1289,7 @@ fn UpdateFlightState(ctx: &mut Ctx) -> bool {
     if threats.state == FightOrFlight::Safe { return false; }
     let Some(threat) = threats.menacing.first() else { return false };
 
-    let reset = threat.time > bb.prev_time;
+    let reset = prev.is_none() || threat.time > bb.prev_time;
     let fleeing = bb.path.kind == PathKind::Hide || bb.path.kind == PathKind::Flee;
     let looking = bb.dirs.kind == DirsKind::Flight;
     let turn = bb.path.step as i32;
