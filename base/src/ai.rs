@@ -232,8 +232,8 @@ fn safe_inv_l2(point: Point) -> f64 {
     (point.len_l2_squared() as f64).sqrt().recip()
 }
 
-fn all_threats_asleep(ctx: &Ctx) -> bool {
-    ctx.blackboard.threats.menacing.iter().all(|x| x.asleep)
+fn any_threat_awake(ctx: &Ctx) -> bool {
+    ctx.blackboard.threats.menacing.iter().any(|x| !x.asleep)
 }
 
 fn is_hiding_place(ctx: &Ctx, point: Point) -> bool {
@@ -824,7 +824,7 @@ fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
     if kind == PathKind::Enemy && let Some(x) = &ctx.blackboard.target {
         let limit = ctx.known.time_at_turn(MIN_SEARCH_TURNS);
         if x.target.time > limit && x.target.sense != Sense::Smell { turns = 1. };
-    } else if kind == PathKind::Flee && !all_threats_asleep(ctx) {
+    } else if kind == PathKind::Flee && any_threat_awake(ctx) {
         turns = 1.;
     }
 
@@ -1644,7 +1644,7 @@ fn EscapeFromThreats() -> impl Bhv {
             cb!("ClearFlightPath", ClearFlightPath),
             seq![
                 "TryHiding",
-                cond!("AnyThreatsAwake", |x| !all_threats_asleep(x)),
+                cond!("AnyThreatsAwake", |x| any_threat_awake(x)),
                 cond!("CurrentlyHidden", |x| is_hiding_place(x, x.pos)),
                 cb!("HideFromThreats", HideFromThreats),
                 act!("LookForThreats", LookForThreats),
