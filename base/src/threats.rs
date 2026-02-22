@@ -7,7 +7,7 @@ use crate::debug::DebugLog;
 use crate::dex::Species;
 use crate::entity::{Entity, EID};
 use crate::knowledge::{AttackEvent, Call, CallEvent, Event, EventData, Sense};
-use crate::knowledge::{EntityKnowledge, Knowledge, Timestamp, UID};
+use crate::knowledge::{EntityKnowledge, Knowledge, Location, Timestamp, UID};
 use crate::game::CALL_VOLUME;
 use crate::list::{Handle, List};
 
@@ -30,8 +30,7 @@ enum Valence { Friendly, Neutral, Menacing, Hostile }
 
 #[derive(Clone)]
 pub struct Threat {
-    pub pos: Point,
-    pub time: Timestamp,
+    pub loc: Location,
     pub sense: Sense,
     pub combat: Timestamp,
     pub species: Option<&'static Species>,
@@ -53,12 +52,16 @@ pub struct Threat {
     valence: Valence,
 }
 
+impl std::ops::Deref for Threat {
+    type Target = Location;
+    fn deref(&self) -> &Self::Target { &self.loc }
+}
+
 impl Threat {
     fn prior(me: &Entity) -> Self {
         let predator = me.species.predator();
         Self {
-            pos: Default::default(),
-            time: Default::default(),
+            loc: Default::default(),
             sense: Sense::Sight,
             combat: Default::default(),
             species: None,
@@ -186,8 +189,7 @@ impl Threat {
     }
 
     fn update_for_event(&mut self, me: &Entity, event: &Event) {
-        self.pos = event.point;
-        self.time = event.time;
+        self.loc = event.loc;
         self.sense = event.sense;
         self.asleep = false;
 
@@ -218,8 +220,7 @@ impl Threat {
     }
 
     fn update_for_sighting(&mut self, me: &Entity, other: &EntityKnowledge) {
-        self.pos = other.pos;
-        self.time = other.time;
+        self.loc = other.loc;
         self.sense = other.sense;
         self.species = Some(other.species);
 
@@ -303,7 +304,7 @@ impl ThreatState {
             if threat.certain() && threat.hostile() { self.forget_tid(TID::CID); }
 
             if let EventData::Call(x) = &event.data && Self::call_for_us(me, x) {
-                self.on_call_for_help(event.point, event.time);
+                self.on_call_for_help(event.pos, event.time);
                 self.guess_threat_location(me, event);
             }
         }

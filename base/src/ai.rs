@@ -17,7 +17,7 @@ use crate::dex::Species;
 use crate::entity::Entity;
 use crate::game::{FOV_RADIUS_NPC, CALL_VOLUME, FOLLOW_DISTANCE, Item, move_ready};
 use crate::game::{Action, AttackAction, CallAction, EatAction, MoveAction};
-use crate::knowledge::{Call, Knowledge, ScentKnowledge, Sense, Timestamp};
+use crate::knowledge::{Call, Knowledge, Location, ScentKnowledge, Sense, Timestamp};
 use crate::pathing::{AStar, AStarHeuristic, Status};
 use crate::pathing::{BFS, DijkstraLength, DijkstraMap, Neighborhood};
 use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
@@ -185,9 +185,9 @@ impl Blackboard {
         if let Some(x) = &self.target {
             debug.append("Target:");
             debug.indent(1, |debug| {
-                let Target { last: pos, sense, time, .. } = x.target;
-                debug.append(format!("age: {}", known.debug_time(time)));
-                debug.append(format!("pos: {:?}, by {:?}", pos, sense));
+                let Target { loc, sense, .. } = x.target;
+                debug.append(format!("age: {}", known.debug_time(loc.time)));
+                debug.append(format!("pos: {:?}, by {:?}", loc.pos, sense));
                 debug.append(format!("bias: {:?}", x.bias));
                 debug.append(format!("fresh: {}", x.fresh));
                 debug.append(format!("steps: {}", x.steps));
@@ -397,7 +397,7 @@ fn select_chase_target(ctx: &mut Ctx) -> Option<Point> {
 
     let age = known.time - target.time;
     let bias = if target.sense == Sense::Smell { Point(0, 0) } else { bias };
-    let center = target.last;
+    let center = target.pos;
 
     let inv_dir_l2 = safe_inv_l2(dir);
     let inv_bias_l2 = safe_inv_l2(bias);
@@ -1075,8 +1075,7 @@ fn RestHere(ctx: &mut Ctx) -> Option<Action> {
 
 #[derive(Clone, Copy)]
 struct Target {
-    last: Point,
-    time: Timestamp,
+    loc: Location,
     sense: Sense,
     sure: bool,
 }
@@ -1086,6 +1085,11 @@ struct ChaseTarget {
     fresh: bool,
     steps: i32,
     target: Target,
+}
+
+impl std::ops::Deref for Target {
+    type Target = Location;
+    fn deref(&self) -> &Self::Target { &self.loc }
 }
 
 fn CleanupChaseState(ctx: &mut Ctx) {
@@ -1125,8 +1129,8 @@ fn ListThreatsBySight(ctx: &mut Ctx) -> bool {
     for other in &ctx.blackboard.threats.hostile {
         if !check_time!(ctx, other.time, MIN_SEARCH_TURNS) { break; }
 
-        let (last, time, sense) = (other.pos, other.time, other.sense);
-        let target = Target { last, time, sense, sure: other.hostile() };
+        let (loc, sense) = (other.loc, other.sense);
+        let target = Target { loc, sense, sure: other.hostile() };
         ctx.blackboard.options.push(target);
     }
     ctx.blackboard.options.len() > initial
@@ -1145,8 +1149,8 @@ fn ListPreyBySight(ctx: &mut Ctx) -> bool {
         if other.delta >= 0 { continue; }
         if !check_time!(ctx, other.time, MAX_SEARCH_TURNS) { break; }
 
-        let (last, time, sense) = (other.pos, other.time, other.sense);
-        let target = Target { last, time, sense, sure: true };
+        let (loc, sense) = (other.loc, other.sense);
+        let target = Target { loc, sense, sure: true };
         ctx.blackboard.options.push(target);
     }
     ctx.blackboard.options.len() > initial
@@ -1159,8 +1163,8 @@ fn ListPreyBySound(ctx: &mut Ctx) -> bool {
         if other.delta >= 0 { continue; }
         if !check_time!(ctx, other.time, MAX_SEARCH_TURNS) { break; }
 
-        let (last, time, sense) = (other.pos, other.time, other.sense);
-        let target = Target { last, time, sense, sure: false };
+        let (loc, sense) = (other.loc, other.sense);
+        let target = Target { loc, sense, sure: false };
         ctx.blackboard.options.push(target);
     }
     ctx.blackboard.options.len() > initial
@@ -1180,8 +1184,8 @@ fn ListTargetsByScent<F: Fn(&ScentKnowledge) -> bool>(ctx: &mut Ctx, f: F) -> bo
         if !f(scent) { continue; }
         if !check_time!(ctx, scent.time, MAX_TRACKING_TURNS) { continue; }
 
-        let (last, time, sense) = (scent.pos, scent.time, Sense::Smell);
-        let target = Target { last, time, sense, sure: false };
+        let (loc, sense) = (scent.loc, Sense::Smell);
+        let target = Target { loc, sense, sure: false };
         ctx.blackboard.options.push(target);
     }
     ctx.blackboard.options.len() > initial
@@ -1193,17 +1197,17 @@ fn SelectBestTarget(ctx: &mut Ctx) -> bool {
 
     let Ctx { known, pos, .. } = *ctx;
     let prev = ctx.blackboard.target.as_ref();
-    let score = |x: &Target| {
-        let age = known.time_to_turn(x.time);
-        let bonus = x.sure as i32 as f64;
-        let d0 = (x.last - pos).len_l2();
-        let d1 = prev.map(|y| (x.last - y.target.last).len_l2()).unwrap_or(0.0);
+    let score = |target: &Target| {
+        let age = known.time_to_turn(target.time);
+        let bonus = target.sure as i32 as f64;
+        let d0 = (target.pos - pos).len_l2();
+        let d1 = prev.map(|x| (target.pos - x.target.pos).len_l2()).unwrap_or(0.0);
         1.0 * age - 2.0 * bonus + 0.5 * d0 + 0.25 * d1
     };
     let target = *options.select_nth_unstable_by_key(0, |x| sortable(score(x))).1;
 
     let recent = target.time > ctx.blackboard.prev_time;
-    let change = if let Some(x) = prev { x.target.last != target.last } else { true };
+    let change = if let Some(x) = prev { target.pos != x.target.pos } else { true };
     let fresh = change || (recent && target.sense != Sense::Smell);
     let reset = change || recent;
 
@@ -1214,7 +1218,7 @@ fn SelectBestTarget(ctx: &mut Ctx) -> bool {
     let (bias, steps) = if !reset && let Some(x) = prev {
         (x.bias, x.steps + 1)
     } else {
-        (target.last - pos, 0)
+        (target.pos - pos, 0)
     };
     ctx.blackboard.target = Some(ChaseTarget { bias, fresh, steps, target });
     true
@@ -1224,7 +1228,7 @@ fn AttackEnemy(ctx: &mut Ctx) -> Option<Action> {
     let state = ctx.blackboard.target.as_ref()?;
     if state.target.sense == Sense::Smell { return None; }
     if state.target.time != ctx.known.time { return None; }
-    AttackTarget(ctx, state.target.last)
+    AttackTarget(ctx, state.target.pos)
 }
 
 fn TrackEnemyByScent(ctx: &mut Ctx) -> Option<Action> {

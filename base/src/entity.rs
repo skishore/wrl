@@ -10,7 +10,7 @@ use crate::static_assert_size;
 use crate::ai::AIState;
 use crate::base::{dirs, sample, Point, RNG};
 use crate::dex::Species;
-use crate::knowledge::{Knowledge, Scent};
+use crate::knowledge::{Knowledge, Location};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -43,7 +43,7 @@ pub struct Entity {
     // Location:
     pub pos: Point,
     pub dir: Point,
-    pub trail: VecDeque<Scent>,
+    pub trail: VecDeque<Location>,
 
     // Flags:
     pub asleep: bool,
@@ -93,21 +93,21 @@ impl Entity {
         if total > 1. { 1. } else { total }
     }
 
-    pub fn get_scent_trail(&self, p: Point) -> impl Iterator<Item = (&Scent, f64)> {
+    pub fn get_scent_trail(&self, p: Point) -> impl Iterator<Item = (&Location, f64)> {
         let base = SCENT_BASE;
         let dropoff = 1. - SCENT_DECAY / (SCENT_TRAIL_SIZE as f64);
         let mut scale = 1.;
 
-        self.trail.iter().enumerate().map(move |(i, scent)| {
+        self.trail.iter().enumerate().map(move |(i, loc)| {
             let variance = SCENT_SPREAD * (1. + 1. * i as f64);
-            let l2_squared = (scent.pos - p).len_l2_squared() as f64;
+            let l2_squared = (loc.pos - p).len_l2_squared() as f64;
             let num = (-l2_squared / (2. * variance)).exp();
             let den = (std::f64::consts::TAU * variance).sqrt();
-            let value = base * num / den * scale;
+            let scent = base * num / den * scale;
 
             scale *= dropoff;
 
-            (scent, value)
+            (loc, scent)
         })
     }
 

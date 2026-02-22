@@ -84,7 +84,7 @@ fn rivals<'a>(me: &'a Entity) -> Vec<&'a EntityKnowledge> {
     }
     let pos = me.pos;
     rivals.sort_by_cached_key(
-        |x| ((x.pos - pos).len_l2_squared(), x.pos.0, x.pos.1));
+        |&x| ((x.pos - pos).len_l2_squared(), x.pos.0, x.pos.1));
     rivals
 }
 

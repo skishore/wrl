@@ -36,6 +36,23 @@ fn trophic_level(x: &Entity) -> i32 {
 
 //////////////////////////////////////////////////////////////////////////////
 
+impl std::ops::Deref for Event {
+    type Target = Location;
+    fn deref(&self) -> &Self::Target { &self.loc }
+}
+
+impl std::ops::Deref for SourceKnowledge {
+    type Target = Location;
+    fn deref(&self) -> &Self::Target { &self.loc }
+}
+
+impl std::ops::Deref for EntityKnowledge {
+    type Target = Location;
+    fn deref(&self) -> &Self::Target { &self.loc }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 // Timedelta
 
 #[derive(Clone, Copy, Default, Eq, Ord, PartialEq, PartialOrd)]
@@ -170,9 +187,8 @@ pub enum EventData {
 pub struct Event {
     pub eid: Option<EID>,
     pub uid: Option<UID>,
+    pub loc: Location,
     pub data: EventData,
-    pub time: Timestamp,
-    pub point: Point,
     pub sense: Sense,
 }
 
@@ -193,8 +209,8 @@ impl Event {
 //////////////////////////////////////////////////////////////////////////////
 // Scent
 
-#[derive(Clone, Copy)]
-pub struct Scent {
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Location {
     pub pos: Point,
     pub time: Timestamp,
 }
@@ -202,9 +218,13 @@ pub struct Scent {
 #[derive(Clone, Copy)]
 pub struct ScentKnowledge {
     pub delta: i32,
-    pub pos: Point,
+    pub loc: Location,
     pub species: &'static Species,
-    pub time: Timestamp,
+}
+
+impl std::ops::Deref for ScentKnowledge {
+    type Target = Location;
+    fn deref(&self) -> &Self::Target { &self.loc }
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -237,11 +257,10 @@ static_assert_size!(CellKnowledge, 48);
 // Detailed knowledge about an entity. Only updated when we see it.
 pub struct EntityKnowledge {
     pub eid: EID,
-    pub pos: Point,
     pub dir: Point,
+    pub loc: Location,
     pub sense: Sense,
     pub species: &'static Species,
-    pub time: Timestamp,
 
     // Stats:
     pub hp: f64,
@@ -263,10 +282,9 @@ static_assert_size!(EntityKnowledge, 72);
 // Used to tag events with a UID such that same UID => same event source.
 pub struct SourceKnowledge {
     pub uid: UID,
-    pub pos: Point,
     pub eid: Option<EID>,
+    pub loc: Location,
     pub sound: Option<Sound>,
-    pub time: Timestamp,
     pub turns: i32,
 }
 #[cfg(target_pointer_width = "64")]
@@ -322,11 +340,10 @@ impl EntityKnowledge {
     fn new(eid: EID, species: &'static Species) -> Self {
         Self {
             eid,
-            pos: Default::default(),
             dir: Default::default(),
+            loc: Default::default(),
             sense: Sense::Sight,
             species,
-            time: Default::default(),
 
             // Stats:
             hp: Default::default(),
@@ -348,7 +365,7 @@ impl EntityKnowledge {
 
 impl SourceKnowledge {
     fn new(uid: UID, event: &Event) -> Self {
-        Self { uid, pos: event.point, eid: None, sound: None, time: event.time, turns: 0 }
+        Self { uid, eid: None, loc: event.loc, sound: None, turns: 0 }
     }
 
     pub fn freshness(&self) -> f64 {
@@ -531,10 +548,10 @@ impl Knowledge {
 
         if *x == Default::default() { self.eid_index.remove(&eid); }
 
-        let EntityKnowledge { eid, pos, .. } = self.entities.remove(h);
-        Self::move_entity(&mut self.pos_index, h, Some(pos), None);
+        let EntityKnowledge { eid, loc, .. } = self.entities.remove(h);
+        Self::move_entity(&mut self.pos_index, h, Some(loc.pos), None);
 
-        self.forget_event(Some(eid), None, pos);
+        self.forget_event(Some(eid), None, loc.pos);
 
         debug_assert!(self.check_invariants());
     }
@@ -552,7 +569,7 @@ impl Knowledge {
         let Some(eid) = event.eid else {
             let uid = Self::get_next_uid(&mut self.last_uid);
             let handle = self.sources.push_front(SourceKnowledge::new(uid, event));
-            Self::move_source(&mut self.pos_index, handle, None, Some(event.point));
+            Self::move_source(&mut self.pos_index, handle, None, Some(event.pos));
             clone.uid = Some(uid);
             self.events.push(clone);
             return;
@@ -579,17 +596,16 @@ impl Knowledge {
         };
         if !me.player && let Some(h) = entry.entity && link_to_entity(&self.entities[h]) {
             let entity = &mut self.entities[h];
-            let (s, t) = (entity.pos, event.point);
+            let (s, t) = (entity.pos, event.pos);
             Self::move_entity(&mut self.pos_index, h, Some(s), Some(t));
 
             if let Some(x) = entry.source.take() {
-                let SourceKnowledge { pos, .. } = self.sources.remove(x);
-                Self::move_source(&mut self.pos_index, x, Some(pos), None);
+                let SourceKnowledge { loc, .. } = self.sources.remove(x);
+                Self::move_source(&mut self.pos_index, x, Some(loc.pos), None);
             }
 
-            entity.pos = event.point;
+            entity.loc = event.loc;
             entity.sense = event.sense;
-            entity.time = event.time;
 
             self.entities.move_to_front(h);
 
@@ -607,13 +623,12 @@ impl Knowledge {
         if entry.source.is_none() { entry.source = Some(handle); }
 
         let source = &mut self.sources[handle];
-        let (s, t) = (existing.map(|_| source.pos), event.point);
+        let (s, t) = (existing.map(|_| source.pos), event.pos);
         Self::move_source(&mut self.pos_index, handle, s, Some(t));
 
         source.eid = Some(eid);
-        source.pos = event.point;
+        source.loc = event.loc;
         source.sound = event.sound();
-        source.time = event.time;
         source.turns = 0;
 
         clone.uid = Some(source.uid);
@@ -652,9 +667,9 @@ impl Knowledge {
         }
     }
 
-    fn forget_event(&mut self, eid: Option<EID>, uid: Option<UID>, point: Point) {
-        let data = EventData::Forget;
-        let event = Event { eid, uid, data, time: self.time, point, sense: Sense::Sight };
+    fn forget_event(&mut self, eid: Option<EID>, uid: Option<UID>, pos: Point) {
+        let loc = Location { pos, time: self.time };
+        let event = Event { eid, uid, loc, data: EventData::Forget, sense: Sense::Sight };
         self.events.push(event);
     }
 
@@ -704,14 +719,13 @@ impl Knowledge {
 
             let mut remainder = rng.random::<f64>();
 
-            for (scent, value) in other.get_scent_trail(me.pos) {
-                remainder -= value;
+            for (&loc, scent) in other.get_scent_trail(me.pos) {
+                remainder -= scent;
                 if remainder >= 0. { continue; }
 
                 let species = other.species;
-                let &Scent { pos, time } = scent;
                 let delta = trophic_level(other) - trophic_level(me);
-                self.scents.push(ScentKnowledge { delta, pos, species, time });
+                self.scents.push(ScentKnowledge { delta, loc, species });
                 break;
             }
         }
@@ -731,12 +745,12 @@ impl Knowledge {
 
         // Seeing this entity may let us identify an unknown event source.
         if let Some(x) = cached.source.take() && self.sources[x].time > limit {
-            let SourceKnowledge { uid, pos, .. } = self.sources.remove(x);
-            Self::move_source(&mut self.pos_index, x, Some(pos), None);
+            let SourceKnowledge { uid, loc, .. } = self.sources.remove(x);
+            Self::move_source(&mut self.pos_index, x, Some(loc.pos), None);
 
+            let loc = Location { pos: other.pos, time };
             let (eid, uid) = (Some(other.eid), Some(uid));
-            let data = EventData::Spot;
-            let event = Event { eid, uid, data, time, point: other.pos, sense };
+            let event = Event { eid, uid, loc, data: EventData::Spot, sense };
             self.events.push(event);
         }
 
@@ -756,10 +770,9 @@ impl Knowledge {
         entry.species = other.species;
 
         // Update our knowledge with the entity's latest state.
-        entry.pos = other.pos;
+        entry.loc = Location { pos: other.pos, time };
         entry.dir = other.dir;
         entry.sense = sense;
-        entry.time = time;
 
         entry.hp = other.hp_fraction();
         entry.pp = 1. - clamp(other.move_timer as f64 / MOVE_TIMER as f64, 0., 1.);

@@ -14,7 +14,7 @@ use crate::dex::{Attack, Species};
 use crate::debug::DebugFile;
 use crate::effect::{CB, Effect, Frame, FT, Particle, ParticleData, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
-use crate::knowledge::{Call, Knowledge, Scent, Sense, Timedelta, Timestamp};
+use crate::knowledge::{Call, Knowledge, Location, Sense, Timedelta, Timestamp};
 use crate::knowledge::{AttackEvent, CallEvent, Event, EventData, MoveEvent};
 use crate::lighting::Lighting;
 use crate::mapgen::mapgen_with_size as mapgen;
@@ -552,9 +552,10 @@ impl Board {
 
     // Knowledge
 
-    fn create_event(&self, eid: EID, data: EventData, point: Point) -> Event {
+    fn create_event(&self, eid: EID, data: EventData, pos: Point) -> Event {
         let (eid, uid) = (Some(eid), None);
-        Event { eid, uid, data, time: self.time, point, sense: Sense::Sight }
+        let loc = Location { pos, time: self.time };
+        Event { eid, uid, loc, data, sense: Sense::Sight }
     }
 
     fn observe_event(&mut self, eid: EID, s: &Senses, e: &mut Event, env: &mut UpdateEnv) {
@@ -1261,7 +1262,7 @@ fn update_state(state: &mut State) {
 
         let trail = &mut entity.trail;
         if trail.len() == trail.capacity() { trail.pop_back(); }
-        trail.push_front(Scent { pos, time: board.time });
+        trail.push_front(Location { pos, time: board.time });
 
         board.active_entity = None;
         drain(entity, &result);
