@@ -124,6 +124,7 @@ impl DebugFile {
         };
         let render_particle = |p: Point, r: &RenderData| match r {
             RenderData::Dummy => None,
+            RenderData::Text(_) => None,
             &RenderData::Glyph(g) => Some((p, g)),
             &RenderData::Flash(c) => {
                 let cell = board.get_cell(p);

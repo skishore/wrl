@@ -5,7 +5,7 @@ use rand::Rng;
 
 use crate::base::{HashMap, HashSet, LOS, Point, RNG, dirs};
 use crate::base::{Bound, Buffer, Color, Glyph, Matrix, Rect, Slice};
-use crate::effect::{Frame, ParticleData, RenderData};
+use crate::effect::{Frame, ParticleData, RenderData, Text};
 use crate::entity::{EID, Entity};
 use crate::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_};
 use crate::game::{Input, Tile, show_item};
@@ -698,8 +698,10 @@ impl UI {
         }
 
         // Render all of the current animation's particles.
+        let mut text = vec![];
         let mut render_particle = |p: Point, r: &RenderData| match r {
             RenderData::Dummy => {},
+            RenderData::Text(x) => text.push((p, **x)),
             &RenderData::Flash(color) => {
                 let Some(p) = remap(p, slice) else { return };
                 slice.set(p, slice.get(p).with_fg(Color::black()).with_bg(color));
@@ -709,6 +711,22 @@ impl UI {
                 slice.set(p, glyph);
             },
         };
+        let render_text = |slice: &mut Slice, p: Point, t: Text| {
+            let len = t.text.len() as i32;
+            let (shift, prefix, suffix) = if p.0 > me.pos.0 || true {
+                (-len / 2 - 1, len % 2 == 0, true)
+            } else {
+                (1, true, false)
+            };
+            let Some(p) = remap(p + Point(shift, 0), slice) else { return };
+
+            slice.set_cursor(p);
+            slice.set_fg(Some(Color::white().fade(t.color)));
+            if prefix { slice.write_chr(' '); }
+            slice.write_str(t.text);
+            if suffix { slice.write_chr(' '); }
+            slice.set_fg(None);
+        };
         if let Some(effect) = effect {
             assert!(effect.frame.len() == effect.mask.len());
             effect.frame.iter().zip(effect.mask).filter(|x| *x.1).for_each(|x| match &x.0.data {
@@ -717,6 +735,7 @@ impl UI {
                 ParticleData::Sight(r) => render_particle(x.0.point, r),
                 ParticleData::Sound(_, r) => render_particle(x.0.point, r),
             });
+            text.iter().for_each(|&(p, t)| render_text(slice, p, t));
         }
 
         // If we're still alive, render arrows showing NPC facing.

@@ -42,6 +42,7 @@ const NUM_PREDATORS: i32 = 2;
 const NUM_PREY: i32 = 18;
 
 const UI_FLASH: i32 = 4;
+const UI_NOISE: i32 = 16;
 const UI_DAMAGE_FLASH: i32 = 6;
 const UI_DAMAGE_TICKS: i32 = 6;
 
@@ -903,7 +904,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 board.observe_event(s.eid, &s.merged, event, &mut state.env);
             }
 
-            let effect = apply_noise(source, 0xffff00, noise.volume);
+            let effect = apply_noise(source, 0xffff00, "*sniff*", noise.volume);
             board.add_effect(effect, &mut state.env);
             ActionResult::success()
         }
@@ -967,12 +968,12 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             }
 
             // Use a different color for different call types.
-            let (color, wait) = match call {
-                Call::Help    => (0x00ffff, true),
-                Call::Warning => (0xff8000, false),
+            let (color, text, wait) = match call {
+                Call::Help    => (0x00ffff, "*chirp*", true),
+                Call::Warning => (0xff8000, "*grrr*", false),
             };
             let board = &mut state.board;
-            let mut effect = apply_noise(source, color, CALL_VOLUME);
+            let mut effect = apply_noise(source, color, text, CALL_VOLUME);
 
             // For some call types, we look before calling; when calling for
             // help, we shout in the direction of our allies, then look.
@@ -1134,9 +1135,16 @@ fn flash_tile<T: Into<Color>>(target: Point, color: T, cb: Option<CB>) -> Effect
     effect
 }
 
-fn apply_noise<T: Copy + Into<Color>>(target: Point, color: T, volume: Bound) -> Effect {
-    let frame = vec![Particle::noise(target, color.into(), volume)];
-    Effect::repeat(frame, UI_FLASH)
+fn apply_noise<T: Copy + Into<Color>>(
+        target: Point, color: T, text: &'static str, volume: Bound) -> Effect {
+    let count = UI_NOISE;
+    let noise = Particle::noise(target, color.into(), volume);
+    let frames = (0..count).map(|i| {
+        let color = (count - i) as f64 / count as f64;
+        let sound = Particle::sound(target, color.powf(0.5), text, volume);
+        vec![noise.clone(), sound]
+    }).collect();
+    Effect::new(frames)
 }
 
 fn apply_damage(target: Point, cb: CB) -> Effect {
