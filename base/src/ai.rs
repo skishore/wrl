@@ -676,7 +676,7 @@ fn WarnOffThreats(ctx: &mut Ctx) -> Option<Action> {
         if !CALL_VOLUME.contains(threat.pos - pos) { continue; }
 
         let warn = !stare && threat.time > bb.last_warning;
-        if warn { threat.mark_warned(rng); }
+        if warn { threat.mark_warned(ctx.entity, rng); }
 
         if result.is_some() { continue; }
 

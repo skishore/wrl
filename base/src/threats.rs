@@ -18,6 +18,8 @@ pub const ACTIVE_THREAT_TURNS: i32 = 72;
 pub const CALL_LIMIT_TURNS: i32 = 4;
 pub const CALL_RETRY_TURNS: i32 = 16;
 
+fn timid(me: &Entity) -> bool { !me.species.predator() }
+
 //////////////////////////////////////////////////////////////////////////////
 
 // Threat
@@ -44,7 +46,6 @@ pub struct Threat {
     pub seen: bool,
 
     // Warnings:
-    timid: bool,
     warnings: i32,
 
     // See status accessors:
@@ -59,7 +60,6 @@ impl std::ops::Deref for Threat {
 
 impl Threat {
     fn prior(me: &Entity) -> Self {
-        let predator = me.species.predator();
         Self {
             loc: Default::default(),
             sense: Sense::Sight,
@@ -68,14 +68,13 @@ impl Threat {
 
             // Stats:
             hp: 0.,
-            delta: if predator { -1 } else { 1 },
+            delta: if timid(me) { 1 } else { -1 },
 
             // Flags:
             asleep: false,
             seen: false,
 
             // Warnings:
-            timid: !predator,
             warnings: 0,
 
             // See status accessors:
@@ -131,12 +130,12 @@ impl Threat {
         self.confidence == Confidence::Zero
     }
 
-    pub fn mark_warned(&mut self, rng: &mut RNG) {
+    pub fn mark_warned(&mut self, me: &Entity, rng: &mut RNG) {
         let warnings = self.warnings;
         let sample = rng.random::<f32>() * 2f32.powi(warnings);
 
         if sample < 0.25 {
-            let valence = if self.timid { Valence::Menacing } else { Valence::Hostile };
+            let valence = if timid(me) { Valence::Menacing } else { Valence::Hostile };
             self.merge_status(Confidence::Mid, valence);
         } else if sample >= 0.75 {
             self.merge_status(Confidence::Mid, Valence::Hostile);
@@ -206,7 +205,7 @@ impl Threat {
                 if ThreatState::call_for_us(me, x) {
                     self.merge_status(Confidence::High, Valence::Friendly);
                 } else if x.call == Call::Warning {
-                    let valence = if self.timid { Valence::Menacing } else { Valence::Neutral };
+                    let valence = if timid(me) { Valence::Menacing } else { Valence::Neutral };
                     self.merge_status(Confidence::Mid, valence);
                 }
                 if x.call == Call::Help { self.mark_combat(event.time); }
@@ -236,7 +235,7 @@ impl Threat {
             let combat = self.combat > me.known.time_at_turn(ACTIVE_THREAT_TURNS);
             let valence = if combat { Valence::Hostile } else { Valence::Menacing };
             (Confidence::High, valence)
-        } else if !me.species.predator() && me.species == other.species {
+        } else if timid(me) && me.species == other.species {
             (Confidence::High, Valence::Friendly)
         } else {
             (Confidence::High, Valence::Neutral)
