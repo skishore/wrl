@@ -12,7 +12,7 @@ use crate::base::{Bound, Buffer, Color, Glyph};
 use crate::base::{HashMap, HashSet, LOS, Matrix, Point, RNG, dirs, sample, weighted};
 use crate::dex::{Attack, Species};
 use crate::debug::DebugFile;
-use crate::effect::{CB, Effect, Frame, FT, Particle, ParticleData, self};
+use crate::effect::{CB, Effect, Frame, FT, Particle, ParticleData, RenderData, self};
 use crate::entity::{EID, Entity, EntityArgs, EntityMap};
 use crate::knowledge::{Call, Knowledge, Location, Sense, Timedelta, Timestamp};
 use crate::knowledge::{AttackEvent, CallEvent, Event, EventData, MoveEvent};
@@ -42,7 +42,7 @@ const NUM_PREDATORS: i32 = 2;
 const NUM_PREY: i32 = 18;
 
 const UI_FLASH: i32 = 4;
-const UI_NOISE: i32 = 16;
+const UI_NOISE: i32 = 8;
 const UI_DAMAGE_FLASH: i32 = 6;
 const UI_DAMAGE_TICKS: i32 = 6;
 
@@ -1137,14 +1137,10 @@ fn flash_tile<T: Into<Color>>(target: Point, color: T, cb: Option<CB>) -> Effect
 
 fn apply_noise<T: Copy + Into<Color>>(
         target: Point, color: T, text: &'static str, volume: Bound) -> Effect {
-    let count = UI_NOISE;
-    let noise = Particle::noise(target, color.into(), volume);
-    let frames = (0..count).map(|i| {
-        let color = (count - i) as f64 / count as f64;
-        let sound = Particle::sound(target, color.powf(0.5), text, volume);
-        vec![noise.clone(), sound]
-    }).collect();
-    Effect::new(frames)
+    let frame = vec![Particle::noise(target, color.into(), volume)];
+    let mut effect = Effect::repeat(frame, UI_NOISE);
+    effect.frames[0].push(Particle::sound(target, text, volume));
+    effect
 }
 
 fn apply_damage(target: Point, cb: CB) -> Effect {
@@ -1207,7 +1203,18 @@ fn update_player_knowledge(state: &mut State) {
     env.ui.update_focus(player);
     env.ui.update_moves(player);
 
-    if board.get_frame().is_none() { return; }
+    let Some(frame) = board.get_frame() else { return };
+
+    let mut render_particle = |p: Point, r: &RenderData| {
+        let RenderData::Text(t) = r else { return };
+        env.ui.animate_text(p, t);
+    };
+    frame.iter().zip(&board._frame_mask).filter(|x| *x.1).for_each(|x| match &x.0.data {
+        ParticleData::Light(..) => {},
+        ParticleData::Shift(..) => {},
+        ParticleData::Sight(r) => render_particle(x.0.point, r),
+        ParticleData::Sound(_, r) => render_particle(x.0.point, r),
+    });
 
     board.redo_effect_updates();
 

@@ -5,7 +5,7 @@ use rand::Rng;
 
 use crate::base::{HashMap, HashSet, LOS, Point, RNG, dirs};
 use crate::base::{Bound, Buffer, Color, Glyph, Matrix, Rect, Slice};
-use crate::effect::{Frame, ParticleData, RenderData, Text};
+use crate::effect::{Frame, ParticleData, RenderData};
 use crate::entity::{EID, Entity};
 use crate::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_};
 use crate::game::{Input, Tile, show_item};
@@ -30,6 +30,7 @@ const UI_COLOR: i32 = 0xffc000;
 const UI_MOVE_ALPHA: f64 = 0.75;
 const UI_MOVE_FRAMES: i32 = 12;
 const UI_TARGET_FRAMES: i32 = 20;
+const UI_CALLOUT_FRAMES: i32 = 60;
 
 const UI_FOV_BRIGHTEN: f64 = 0.12;
 const UI_REMEMBERED: f64 = 0.20;
@@ -167,6 +168,13 @@ impl Default for Layout {
 #[derive(Copy, Clone)]
 pub struct MoveAnimation {
     pub color: Color,
+    pub frame: i32,
+    pub limit: i32,
+}
+
+#[derive(Copy, Clone)]
+pub struct TextAnimation {
+    pub text: &'static str,
     pub frame: i32,
     pub limit: i32,
 }
@@ -507,6 +515,7 @@ pub struct UI {
     layout: Layout,
 
     // Animations:
+    calls: HashMap<Point, TextAnimation>,
     moves: HashMap<Point, MoveAnimation>,
     rainfall: Option<Rainfall>,
 
@@ -546,6 +555,11 @@ impl UI {
         self.moves.insert(point, manim);
     }
 
+    pub fn animate_text(&mut self, point: Point, text: &'static str) {
+        let tanim = TextAnimation { text, frame: 0, limit: UI_CALLOUT_FRAMES };
+        self.calls.insert(point, tanim);
+    }
+
     pub fn process_input(&mut self, me: &Entity, input: Input) -> bool {
         process_ui_input(self, me, input)
     }
@@ -565,6 +579,9 @@ impl UI {
     pub fn update(&mut self, pos: Point, rng: &mut RNG) {
         self.frame += 1;
         self.update_weather(pos, rng);
+
+        for x in self.calls.values_mut() { x.frame += 1; }
+        self.calls.retain(|_, v| v.frame < v.limit);
 
         for x in self.moves.values_mut() { x.frame += 1; }
         self.moves.retain(|_, v| v.frame < v.limit);
@@ -698,10 +715,9 @@ impl UI {
         }
 
         // Render all of the current animation's particles.
-        let mut text = vec![];
         let mut render_particle = |p: Point, r: &RenderData| match r {
             RenderData::Dummy => {},
-            RenderData::Text(x) => text.push((p, **x)),
+            RenderData::Text(_) => {},
             &RenderData::Flash(color) => {
                 let Some(p) = remap(p, slice) else { return };
                 slice.set(p, slice.get(p).with_fg(Color::black()).with_bg(color));
@@ -711,22 +727,6 @@ impl UI {
                 slice.set(p, glyph);
             },
         };
-        let render_text = |slice: &mut Slice, p: Point, t: Text| {
-            let len = t.text.len() as i32;
-            let (shift, prefix, suffix) = if p.0 > me.pos.0 || true {
-                (-len / 2 - 1, len % 2 == 0, true)
-            } else {
-                (1, true, false)
-            };
-            let Some(p) = remap(p + Point(shift, 0), slice) else { return };
-
-            slice.set_cursor(p);
-            slice.set_fg(Some(Color::white().fade(t.color)));
-            if prefix { slice.write_chr(' '); }
-            slice.write_str(t.text);
-            if suffix { slice.write_chr(' '); }
-            slice.set_fg(None);
-        };
         if let Some(effect) = effect {
             assert!(effect.frame.len() == effect.mask.len());
             effect.frame.iter().zip(effect.mask).filter(|x| *x.1).for_each(|x| match &x.0.data {
@@ -735,7 +735,6 @@ impl UI {
                 ParticleData::Sight(r) => render_particle(x.0.point, r),
                 ParticleData::Sound(_, r) => render_particle(x.0.point, r),
             });
-            text.iter().for_each(|&(p, t)| render_text(slice, p, t));
         }
 
         // If we're still alive, render arrows showing NPC facing.
@@ -761,6 +760,11 @@ impl UI {
                 let color = if valid { 0xffff00 } else { 0xff0000 };
                 set(slice, point, Glyph::wdfg(ch, color));
             }
+        }
+
+        // Render any text animations.
+        for (&p, t) in &self.calls {
+            self.render_call(me, p, t, slice);
         }
 
         // Render an estimate of the focused entity's FOV on the map.
@@ -795,6 +799,25 @@ impl UI {
                 slice.set(point, glyph);
             }
         }
+    }
+
+    fn render_call(&self, me: &Entity, p: Point, t: &TextAnimation, slice: &mut Slice) {
+        let len = t.text.len() as i32;
+        let (shift, prefix, suffix) = if p.0 > me.pos.0 {
+            (1, Some('-'), None)
+        } else {
+            (-len / 2 - 1, if len % 2 == 0 { Some(' ') } else { None }, Some('-'))
+        };
+        let ratio = t.frame as f64 / t.limit as f64;
+        let color = 1. - ratio.powi(2);
+        let offset = self.get_map_offset(me);
+
+        slice.set_cursor(Point(2 * (p.0 + shift - offset.0), p.1 - offset.1));
+        slice.set_fg(Some(Color::white().fade(color)));
+        if let Some(c) = prefix { slice.write_chr(c); }
+        slice.write_str(t.text);
+        if let Some(c) = suffix { slice.write_chr(c); }
+        slice.set_fg(None);
     }
 
     fn render_weather(&self, buffer: &mut Buffer, me: &Entity, effect: Option<&Effect>) {

@@ -21,18 +21,12 @@ pub enum Event {
     Other { frame: i32, point: Point, what: FT },
 }
 
-#[derive(Clone, Copy)]
-pub struct Text {
-    pub color: f64,
-    pub text: &'static str,
-}
-
 #[derive(Clone)]
 pub enum RenderData {
     Dummy,
     Flash(Color),
     Glyph(Glyph),
-    Text(Box<Text>),
+    Text(&'static str),
 }
 
 #[derive(Clone)]
@@ -70,8 +64,7 @@ impl Particle {
         Self { point: target, data: ParticleData::Shift(source) }
     }
 
-    pub fn sound(point: Point, color: f64, text: &'static str, volume: Bound) -> Self {
-        let text = Box::new(Text { color, text });
+    pub fn sound(point: Point, text: &'static str, volume: Bound) -> Self {
         Self { point, data: ParticleData::Sound(volume, RenderData::Text(text)) }
     }
 
