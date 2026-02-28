@@ -198,7 +198,7 @@ impl Threat {
                 self.mark_combat(event.time);
             },
             EventData::Call(x) => {
-                if ThreatState::call_for_us(me, x) {
+                if ThreatState::friendly_call(me, x) {
                     self.merge_status(Confidence::High, Valence::Friendly);
                 } else if x.call == Call::Warning {
                     let valence = if timid(me) { Valence::Menacing } else { Valence::Neutral };
@@ -306,7 +306,7 @@ impl ThreatState {
             threat.update_for_event(me, event);
             if threat.certain() && threat.hostile() { self.forget_tid(TID::CID); }
 
-            if let EventData::Call(x) = &event.data && Self::call_for_us(me, x) {
+            if let EventData::Call(x) = &event.data && Self::friendly_call_for_help(me, x) {
                 self.on_call_for_help(event.pos, event.time);
                 self.guess_threat_location(me, event);
             }
@@ -462,8 +462,12 @@ impl ThreatState {
         x == me.eid || me.known.entity(x).map(|x| x.friend).unwrap_or(false)
     }
 
-    fn call_for_us(me: &Entity, x: &CallEvent) -> bool {
-        x.call == Call::Help && x.species == me.species
+    fn friendly_call(me: &Entity, x: &CallEvent) -> bool {
+       x.species == me.species
+    }
+
+    fn friendly_call_for_help(me: &Entity, x: &CallEvent) -> bool {
+        x.call == Call::Help && Self::friendly_call(me, x)
     }
 
     fn guess_threat_location(&mut self, me: &Entity, event: &Event) {
