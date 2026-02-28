@@ -155,10 +155,6 @@ impl Threat {
     //   - We should only update our valence after a warning after the watch
     //     period is complete.
     //
-    //   - Wilds may attack player; however, if they spot a predator, flee
-    //     from it, and then spot a player within ACTIVE_THREAT_TURNS, we'll
-    //     incorrectly flee from the player because of the other threat.
-    //
     //   - Can we make call-for-help carry information about target EID(s)?
     //     Seems hard - we can call based on unknown threats.
 
@@ -268,6 +264,7 @@ pub struct ThreatState {
 
     // Fight-or-flight.
     pub state: FightOrFlight,
+    pub last_safe: Timestamp,
 
     // Calling for help.
     pub call_for_help: bool,
@@ -281,10 +278,17 @@ impl ThreatState {
             debug.append(format!("state: {:?}", self.state));
             debug.append(format!("call_for_help: {}", self.call_for_help));
             debug.append(format!("last_call: {}", known.debug_time(self.last_call)));
+            debug.append(format!("last_safe: {}", known.debug_time(self.last_safe)));
         });
         debug.newline();
 
         for threat in &self.threats { threat.debug(debug, known); }
+    }
+
+    pub fn mark_safe(&mut self, time: Timestamp) {
+        if self.state == FightOrFlight::Safe { return; }
+        self.state = FightOrFlight::Safe;
+        self.last_safe = time;
     }
 
     pub fn on_call_for_help(&mut self, point: Point, time: Timestamp) {
@@ -296,7 +300,7 @@ impl ThreatState {
         self.last_call = time;
     }
 
-    pub fn update(&mut self, me: &Entity, prev_time: Timestamp) {
+    pub fn update(&mut self, me: &Entity) {
         for event in &me.known.events {
             let Some(threat) = self.get_by_event(me, event) else { continue };
             threat.update_for_event(me, event);
@@ -322,14 +326,16 @@ impl ThreatState {
         let call_limit = me.known.time_at_turn(CALL_LIMIT_TURNS);
         let call_retry = me.known.time_at_turn(CALL_RETRY_TURNS);
 
-        let was_active = self.state != FightOrFlight::Safe;
-        let mut active = was_active;
         let mut hidden_hostile = 0;
         let mut seen_hostile = 0;
 
         // List known enemies ("hostile") and potential enemies ("unknown").
+        //
+        // Every time we successfully flee from or fight back against all
+        // known threats, we end an "epoch" by updating `last_safe`.
         for x in &self.threats {
             if x.time <= limit { break; }
+            if x.time <= self.last_safe { break; }
 
             let menacing = x.menacing();
             let hostile = x.hostile();
@@ -347,14 +353,8 @@ impl ThreatState {
         // Start fight-or-flight if we have an active known enemy. Stop when
         // we no longer have any known enemies. We also stop it with known
         // enemies if we escape from them (see: UpdateFlightState).
-        //
-        // FATAL flaw: if we decide a threat is menacing because of our own
-        // action, we may fail the "x.time > prev_time" check here...
-        if let Some(x) = self.menacing.first() && x.time > prev_time {
-            active = true;
-        } else if self.menacing.is_empty() {
-            active = false;
-        }
+        let was_active = self.state != FightOrFlight::Safe;
+        let active = !self.menacing.is_empty();
 
         // While active, also attack / flee from potential enemies.
         if active && !self.menacing.is_empty() {
@@ -379,7 +379,7 @@ impl ThreatState {
         for x in &self.threats {
             if x.time <= limit { break; }
 
-            if x.hostile() || x.menacing() {
+            if (x.hostile() || x.menacing()) && x.time > self.last_safe {
                 if !x.seen && hidden_count == 0 { continue; }
                 if !x.seen { hidden_count -= 1; }
                 foes_strength += strength(x);
@@ -406,7 +406,7 @@ impl ThreatState {
             if p > 0.6 { self.state = FightOrFlight::Fight; }
             if p < 0.4 { self.state = FightOrFlight::Flight; }
         } else {
-            self.state = FightOrFlight::Safe;
+            self.mark_safe(me.known.time);
         }
 
         self.call_for_help = false;

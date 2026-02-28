@@ -501,7 +501,7 @@ fn TickBasicNeeds(ctx: &mut Ctx) -> Result {
 
 fn RunCombatAnalysis(ctx: &mut Ctx) -> Result {
     let (bb, entity) = (&mut *ctx.blackboard, ctx.entity);
-    bb.threats.update(entity, bb.prev_time);
+    bb.threats.update(entity);
     Result::Failed
 }
 
@@ -1111,7 +1111,7 @@ fn ClearTargets(ctx: &mut Ctx) {
 
 fn MarkSafeIfLostView(ctx: &mut Ctx) -> bool {
     if !ctx.blackboard.options.is_empty() { return false; }
-    ctx.blackboard.threats.state = FightOrFlight::Safe;
+    ctx.blackboard.threats.mark_safe(ctx.known.time);
     true
 }
 
@@ -1316,7 +1316,7 @@ fn UpdateFlightState(ctx: &mut Ctx) -> bool {
     }
 
     if looking && !reset && bb.dirs.dirs.len() == 1 {
-        bb.threats.state = FightOrFlight::Safe;
+        bb.threats.mark_safe(ctx.known.time);
     } else {
         bb.flight = Some(flight);
     }
