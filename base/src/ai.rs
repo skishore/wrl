@@ -15,7 +15,7 @@ use crate::bhv::{Bhv, Result};
 use crate::debug::{DebugFile, DebugLine, DebugLog};
 use crate::dex::Species;
 use crate::entity::Entity;
-use crate::game::{FOV_RADIUS_NPC, CALL_VOLUME, FOLLOW_DISTANCE, Item, move_ready};
+use crate::game::{FOV_RADIUS_NPC, CALL_VOLUME, FOLLOW_RANGE, Item, move_ready};
 use crate::game::{Action, AttackAction, CallAction, EatAction, MoveAction};
 use crate::knowledge::{Call, Knowledge, Location, ScentKnowledge, Sense, Timestamp};
 use crate::pathing::{AStar, AStarHeuristic, Status};
@@ -889,7 +889,7 @@ fn PathToTarget<F: Fn(Point) -> bool>(
         let cover = matches!(tile, Some(x) if x.is_cover());
 
         // Check for any of several reasons to stay close to a target.
-        let mut radius = min(range.radius, FOLLOW_DISTANCE);
+        let mut radius = min(range.radius, FOLLOW_RANGE.radius);
         if shade { radius = min(radius, max(light - 1, 1)); }
         if cover { radius = min(radius, 1); }
         let radius = radius;

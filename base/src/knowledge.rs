@@ -472,6 +472,13 @@ impl Knowledge {
             entity.visible = false;
         }
 
+        // Entities know where their allies are, even if they can't see them.
+        for &oid in me.leader.iter().chain(&me.summons) {
+            let other = &board.entities[oid];
+            let handle = self.update_entity(me, other, Sense::Sound);
+            self.pos_index.entry(other.pos).or_default().entity = Some(handle);
+        }
+
         // Entities have exact knowledge about anything they can see.
         //
         // We want self.cells to be sorted by recency, and if there are ties,
@@ -498,7 +505,7 @@ impl Knowledge {
                 if !see_big_entities { return None; }
                 let other = board.get_entity(eid?)?;
                 if !see_all_entities && !other.too_big_to_hide() { return None; }
-                Some(self.see_entity(me, other))
+                Some(self.update_entity(me, other, Sense::Sight))
             })();
 
             // Update this point's cell, or create a new one.
@@ -738,8 +745,8 @@ impl Knowledge {
         self.scents.retain(|x| seen.insert(x.species as *const Species));
     }
 
-    fn see_entity(&mut self, me: &Entity, other: &Entity) -> EntityHandle {
-        let (sense, time) = (Sense::Sight, self.time);
+    fn update_entity(&mut self, me: &Entity, other: &Entity, sense: Sense) -> EntityHandle {
+        let time = self.time;
         let limit = self.time_at_turn(SOURCE_TRACKING_LIMIT);
         let cached = self.eid_index.entry(other.eid).or_default();
 
@@ -766,6 +773,9 @@ impl Knowledge {
         };
         let entry = &mut self.entities[handle];
 
+        // Two entities are friends iff they're in the same party.
+        let leader = |entity: &Entity| { entity.leader.unwrap_or(entity.eid) };
+
         // Only a few species can lie about their identity. Update it anyway.
         entry.species = other.species;
 
@@ -779,9 +789,9 @@ impl Knowledge {
         entry.delta = trophic_level(other) - trophic_level(me);
 
         entry.asleep = other.asleep;
-        entry.friend = me.eid == other.eid;
+        entry.friend = leader(me) == leader(other);
         entry.sneaking = other.sneaking;
-        entry.visible = true;
+        entry.visible = sense == Sense::Sight;
 
         handle
     }

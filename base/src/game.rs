@@ -13,7 +13,7 @@ use crate::base::{HashMap, HashSet, LOS, Matrix, Point, RNG, dirs, sample, weigh
 use crate::dex::{Attack, Species};
 use crate::debug::DebugFile;
 use crate::effect::{CB, Effect, Frame, FT, Particle, ParticleData, RenderData, self};
-use crate::entity::{EID, Entity, EntityArgs, EntityMap};
+use crate::entity::{EID, Entity, EntityArgs, EntityMap, Individual, Teammate};
 use crate::knowledge::{Call, Knowledge, Location, Sense, Timedelta, Timestamp};
 use crate::knowledge::{AttackEvent, CallEvent, Event, EventData, MoveEvent};
 use crate::lighting::Lighting;
@@ -53,7 +53,9 @@ pub const CALL_VOLUME: Bound = Bound::new(FOV_RADIUS_NPC);
 pub const MOVE_VOLUME: Bound = Bound::new(8);
 pub const SNEAK_VOLUME: Bound = Bound::new(1);
 pub const SNIFF_VOLUME: Bound = Bound::new(8);
-pub const FOLLOW_DISTANCE: i32 = 4;
+
+pub const FOLLOW_RANGE: Bound = Bound::new(4);
+pub const SUMMON_RANGE: Bound = Bound::new(12);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Input { Escape, BackTab, Char(char), Click(Point) }
@@ -517,7 +519,10 @@ impl Board {
     fn remove_entity(&mut self, eid: EID) {
         // The player entity is not removed, since it's the player's POV.
         let entity = &mut self.entities[eid];
-        let &mut Entity { pos, player, .. } = entity;
+        let &mut Entity { pos, player, leader, .. } = entity;
+        let team: Vec<_> = entity.team.iter().filter_map(
+            |x| if let &Teammate::Out(oid) = x { Some(oid) } else { None }).collect();
+        let ind = entity.to_individual();
         if player { return; }
 
         // Remove the entity's light source.
@@ -533,6 +538,18 @@ impl Board {
 
         // Mark the entity as inactive, if it was active.
         if self.active_entity == Some(eid) { self.active_entity = None; }
+
+        // Delete edges between this entity and its teammates.
+        if let Some(x) = leader {
+            let leader = &mut self.entities[x];
+            for edge in &mut leader.team {
+                if !matches!(edge, Teammate::Out(x) if *x == eid) { continue; }
+                *edge = Teammate::In(ind);
+                break;
+            }
+            leader.summons.retain(|&x| x != eid);
+        }
+        for x in team { self.entities[x].leader = None; }
     }
 
     fn reset(&mut self, tile: &'static Tile) {
@@ -820,6 +837,12 @@ pub struct EatAction { pub target: Point, pub item: Option<Item> }
 pub struct MoveAction { pub look: Point, pub step: Point, pub turns: f64 }
 
 #[derive(Debug)]
+pub struct RecallAction { pub index: usize }
+
+#[derive(Debug)]
+pub struct SummonAction { pub index: usize, pub target: Point }
+
+#[derive(Debug)]
 pub enum Action {
     Idle,
     Rest,
@@ -831,6 +854,8 @@ pub enum Action {
     Attack(AttackAction),
     Drink(Point),
     Eat(EatAction),
+    Recall(RecallAction),
+    Summon(SummonAction),
 }
 
 struct ActionResult {
@@ -861,6 +886,22 @@ fn can_attack(board: &Board, entity: &Entity, action: &AttackAction) -> bool {
     })
 }
 
+fn can_summon(board: &Board, entity: &Entity, target: Point) -> bool {
+    let (known, range, source) = (&entity.known, SUMMON_RANGE, entity.pos);
+    if !range.contains(source - target) { return false; }
+    if !known.get(target).visible() { return false; }
+    if source == target { return false; }
+
+    let los = LOS(source, target);
+    let last = los.len() - 1;
+    los.iter().enumerate().all(|(i, &p)| {
+        if i == 0 || i == last { return true; }
+        if known.get(p).status() != Status::Free { return false; }
+        let status = board.get_status(p);
+        status == Status::Free || status == Status::Occupied
+    })
+}
+
 fn plan(state: &mut State, eid: EID) -> Action {
     state.board.update_known(eid, &mut state.env);
 
@@ -874,7 +915,7 @@ fn plan(state: &mut State, eid: EID) -> Action {
     swap(ai, &mut entity.ai);
 
     let env = AIEnv { debug, fov: vision, rng: &mut env.rng };
-    let action = ai.plan(&entity, env);
+    let action = ai.plan(entity, env);
 
     swap(ai, &mut entity.ai);
 
@@ -1113,6 +1154,51 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             state.add_effect(apply_effect(effect, FT::Hit, Box::new(cb)));
             ActionResult::success_moves(1.)
         }
+        Action::Recall(RecallAction { index }) => {
+            let fail = ActionResult::failure();
+            let Some(&Teammate::Out(oid)) = entity.team.get(index) else { return fail };
+
+            let entity = &state.board.entities[eid];
+            let target = state.board.entities[oid].pos;
+            if !can_summon(&state.board, entity, target) { return fail; }
+
+            let cb = Box::new(move |board: &mut Board, _: &mut UpdateEnv| {
+                board.remove_entity(oid);
+            });
+
+            let effect = effect::WithdrawEffect(source, target);
+            state.add_effect(apply_effect(effect, FT::Withdraw, cb));
+            ActionResult::success()
+        }
+        Action::Summon(SummonAction { index, target }) => {
+            let fail = ActionResult::failure();
+            let Some(Teammate::In(ind)) = entity.team.get(index) else { return fail };
+            if ind.cur_hp == 0 { return fail; }
+
+            let entity = &state.board.entities[eid];
+            if !can_summon(&state.board, entity, target) { return fail; }
+
+            let cb = Box::new(move | board: &mut Board, env: &mut UpdateEnv| {
+                let entity = &board.entities[eid];
+                let Some(Teammate::In(ind)) = entity.team.get(index) else { return };
+
+                let Individual { species, cur_hp } = *ind;
+                let args = EntityArgs { pos: target, player: false, species };
+                let oid = board.add_entity(&args, env);
+
+                let other = &mut board.entities[oid];
+                other.leader = Some(eid);
+                other.cur_hp = cur_hp;
+
+                let me = &mut board.entities[eid];
+                me.team[index] = Teammate::Out(oid);
+                me.summons.push(oid);
+            });
+
+            let effect = effect::SummonEffect(source, target);
+            state.add_effect(apply_effect(effect, FT::Summon, cb));
+            ActionResult::success()
+        }
     }
 }
 
@@ -1172,7 +1258,9 @@ fn apply_effect(mut effect: Effect, what: FT, callback: CB) -> Effect {
 
 fn process_input(state: &mut State, input: Input) {
     let player = &state.board.entities[state.player];
-    if state.env.ui.process_input(player, input) { return; }
+    let processed = state.env.ui.process_input(player, input);
+    state.input = state.env.ui.action.take().unwrap_or(Action::WaitForInput);
+    if processed { return; }
 
     let Input::Char(ch) = input else { return; };
 
@@ -1394,7 +1482,16 @@ impl State {
                 board.add_entity(&args, &mut env);
             }
         }
+        let teammate = |name: &str| {
+            let species = Species::get(name);
+            Teammate::In(Individual { species, cur_hp: species.hp })
+        };
         board.entities[player].dir = dirs::S;
+        board.entities[player].team.push(teammate("Bulbasaur"));
+        board.entities[player].team.push(teammate("Charmander"));
+        board.entities[player].team.push(teammate("Squirtle"));
+        board.entities[player].team.push(teammate("Pikachu"));
+        board.entities[player].team.push(teammate("Eevee"));
         board.update_known(player, &mut env);
 
         let inputs = Default::default();

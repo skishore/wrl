@@ -29,6 +29,16 @@ pub struct EntityArgs {
     pub species: &'static Species,
 }
 
+pub struct Individual {
+    pub species: &'static Species,
+    pub cur_hp: i32,
+}
+
+pub enum Teammate {
+    Out(EID),
+    In(Individual),
+}
+
 pub struct Entity {
     pub eid: EID,
     pub species: &'static Species,
@@ -49,6 +59,11 @@ pub struct Entity {
     pub asleep: bool,
     pub player: bool,
     pub sneaking: bool,
+
+    // Team:
+    pub leader: Option<EID>,
+    pub summons: Vec<EID>,
+    pub team: Vec<Teammate>,
 }
 
 impl Entity {
@@ -73,7 +88,17 @@ impl Entity {
             asleep: false,
             player: args.player,
             sneaking: false,
+
+            // Team:
+            leader: None,
+            summons: vec![],
+            team: vec![],
         }
+    }
+
+    pub fn to_individual(&self) -> Individual {
+        let Self { species, cur_hp, .. } = *self;
+        Individual { species, cur_hp }
     }
 
     // Getters

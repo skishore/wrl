@@ -5,12 +5,13 @@ use rand::Rng;
 
 use crate::base::{HashMap, HashSet, LOS, Point, RNG, dirs};
 use crate::base::{Bound, Buffer, Color, Glyph, Matrix, Rect, Slice};
+use crate::dex::Species;
 use crate::effect::{Frame, ParticleData, RenderData};
-use crate::entity::{EID, Entity};
-use crate::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_};
-use crate::game::{Input, Tile, show_item};
+use crate::entity::{EID, Entity, Teammate};
+use crate::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_, SUMMON_RANGE};
+use crate::game::{Action, Input, SummonAction, Tile, show_item};
 use crate::knowledge::{Call, PointLookup, Sound};
-use crate::knowledge::{EntityKnowledge, Knowledge, SourceKnowledge};
+use crate::knowledge::{EntityKnowledge, Knowledge};
 use crate::pathing::Status;
 use crate::shadowcast::{Vision, VisionArgs};
 
@@ -47,6 +48,7 @@ const UI_GRAY_OPTION: i32 = 0x545454;
 
 const PLAYER_KEY: char = 'a';
 const SUMMON_KEYS: [char; 3] = ['s', 'd', 'f'];
+const PARTY_KEYS: [char; 6] = ['a', 'b', 'c', 'd', 'e', 'f'];
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -81,7 +83,7 @@ fn rivals<'a>(me: &'a Entity) -> Vec<&'a EntityKnowledge> {
     let mut rivals = vec![];
     for other in &me.known.entities {
         if !other.visible { break; }
-        if other.eid != me.eid { rivals.push(other); }
+        if !other.friend { rivals.push(other); }
     }
     let pos = me.pos;
     rivals.sort_by_cached_key(
@@ -212,8 +214,8 @@ pub struct Target {
     target: Point,
 }
 
-fn can_target(entity: &EntityKnowledge) -> bool {
-    entity.visible && !entity.friend
+fn can_target(view: &EntityKnowledge) -> bool {
+    view.visible && !view.friend
 }
 
 fn init_target(data: TargetData, source: Point, target: Point) -> Box<Target> {
@@ -221,44 +223,44 @@ fn init_target(data: TargetData, source: Point, target: Point) -> Box<Target> {
     Box::new(Target { data, error, frame, okay_until, path, source, target })
 }
 
-//fn init_summon_target(player: &Trainer, data: TargetData) -> Box<Target> {
-//    let (known, pos, dir) = (&*player.known, player.pos, player.dir);
-//    let mut target = init_target(data, pos, pos);
-//
-//    if let Some(x) = defend_at_pos(pos, player) {
-//        let line = LOS(pos, x);
-//        for p in line.iter().skip(1).rev() {
-//            update_target(known, &mut target, *p);
-//            if target.error.is_empty() { return target; }
-//        }
-//    }
-//
-//    let mut okay = |p: Point| {
-//        if !check_follower_square(known, player, p, false) { return false; }
-//        update_target(known, &mut target, p);
-//        target.error.is_empty()
-//    };
-//
-//    let best = pos + dir.scale(2);
-//    let next = pos + dir.scale(1);
-//    if okay(best) { return target; }
-//    if okay(next) { return target; }
-//
-//    let mut options: Vec<Point> = vec![];
-//    for dx in -2..=2 {
-//        for dy in -2..=2 {
-//            let p = pos + Point(dx, dy);
-//            if okay(p) { options.push(p); }
-//        }
-//    }
-//
-//    let update = (|| {
-//        if options.is_empty() { return pos; }
-//        *options.select_nth_unstable_by_key(0, |x| (*x - best).len_l2_squared()).1
-//    })();
-//    update_target(known, &mut target, update);
-//    target
-//}
+fn init_summon_target(me: &Entity, data: TargetData) -> Box<Target> {
+    let (known, pos, dir) = (&*me.known, me.pos, me.dir);
+    let mut target = init_target(data, pos, pos);
+
+    //if let Some(x) = defend_at_pos(me, pos) {
+    //    let line = LOS(pos, x);
+    //    for p in line.iter().skip(1).rev() {
+    //        update_target(known, &mut target, *p);
+    //        if target.error.is_empty() { return target; }
+    //    }
+    //}
+
+    let mut okay = |p: Point| {
+        //if !check_follower_square(known, me, p, false) { return false; }
+        update_target(known, &mut target, p);
+        target.error.is_empty()
+    };
+
+    let best = pos + dir.scale(2);
+    let next = pos + dir.scale(1);
+    if okay(best) { return target; }
+    if okay(next) { return target; }
+
+    let mut options: Vec<Point> = vec![];
+    for dx in -2..=2 {
+        for dy in -2..=2 {
+            let p = pos + Point(dx, dy);
+            if okay(p) { options.push(p); }
+        }
+    }
+
+    let update = (|| {
+        if options.is_empty() { return pos; }
+        *options.select_nth_unstable_by_key(0, |x| (*x - best).len_l2_squared()).1
+    })();
+    update_target(known, &mut target, update);
+    target
+}
 
 fn update_target(known: &Knowledge, target: &mut Target, update: Point) {
     let los = LOS(target.source, update);
@@ -307,8 +309,9 @@ fn select_valid_target(ui: &mut UI, known: &Knowledge) -> Option<EID> {
             let entity = entity?;
             if can_target(entity) { Some(entity.eid) } else { None }
         }
-        TargetData::Summon { index: _index, .. } => {
-            //state.input = Action::Summon(*index, target.target);
+        &TargetData::Summon { index, .. } => {
+            let target = target.target;
+            ui.action = Some(Action::Summon(SummonAction { index, target }));
             ui.focus
         }
     }
@@ -322,6 +325,45 @@ fn process_ui_input(ui: &mut UI, me: &Entity, input: Input) -> bool {
     let known = &*me.known;
     let tab = input == Input::Char('\t') || input == Input::BackTab;
     let enter = input == Input::Char('\n') || input == Input::Char('.');
+
+    if let Some(x) = &mut ui.choice {
+        let choice = if enter {
+            Some(*x as usize)
+        } else {
+            PARTY_KEYS.iter().position(|x| input == Input::Char(*x))
+        };
+        let n = me.team.len();
+        let dir = if let Input::Char(x) = input { get_direction(x) } else { None };
+        if let Some(dir) = dir && dir.0 == 0 {
+            *x += dir.1;
+            if *x >= n as i32 { *x = 0; }
+            if *x < 0 { *x = max(n as i32 - 1, 0); }
+        } else if let Some(choice) = choice {
+            let teammate = me.team.get(choice);
+            if teammate.is_none() {
+                let error = format!("You are only carrying {} Pokemon!", n);
+                ui.log.log_menu(error, UI_LOG_FAILURE);
+            } else if let Some(&Teammate::Out(x)) = teammate {
+                let x = me.known.entity(x).unwrap();
+                let error = format!("{} is already out!", x.species.name);
+                ui.log.log_menu(error, UI_LOG_FAILURE);
+            } else if let Some(Teammate::In(x)) = teammate && x.cur_hp == 0 {
+                let error = format!("{} has no strength left!", x.species.name);
+                ui.log.log_menu(error, UI_LOG_FAILURE);
+            } else if let Some(Teammate::In(x)) = teammate {
+                let data = TargetData::Summon { index: choice, range: SUMMON_RANGE };
+                let target = init_summon_target(me, data);
+                let message = format!("Choose where to summon {}:", x.species.name);
+                ui.log.log_menu(message, UI_LOG_MENU);
+                ui.target = Some(target);
+                ui.choice = None;
+            }
+        } else if input == Input::Escape {
+            ui.log.log_menu("Canceled.", UI_LOG_MENU);
+            ui.choice = None;
+        }
+        return true;
+    }
 
     let apply_tab = |prev: Option<EID>, off: bool| -> Option<EID> {
         let rivals = rivals(me);
@@ -381,7 +423,7 @@ fn process_ui_input(ui: &mut UI, me: &Entity, input: Input) -> bool {
         } else if input == Input::Escape {
             if let TargetData::FarLook = x.data {
                 let valid = x.error.is_empty();
-                ui.focus = if valid { select_valid_target(ui, known) } else { None };
+                ui.focus = if valid { select_valid_target(ui, known) } else { None }
             }
             ui.log.log_menu("Canceled.", UI_LOG_MENU);
             ui.target = None;
@@ -404,6 +446,17 @@ fn process_ui_input(ui: &mut UI, me: &Entity, input: Input) -> bool {
         update_target(known, &mut target, update);
         ui.log.log_menu("Use the movement keys to examine a location:", UI_LOG_MENU);
         ui.target = Some(target);
+        return true;
+    }
+
+    let index = SUMMON_KEYS.iter().position(|&x| input == Input::Char(x));
+    if let Some(i) = index && i >= me.summons.len() {
+        ui.log.log_menu("Choose a Pokemon to send out with J/K:", UI_LOG_MENU);
+        ui.choice = Some(0);
+        return true;
+    } else if let Some(i) = index {
+        ui.log.log_menu("Choose a command with J/K:", UI_LOG_MENU);
+        ui.menu = Some(Menu { index: 0, summon: i as i32 });
         return true;
     }
 
@@ -520,11 +573,14 @@ pub struct UI {
     rainfall: Option<Rainfall>,
 
     // Modal components:
+    menu: Option<Menu>,
     focus: Option<EID>,
+    choice: Option<i32>,
     target: Option<Box<Target>>,
     focused: Focused,
 
     // Used by state updates:
+    pub action: Option<Action>,
     pub log: Log,
 }
 
@@ -540,11 +596,13 @@ impl UI {
 
         self.render_log(buffer);
         self.render_rivals(buffer, me);
-        self.render_status(buffer, me, None, None);
+        self.render_status(buffer, me);
         self.render_target(buffer, me);
 
         self.render_map(buffer, me, effect);
         self.render_weather(buffer, me, effect);
+
+        if let Some(x) = self.choice { self.render_choice(buffer, me, x); }
     }
 
     // Update entry points:
@@ -780,7 +838,8 @@ impl UI {
         let sleep_length = 2;
         let mut arrows = vec![];
         for other in &known.entities {
-            if !can_target(other) { continue; }
+            if !other.visible { continue; }
+            if !other.asleep && !can_target(other) { continue; }
 
             let (pos, dir) = (other.pos, other.dir);
             let mut ch = Glyph::ray(dir);
@@ -914,29 +973,26 @@ impl UI {
         }
     }
 
-    fn render_status(&self, buffer: &mut Buffer, me: &Entity,
-                     menu: Option<&Menu>, summon: Option<&Entity>) {
-        assert!(menu.is_some() == summon.is_some());
+    fn render_status(&self, buffer: &mut Buffer, me: &Entity) {
         let slice = &mut Slice::new(buffer, self.layout.status);
         let known = &*me.known;
 
         if let Some(view) = known.entity(me.eid) {
-            let key = if menu.is_some() { '-' } else { PLAYER_KEY };
+            let key = if self.menu.is_some() { '-' } else { PLAYER_KEY };
             self.render_entity(Some(key), None, view, slice);
         }
 
-        for (_, &key) in SUMMON_KEYS.iter().enumerate() {
-            //let key = if menu.is_some() { '-' } else { *key };
-            //let eid = entity.data.summons.get(i).map(|x| x.eid());
-            //if let Some(view) = eid.and_then(|x| known.entity(x)) {
-            //    self.render_entity(Some(key), None, view, slice);
-            //    if let Some(x) = menu && x.summon == i as i32 {
-            //        self.render_menu(slice, x.index, summon.unwrap());
-            //    }
-            //} else {
-            //    self.render_empty_option(key, 0, slice);
-            //}
-            self.render_empty_option(key, 0, slice);
+        for (i, &key) in SUMMON_KEYS.iter().enumerate() {
+            let key = if self.menu.is_some() { '-' } else { key };
+            let eid = me.summons.get(i);
+            if let Some(view) = eid.and_then(|&x| known.entity(x)) {
+                self.render_entity(Some(key), None, view, slice);
+                //if let Some(x) = menu && x.summon == i as i32 {
+                //    self.render_menu(slice, x.index, summon.unwrap());
+                //}
+            } else {
+                self.render_empty_option(key, 0, slice);
+            }
         }
     }
 
@@ -962,12 +1018,11 @@ impl UI {
                 let view = if cell.can_see_entity_at() { cell.entity() } else { None };
                 let header = match &x.data {
                     TargetData::FarLook => "Examining...".into(),
-                    TargetData::Summon { index: _index, .. } => {
-                        //let name = match &entity.data.pokemon[*index] {
-                        //    PokemonEdge::In(y) => name(y),
-                        //    PokemonEdge::Out(_) => "?",
-                        //};
-                        let name = "<unimplemented>";
+                    &TargetData::Summon { index, .. } => {
+                        let name = match &me.team[index] {
+                            Teammate::In(x) => x.species.name,
+                            Teammate::Out(_) => "?",
+                        };
                         format!("Sending out {}...", name)
                     }
                 };
@@ -1013,27 +1068,30 @@ impl UI {
         }
     }
 
-    //fn render_choice(&self, buffer: &mut Buffer, trainer: &Trainer,
-    //                 summons: Vec<&Pokemon>, choice: i32) {
-    //    self.render_box(buffer, &self.choice);
-    //    let slice = &mut Slice::new(buffer, self.choice);
-    //    slice.fill(buffer.default);
-    //
-    //    let options = &trainer.data.pokemon;
-    //    for (i, key) in PARTY_KEYS.iter().enumerate() {
-    //        let selected = choice == i as i32;
-    //        match if i < options.len() { Some(&options[i]) } else { None } {
-    //            Some(PokemonEdge::Out(x)) => {
-    //                let pokemon = *summons.iter().find(|y| y.id() == *x).unwrap();
-    //                let (me, pp) = (&*pokemon.data.me, get_pp(pokemon));
-    //                self.render_option(*key, 1, selected, me, pp, slice);
-    //            },
-    //            Some(PokemonEdge::In(x)) =>
-    //                self.render_option(*key, 0, selected, x, 1.0, slice),
-    //            None => self.render_empty_option(*key, UI_COL_SPACE + 1, slice),
-    //        }
-    //    }
-    //}
+    fn render_choice(&self, buffer: &mut Buffer, me: &Entity, choice: i32) {
+        let default = buffer.default;
+        self.render_box(buffer, &self.layout.choice);
+        let slice = &mut Slice::new(buffer, self.layout.choice);
+        slice.fill(default);
+
+        let options = &me.team;
+        for (i, key) in PARTY_KEYS.iter().enumerate() {
+            let selected = choice == i as i32;
+            match options.get(i) {
+                Some(&Teammate::Out(x)) => {
+                    let x = me.known.entity(x).unwrap();
+                    let (hp, pp, species) = (x.hp, x.pp, x.species);
+                    self.render_option(*key, 1, selected, species, hp, pp, slice);
+                },
+                Some(Teammate::In(x)) => {
+                    let (pp, species) = (1.0, x.species);
+                    let hp = x.cur_hp as f64 / max(species.hp, 1) as f64;
+                    self.render_option(*key, 0, selected, species, hp, pp, slice)
+                }
+                None => self.render_empty_option(*key, UI_COL_SPACE + 1, slice),
+            }
+        }
+    }
 
     // High-level private rendering helpers
 
@@ -1066,34 +1124,34 @@ impl UI {
         slice.newline().newline().newline();
     }
 
-    //fn render_option(&self, key: char, out: i32, selected: bool,
-    //                 me: &PokemonIndividualData, pp: f64, slice: &mut Slice) {
-    //    let hp = get_hp(me);
-    //    let (hp_color, pp_color) = (Self::hp_color(hp), 0x123.into());
-    //    let fg = if out == 0 && hp > 0. { None } else { Some(0x111.into()) };
+    fn render_option(&self, key: char, out: i32, selected: bool,
+                     species: &Species, hp: f64, pp: f64, slice: &mut Slice) {
+        let out = out != 0;
+        let (hp_color, pp_color) = (Self::hp_color(hp), Self::pp_color());
+        let fg = if !out && hp > 0. { None } else { Some(UI_GRAY_OPTION.into()) };
 
-    //    let x = if selected { 1 } else { 0 };
-    //    let arrow = if selected { '>' } else { ' ' };
+        let x = if selected { 1 } else { 0 };
+        let arrow = if selected { '>' } else { ' ' };
 
-    //    let prefix = UI::render_key(key);
-    //    let n = prefix.chars().count() + (UI_COL_SPACE + 1) as usize;
-    //    let w = slice.size().0 - (n as i32) - 2 * UI_COL_SPACE - 6;
-    //    let status_bar_line = |p: &str, v: f64, c: Color, s: &mut Slice| {
-    //        s.set_fg(fg).spaces(n + x).write_str(p);
-    //        self.render_bar(v, c, w, s);
-    //        s.newline();
-    //    };
+        let prefix = UI::render_key(key);
+        let n = prefix.chars().count() + (UI_COL_SPACE + 1) as usize;
+        let w = slice.size().0 - (n as i32) - 2 * UI_COL_SPACE - 6;
+        let status_bar_line = |p: &str, v: f64, c: Color, s: &mut Slice| {
+            s.set_fg(fg).spaces(n + x).write_str(p);
+            self.render_bar(v, c, w, s);
+            s.newline();
+        };
 
-    //    slice.newline();
-    //    slice.spaces(UI_COL_SPACE as usize).write_chr(arrow).spaces(x);
-    //    slice.set_fg(fg).write_str(&prefix).write_str(me.species.name).newline();
-    //    status_bar_line("HP: ", hp, hp_color, slice);
-    //    status_bar_line("PP: ", pp, pp_color, slice);
-    //    slice.newline();
-    //}
+        slice.newline();
+        slice.spaces(UI_COL_SPACE as usize).write_chr(arrow).spaces(x);
+        slice.set_fg(fg).write_str(&prefix).write_str(species.name).newline();
+        status_bar_line("HP: ", hp, hp_color, slice);
+        status_bar_line("PP: ", pp, pp_color, slice);
+        slice.newline();
+    }
 
     fn render_entity(&self, key: Option<char>, fg: Option<Color>,
-                     entity: &EntityKnowledge, slice: &mut Slice) {
+                     view: &EntityKnowledge, slice: &mut Slice) {
         let prefix = key.map(|x| UI::render_key(x)).unwrap_or(String::default());
         let n = prefix.chars().count();
         let w = UI_STATUS_SIZE - 6;
@@ -1103,9 +1161,9 @@ impl UI {
         };
 
         slice.newline();
-        let (hp, pp) = (entity.hp, entity.pp);
-        let (hp_color, pp_color) = (Self::hp_color(hp), 0x54a8fc.into());
-        let name = if entity.species.human() { "skishore" } else { entity.species.name };
+        let (hp, pp) = (view.hp, view.pp);
+        let (hp_color, pp_color) = (Self::hp_color(hp), Self::pp_color());
+        let name = if view.species.human() { "skishore" } else { view.species.name };
         slice.set_fg(fg).write_str(&prefix).write_str(name).newline();
         status_bar_line("HP: ", hp, hp_color, slice);
         status_bar_line("PP: ", pp, pp_color, slice);
@@ -1118,9 +1176,9 @@ impl UI {
         Point(self.layout.map.size.0 / 2, self.layout.map.size.1)
     }
 
-    fn get_map_offset(&self, entity: &Entity) -> Point {
+    fn get_map_offset(&self, me: &Entity) -> Point {
         let size = self.get_map_size();
-        entity.pos - Point(size.0 / 2, size.1 / 2)
+        me.pos - Point(size.0 / 2, size.1 / 2)
     }
 
     fn render_bar(&self, value: f64, color: Color, width: i32, slice: &mut Slice) {
@@ -1212,15 +1270,18 @@ impl UI {
         Glyph::wdfg('?', Color::white().fade(0.25 + 0.5 * freshness))
     }
 
-    fn source_glyph(source: Option<&SourceKnowledge>) -> Glyph {
-        let Some(x) = source else { return Glyph::wide(' ') };
-        Self::noise_glyph(x.freshness())
+    fn teammate_glyph(entity: &EntityKnowledge) -> Glyph {
+        Glyph::wdfg('?', entity.species.glyph.fg())
     }
 
     fn hp_color(hp: f64) -> Color {
         if hp <= 0.25 { return 0xff0000.into(); }
         if hp <= 0.50 { return 0xffff00.into(); }
         0x00a800.into()
+    }
+
+    fn pp_color() -> Color {
+        0x54a8fc.into()
     }
 
     fn render_key(key: char) -> String {
@@ -1251,16 +1312,22 @@ impl UI {
         let source = me.known.get(point).source();
         let source = if is_source { None } else { source };
 
-        let Some(tile) = cell.tile() else { return Self::source_glyph(source) };
-
         let entity = cell.entity();
-        let entity = if let Some(x) = entity && x.visible { entity } else { None };
+        let entity = if let Some(x) = entity && (x.friend || x.visible) { entity } else { None };
         let entity = if is_source { None } else { entity };
 
-        if entity.is_none() && source.is_some() { return Self::source_glyph(source) };
-        if entity.is_none() && is_target { return Self::noise_glyph(1.) };
+        let freshness = source.map(|x| x.freshness());
+        let freshness = freshness.unwrap_or(if is_target { 1. } else { -1. });
 
-        let glyph = if let Some(x) = entity {
+        // Special cases for non-sight-based entity knowledge:
+        if let Some(x) = entity && !x.visible  { return Self::teammate_glyph(x); }
+        if entity.is_none() && freshness >= 0. { return Self::noise_glyph(freshness); }
+
+        // Unseen cells are shown as a blank space:
+        let Some(tile) = cell.tile() else { return Glyph::wide(' ') };
+
+        // Default case: a visible cell.
+        let glyph = if let Some(x) = entity && x.visible {
             Self::knowledge_glyph(x, tile)
         } else if let Some(x) = cell.items().last() {
             show_item(x)

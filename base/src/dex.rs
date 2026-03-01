@@ -94,7 +94,11 @@ lazy_static! {
             ("Human",      ('@', 0xffffff), 0, 0, 0.9, 3,   vec![]),
             ("Pidgey",     ('P', 0xd0a070), 0, 0, 1.0, 200, vec!["Tackle"]),
             ("Rattata",    ('R', 0xa060ff), 1, 0, 1.0, 200, vec!["Tackle", "Headbutt"]),
+            ("Bulbasaur",  ('B', 0x408020), 0, 0, 1.0, 300, vec!["Tackle"]),
             ("Charmander", ('C', 0xea8b24), 1, 4, 1.0, 200, vec!["Tackle", "Ember"]),
+            ("Squirtle",   ('S', 0x80c0ff), 0, 0, 1.0, 200, vec!["Tackle", "Ice Beam"]),
+            ("Pikachu",    ('P', 0xffff00), 0, 4, 1.1, 200, vec!["Tackle"]),
+            ("Eevee",      ('E', 0xd0a070), 0, 0, 1.0, 200, vec!["Tackle", "Headbutt"]),
         ];
         let mut result = HashMap::default();
         for (name, glyph, predator, light, speed, hp, attacks) in items {

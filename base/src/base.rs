@@ -228,6 +228,10 @@ impl Point {
         let y = (self.1 as f64 * factor).round() as i32;
         Point(x, y)
     }
+
+    pub fn scale(&self, scale: i32) -> Point {
+        Point(scale * self.0, scale * self.1)
+    }
 }
 
 impl std::ops::Add for Point {
