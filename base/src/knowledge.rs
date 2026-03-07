@@ -1,6 +1,7 @@
 use std::cmp::{max, min};
 use std::collections::VecDeque;
 use std::num::NonZeroU64;
+use std::rc::Rc;
 
 use rand::Rng;
 
@@ -259,6 +260,7 @@ pub struct EntityKnowledge {
     pub eid: EID,
     pub dir: Point,
     pub loc: Location,
+    pub name: Option<Rc<str>>,
     pub sense: Sense,
     pub species: &'static Species,
 
@@ -274,7 +276,7 @@ pub struct EntityKnowledge {
     pub visible: bool,
 }
 #[cfg(target_pointer_width = "64")]
-static_assert_size!(EntityKnowledge, 72);
+static_assert_size!(EntityKnowledge, 88);
 
 // Minimal knowledge about entities that we're only tracking indirectly.
 // We may have heard or glimpsed the entity, but we did not see it clearly.
@@ -342,6 +344,7 @@ impl EntityKnowledge {
             eid,
             dir: Default::default(),
             loc: Default::default(),
+            name: Default::default(),
             sense: Sense::Sight,
             species,
 
@@ -782,6 +785,7 @@ impl Knowledge {
         // Update our knowledge with the entity's latest state.
         entry.loc = Location { pos: other.pos, time };
         entry.dir = other.dir;
+        entry.name = other.name.clone();
         entry.sense = sense;
 
         entry.hp = other.hp_fraction();

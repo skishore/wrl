@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::iter::FusedIterator;
 use std::num::NonZeroU64;
 use std::ops::{Index, IndexMut};
+use std::rc::Rc;
 
 use slotmap::{DefaultKey, Key, KeyData};
 use slotmap::dense::DenseSlotMap;
@@ -24,6 +25,7 @@ const SCENT_BASE: f64 = 0.25;
 // Entity
 
 pub struct EntityArgs {
+    pub name: Option<Rc<str>>,
     pub pos: Point,
     pub player: bool,
     pub species: &'static Species,
@@ -41,6 +43,7 @@ pub enum Teammate {
 
 pub struct Entity {
     pub eid: EID,
+    pub name: Option<Rc<str>>,
     pub species: &'static Species,
     pub known: Box<Knowledge>,
     pub ai: Box<AIState>,
@@ -70,6 +73,7 @@ impl Entity {
     fn new(eid: EID, args: &EntityArgs, rng: &mut RNG) -> Self {
         Self {
             eid,
+            name: args.name.clone(),
             species: args.species,
             known: Default::default(),
             ai: Box::new(AIState::new(rng)),
@@ -103,9 +107,20 @@ impl Entity {
 
     // Getters
 
-    pub fn desc(&self) -> String {
+    pub fn lower(&self) -> String {
+        if self.player { return "you".into() };
+        if let Some(x) = &self.name { return x.as_ref().into(); }
+
         let name = self.species.name;
-        if self.player { "you".into() } else { format!("the wild {}", name) }
+        if self.leader.is_some() { name.into() } else { format!("the wild {}", name) }
+    }
+
+    pub fn upper(&self) -> String {
+        if self.player { return "You".into() };
+        if let Some(x) = &self.name { return x.as_ref().into(); }
+
+        let name = self.species.name;
+        if self.leader.is_some() { name.into() } else { format!("The wild {}", name) }
     }
 
     pub fn hp_fraction(&self) -> f64 {

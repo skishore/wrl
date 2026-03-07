@@ -158,10 +158,6 @@ pub fn show_item(item: &Item) -> Glyph {
     }
 }
 
-pub fn capitalize(mut line: String) -> String {
-    line.get_mut(..1).map(|x| x.make_ascii_uppercase()); line
-}
-
 //////////////////////////////////////////////////////////////////////////////
 
 // Environment
@@ -751,7 +747,8 @@ fn hit_tile(board: &mut Board, env: &mut UpdateEnv, target: Point) {
 
 fn hit_entity(board: &mut Board, env: &mut UpdateEnv, attack: &Attack, logged: bool, tid: EID) {
     let Some(target) = board.entities.get_mut(tid) else { return; };
-    let (pos, desc) = (target.pos, target.desc());
+
+    let (pos, lower, upper) = (target.pos, target.lower(), target.upper());
 
     let critted = env.rng.random_range(0..16) == 0;
     let factor = if critted { 1.5 } else { 1. } * env.rng.random_range(0.85..=1.);
@@ -775,9 +772,9 @@ fn hit_entity(board: &mut Board, env: &mut UpdateEnv, attack: &Attack, logged: b
         if !s.source.seen() || !board.entities[oid].player { continue; }
 
         let log = &mut env.ui.log;
-        if !logged { log.log(format!("Something attacked {}!", desc)); }
+        if !logged { log.log(format!("Something attacked {}!", lower)); }
         if critted { log.log_append("A critical hit!"); }
-        if fainted { log.log_append(capitalize(format!("{} fainted!", desc))); }
+        if fainted { log.log_append(format!("{} fainted!", upper)); }
     }
 }
 
@@ -1125,15 +1122,15 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 logged = true;
 
                 let line = if let Some(a) = attacker && let Some(b) = attacked {
-                    format!("{} attacked {} with {}!", a.desc(), b.desc(), attack.name)
+                    format!("{} attacked {} with {}!", a.upper(), b.lower(), attack.name)
                 } else if let Some(a) = attacker {
-                    format!("{} used {}!", a.desc(), attack.name)
+                    format!("{} used {}!", a.upper(), attack.name)
                 } else if let Some(b) = attacked {
-                    format!("Something attacked {}!", b.desc())
+                    format!("Something attacked {}!", b.lower())
                 } else {
                     "You hear fighting nearby!".into()
                 };
-                state.ui.log.log(capitalize(line));
+                state.ui.log.log(line);
             }
 
             let cb = move |board: &mut Board, env: &mut UpdateEnv| {
@@ -1183,7 +1180,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 let Some(Teammate::In(ind)) = entity.team.get(index) else { return };
 
                 let Individual { species, cur_hp } = *ind;
-                let args = EntityArgs { pos: target, player: false, species };
+                let args = EntityArgs { name: None, pos: target, player: false, species };
                 let oid = board.add_entity(&args, env);
 
                 let other = &mut board.entities[oid];
@@ -1452,7 +1449,7 @@ impl State {
 
         let input = Action::WaitForInput;
         let (player, species) = (true, Species::get("Human"));
-        let args = EntityArgs { pos, player, species };
+        let args = EntityArgs { name: Some("skishore".into()), pos, player, species };
         let player = board.add_entity(&args, &mut env);
 
         if matches!(mode, GameMode::Gym | GameMode::Sim | GameMode::Test) {
@@ -1478,7 +1475,7 @@ impl State {
                     (false, _) => "Pidgey",
                 };
                 let species = Species::get(species);
-                let args = EntityArgs { pos: x, player: false, species };
+                let args = EntityArgs { name: None, pos: x, player: false, species };
                 board.add_entity(&args, &mut env);
             }
         }
