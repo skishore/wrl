@@ -935,7 +935,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let board = &mut state.board;
             let sightings = get_sightings(board, &noise, &mut state.env);
 
-            // Deliver a SniffEvent to each entity that heard the sniff.
+            // Deliver a SniffEvent to each other entity that heard the sniff.
             let data = EventData::Sniff;
             let event = &mut board.create_event(eid, data, source);
             for s in &sightings {
@@ -998,7 +998,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let board = &mut state.board;
             let sightings = get_sightings(board, &noise, &mut state.env);
 
-            // Deliver a CallEvent to each entity that heard the call.
+            // Deliver a CallEvent to each other entity that heard the call.
             let data = EventData::Call(CallEvent { call, species });
             let event = &mut board.create_event(eid, data, source);
             for s in &sightings {
@@ -1006,9 +1006,11 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             }
 
             // Use a different color for different call types.
-            let (color, text, wait) = match call {
-                Call::Help    => (0x00ffff, "*chirp*", true),
-                Call::Warning => (0xff8000, "*grrr*", false),
+            let color = 0xff8000;
+            let (text, wait) = match call {
+                Call::Command => ("*shout*", false),
+                Call::Help    => ("*chirp*", true),
+                Call::Warning => ("*grrr*",  false),
             };
             let board = &mut state.board;
             let mut effect = apply_noise(source, color, text, CALL_VOLUME);
@@ -1066,7 +1068,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                     let saw_target = detect(board, &noise, &mut state.env);
                     let sightings = merge_views(board, &saw_source, &saw_target);
 
-                    // Deliver a MoveEvent to each entity that saw the move.
+                    // Deliver a MoveEvent to each other entity that saw the move.
                     let data = EventData::Move(MoveEvent { from: source });
                     let event = &mut board.create_event(eid, data, target);
                     for s in &sightings {
@@ -1104,7 +1106,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let saw_target = detect(board, &noise, &mut state.env);
             let sightings = merge_views(board, &saw_source, &saw_target);
 
-            // Deliver the AttackEvent to each entity in the list.
+            // Deliver an AttackEvent to each other entity that heard the attack.
             let combat = tid.is_some();
             let data = EventData::Attack(AttackEvent { combat, target: None });
             let event = &mut board.create_event(eid, data, source);
@@ -1172,8 +1174,32 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let Some(Teammate::In(ind)) = entity.team.get(index) else { return fail };
             if ind.cur_hp == 0 { return fail; }
 
+            let summoned = ind.species;
             let entity = &state.board.entities[eid];
+            let Entity { player, species, .. } = *entity;
             if !can_summon(&state.board, entity, target) { return fail; }
+
+            let board = &mut state.board;
+            let noise = Noise::from_eid(eid, source, SUMMON_RANGE);
+            let sightings = get_sightings(board, &noise, &mut state.env);
+
+            // Special case: log our own shout.
+            let log = &mut state.env.ui.log;
+            let command = format!("Go! {}!", summoned.name);
+            if player { log.log_success(format!("You shout: \"{}\"", command)); }
+
+            // Deliver a CallEvent to each other entity that heard the shout.
+            let data = EventData::Call(CallEvent { call: Call::Command, species });
+            let event = &mut board.create_event(eid, data, source);
+            for s in &sightings {
+                board.observe_event(s.eid, &s.merged, event, &mut state.env);
+                if s.eid != state.player { continue; }
+
+                let log = &mut state.env.ui.log;
+                let entity = &board.entities[eid];
+                let source = if s.merged.seen() { entity.upper() } else { "Someone".into() };
+                log.log_notable(format!("{} shouts: \"{}\"", source, command));
+            }
 
             let cb = Box::new(move | board: &mut Board, env: &mut UpdateEnv| {
                 let entity = &board.entities[eid];

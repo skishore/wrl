@@ -44,6 +44,7 @@ const UI_TARGET_FOV_SHADE: u8 = 32;
 
 const UI_LOG_MENU: i32 = 0x80c0ff;
 const UI_LOG_FAILURE: i32 = 0xff9090;
+const UI_LOG_SUCCESS: i32 = 0xc0ff80;
 const UI_GRAY_OPTION: i32 = 0x545454;
 
 const PLAYER_KEY: char = 'a';
@@ -72,6 +73,7 @@ pub fn get_direction(ch: char) -> Option<Point> {
 fn describe_sound(sound: Sound) -> &'static str {
     match sound {
         Sound::Attack              => "something attack!",
+        Sound::Call(Call::Command) => "someone shout!",
         Sound::Call(Call::Help)    => "a call for help",
         Sound::Call(Call::Warning) => "a warning",
         Sound::Move                => "something move",
@@ -342,24 +344,24 @@ fn process_ui_input(ui: &mut UI, me: &Entity, input: Input) -> bool {
             let teammate = me.team.get(choice);
             if teammate.is_none() {
                 let error = format!("You are only carrying {} Pokemon!", n);
-                ui.log.log_menu(error, UI_LOG_FAILURE);
+                ui.log.log_failure(error);
             } else if let Some(&Teammate::Out(x)) = teammate {
                 let x = me.known.entity(x).unwrap();
                 let error = format!("{} is already out!", x.species.name);
-                ui.log.log_menu(error, UI_LOG_FAILURE);
+                ui.log.log_failure(error);
             } else if let Some(Teammate::In(x)) = teammate && x.cur_hp == 0 {
                 let error = format!("{} has no strength left!", x.species.name);
-                ui.log.log_menu(error, UI_LOG_FAILURE);
+                ui.log.log_failure(error);
             } else if let Some(Teammate::In(x)) = teammate {
                 let data = TargetData::Summon { index: choice, range: SUMMON_RANGE };
                 let target = init_summon_target(me, data);
                 let message = format!("Choose where to summon {}:", x.species.name);
-                ui.log.log_menu(message, UI_LOG_MENU);
+                ui.log.log_neutral(message);
                 ui.target = Some(target);
                 ui.choice = None;
             }
         } else if input == Input::Escape {
-            ui.log.log_menu("Canceled.", UI_LOG_MENU);
+            ui.log.log_neutral("Canceled.");
             ui.choice = None;
         }
         return true;
@@ -418,14 +420,14 @@ fn process_ui_input(ui: &mut UI, me: &Entity, input: Input) -> bool {
                 ui.focus = select_valid_target(ui, known);
                 ui.target = None;
             } else {
-                ui.log.log_menu(&x.error, UI_LOG_FAILURE);
+                ui.log.log_failure(&x.error);
             }
         } else if input == Input::Escape {
             if let TargetData::FarLook = x.data {
                 let valid = x.error.is_empty();
                 ui.focus = if valid { select_valid_target(ui, known) } else { None }
             }
-            ui.log.log_menu("Canceled.", UI_LOG_MENU);
+            ui.log.log_neutral("Canceled.");
             ui.target = None;
         }
         return true;
@@ -444,18 +446,18 @@ fn process_ui_input(ui: &mut UI, me: &Entity, input: Input) -> bool {
         let update = get_initial_target(source);
         let mut target = init_target(TargetData::FarLook, source, update);
         update_target(known, &mut target, update);
-        ui.log.log_menu("Use the movement keys to examine a location:", UI_LOG_MENU);
+        ui.log.log_neutral("Use the movement keys to examine a location:");
         ui.target = Some(target);
         return true;
     }
 
     let index = SUMMON_KEYS.iter().position(|&x| input == Input::Char(x));
     if let Some(i) = index && i >= me.summons.len() {
-        ui.log.log_menu("Choose a Pokemon to send out with J/K:", UI_LOG_MENU);
+        ui.log.log_neutral("Choose a Pokemon to send out with J/K:");
         ui.choice = Some(0);
         return true;
     } else if let Some(i) = index {
-        ui.log.log_menu("Choose a command with J/K:", UI_LOG_MENU);
+        ui.log.log_neutral("Choose a command with J/K:");
         ui.menu = Some(Menu { index: 0, summon: i as i32 });
         return true;
     }
@@ -491,8 +493,21 @@ impl Log {
         }
     }
 
+    pub fn log_notable<S: Into<String>>(&mut self, text: S) {
+        self.log_color(text, UI_LOG_MENU);
+    }
+
+    pub fn log_neutral<S: Into<String>>(&mut self, text: S) {
+        self.log_menu(text, UI_LOG_MENU);
+    }
+
     pub fn log_failure<S: Into<String>>(&mut self, text: S) {
         self.log_menu(text, UI_LOG_FAILURE);
+    }
+
+    pub fn log_success<S: Into<String>>(&mut self, text: S) {
+        self.log_menu(text, UI_LOG_SUCCESS);
+        self.end_menu_logging();
     }
 
     fn log_color<S: Into<String>, T: Into<Color>>(&mut self, text: S, color: T) {

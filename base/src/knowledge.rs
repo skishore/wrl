@@ -160,7 +160,7 @@ pub struct UID(NonZeroU64);
 pub enum Sense { Sight, Sound, Smell }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Call { Help, Warning }
+pub enum Call { Command, Help, Warning }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Sound { Attack, Call(Call), Move, Sniff }
