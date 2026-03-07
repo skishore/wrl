@@ -815,13 +815,37 @@ impl UI {
             self.render_arrows(known, offset, slice);
         }
 
+        // Render any text animations.
+        for (&p, t) in &self.calls {
+            self.render_call(me, p, t, slice);
+        }
+
         // Render the targeting UI on the map.
         if let Some(target) = &self.target {
+            // Fade out any cells that are too far to be a valid target.
+            if let TargetData::Summon { range, .. } = target.data {
+                let bg = Color::black();
+                let fg = Color::white().fade(UI_REMEMBERED);
+                let mut gray_out = |point: Point| {
+                    slice.set(point, slice.get(point).with_fg(fg).with_bg(bg));
+                };
+                for y in 0..size.1 {
+                    for x in 0..size.0 {
+                        let point = Point(x, y) + offset;
+                        if range.contains(point - me.pos) { continue; }
+                        gray_out(Point(2 * x + 0, y));
+                        gray_out(Point(2 * x + 1, y));
+                    }
+                }
+            }
+
+            // Use bright highlights for the source and target cells.
             let shade = Color::gray(UI_TARGET_SHADE);
             let color = if target.error.is_empty() { 0xffff00 } else { 0xff0000 };
             highlight(slice, target.source, shade);
             highlight(slice, target.target, color.into());
 
+            // Draw an animated line from the source to the target.
             let frame = target.frame >> 1;
             let count = UI_TARGET_FRAMES >> 1;
             let limit = target.path.len() as i32 - 1;
@@ -833,11 +857,6 @@ impl UI {
                 let color = if valid { 0xffff00 } else { 0xff0000 };
                 set(slice, point, Glyph::wdfg(ch, color));
             }
-        }
-
-        // Render any text animations.
-        for (&p, t) in &self.calls {
-            self.render_call(me, p, t, slice);
         }
 
         // Render an estimate of the focused entity's FOV on the map.
