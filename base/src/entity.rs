@@ -124,12 +124,6 @@ impl Entity {
         self.cur_hp as f64 / std::cmp::max(self.max_hp, 1) as f64
     }
 
-    pub fn get_scent_at(&self, p: Point) -> f64 {
-        let mut total = 0.;
-        for (_, scent) in self.get_scent_trail(p) { total += scent; }
-        if total > 1. { 1. } else { total }
-    }
-
     pub fn get_scent_trail(&self, p: Point) -> impl Iterator<Item = (&Location, f64)> {
         let base = SCENT_BASE;
         let dropoff = 1. - SCENT_DECAY / (SCENT_TRAIL_SIZE as f64);
