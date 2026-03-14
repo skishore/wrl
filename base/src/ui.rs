@@ -603,10 +603,10 @@ impl UI {
     // Rendering entry point:
 
     pub fn render(&self, buffer: &mut Buffer, me: &Entity, effect: Option<&Effect>) {
-        if buffer.data.is_empty() {
+        if buffer.size() == Point::default() {
             *buffer = Matrix::new(self.layout.bounds, ' '.into());
         }
-        buffer.fill(buffer.default);
+        buffer.fill(*buffer.default());
         self.render_layout(buffer);
 
         self.render_log(buffer);
@@ -1103,7 +1103,7 @@ impl UI {
     }
 
     fn render_choice(&self, buffer: &mut Buffer, me: &Entity, choice: i32) {
-        let default = buffer.default;
+        let default = *buffer.default();
         self.render_box(buffer, &self.layout.choice);
         let slice = &mut Slice::new(buffer, self.layout.choice);
         slice.fill(default);

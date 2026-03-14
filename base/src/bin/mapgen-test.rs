@@ -14,10 +14,10 @@ fn main() {
     let mut rng = RNG::from_os_rng();
     let map = f(&mut rng);
 
-    for y in 0..map.size.1 {
+    for y in 0..map.size().1 {
         let mut line = String::default();
         let mut last_color: Option<(u32, u32, u32)> = None;
-        for x in 0..map.size.0 {
+        for x in 0..map.size().0 {
             let c = map.get(Point(x, y));
             if c == ' ' {
                 line.push_str("  ");

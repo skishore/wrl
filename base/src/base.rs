@@ -271,9 +271,9 @@ pub mod dirs {
 
 #[derive(Clone, Default)]
 pub struct Matrix<T> {
-    pub data: Vec<T>,
-    pub size: Point,
-    pub default: T,
+    data: Vec<T>,
+    size: Point,
+    default: T,
 }
 
 // SAFETY: Non-none index() results are always valid indices into data.
@@ -285,6 +285,18 @@ impl<T: Clone> Matrix<T> {
         data.resize((size.0 * size.1) as usize, value.clone());
         Self { data, size, default: value }
     }
+
+    // Trivial getters:
+
+    pub fn mut_data(&mut self) -> &mut [T] { self.data.as_mut_slice() }
+
+    pub fn raw_data(&self) -> &[T] { self.data.as_slice() }
+
+    pub fn default(&self) -> &T { &self.default }
+
+    pub fn size(&self) -> Point { self.size }
+
+    // Non-trivial methods:
 
     pub fn get(&self, point: Point) -> T {
         let Some(x) = self.index(point) else { return self.default.clone(); };

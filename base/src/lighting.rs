@@ -81,9 +81,9 @@ impl Lighting {
 
     pub fn set_opacity(&mut self, point: Point, value: i32) {
         let Some(index) = self.opacity.index(point) else { return };
-        if self.opacity.data[index] == value { return; }
+        if self.opacity.mut_data()[index] == value { return; }
 
-        let bitset = self.sources.data[index];
+        let bitset = self.sources.raw_data()[index];
 
         for delta in bitset.sources() {
             let other = point + delta;
@@ -91,7 +91,7 @@ impl Lighting {
             self.update_light(other, light, -1);
         }
 
-        self.opacity.data[index] = value;
+        self.opacity.mut_data()[index] = value;
 
         for delta in bitset.sources() {
             let other = point + delta;
@@ -110,11 +110,11 @@ impl Lighting {
 
         for &p in vision.get_points_seen() {
             let Some(index) = self.light_values.index(p) else { continue };
-            let entry = &mut self.light_values.data[index];
+            let entry = &mut self.light_values.mut_data()[index];
             assert!(*entry + delta >= 0);
             *entry += delta;
 
-            self.sources.data[index].toggle(point - p);
+            self.sources.mut_data()[index].toggle(point - p);
         }
     }
 }
@@ -164,8 +164,8 @@ mod tests {
         let mut rng = RNG::seed_from_u64(SEED);
         let mut lighting = Lighting::new(size);
 
-        for x in 0..lighting.opacity.size.0 {
-            for y in 0..lighting.opacity.size.1 {
+        for x in 0..lighting.opacity.size().0 {
+            for y in 0..lighting.opacity.size().1 {
                 let point = Point(x, y);
                 let light = rng.random_range(-1..=6);
                 lighting.set_light(point, light);
@@ -187,8 +187,8 @@ mod tests {
         let mut rng = RNG::seed_from_u64(SEED);
         let mut lighting = Lighting::new(size);
 
-        for x in 0..lighting.opacity.size.0 {
-            for y in 0..lighting.opacity.size.1 {
+        for x in 0..lighting.opacity.size().0 {
+            for y in 0..lighting.opacity.size().1 {
                 let point = Point(x, y);
                 let light = rng.random_range(-1..=6);
                 lighting.set_light(point, light);
@@ -205,8 +205,8 @@ mod tests {
     }
 
     fn check_lighting(lighting: &Lighting) {
-        for x in 0..lighting.opacity.size.0 {
-            for y in 0..lighting.opacity.size.1 {
+        for x in 0..lighting.opacity.size().0 {
+            for y in 0..lighting.opacity.size().1 {
                 check_lighting_at_cell(lighting, Point(x, y));
             }
         }
@@ -216,8 +216,8 @@ mod tests {
         let mut expected = 0;
         let mut vision = Vision::new(MAX_LIGHT_RADIUS);
 
-        for x in 0..lighting.opacity.size.0 {
-            for y in 0..lighting.opacity.size.1 {
+        for x in 0..lighting.opacity.size().0 {
+            for y in 0..lighting.opacity.size().1 {
                 let other = Point(x, y);
                 let light = lighting.light_radius.get(other);
                 if !Bound::new(light).contains(other - point) { continue; }
@@ -235,9 +235,9 @@ mod tests {
     }
 
     fn debug_lighting(lighting: &Lighting) {
-        for y in 0..lighting.opacity.size.1 {
+        for y in 0..lighting.opacity.size().1 {
             let mut line = String::new();
-            for x in 0..lighting.opacity.size.0 {
+            for x in 0..lighting.opacity.size().0 {
                 let point = Point(x, y);
                 let opacity = lighting.opacity.get(point);
                 let light = lighting.light_radius.get(point);

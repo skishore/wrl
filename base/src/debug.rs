@@ -241,8 +241,8 @@ impl DebugFile {
         Self::write_array(&mut file, self.detail.utilities.as_slice())?;
 
         // Anything we scribble on the map shows up in the debug UI.
-        for y in 0..self.map.size.1 {
-            for x in 0..self.map.size.0 {
+        for y in 0..self.map.size().1 {
+            for x in 0..self.map.size().0 {
                 let glyph = UI::render_tile(me, Point(x, y), None);
                 self.map.set(Point(x, y), glyph);
             }
@@ -256,8 +256,8 @@ impl DebugFile {
         if let Some(&p) = me.ai.get_path().last() {
             self.map.set(p, self.map.get(p).with_fg(Color::black()).with_bg(0xff0000));
         }
-        Self::write_bin(&mut file, &self.map.size)?;
-        Self::write_array(&mut file, self.map.data.as_slice())?;
+        Self::write_bin(&mut file, &self.map.size())?;
+        Self::write_array(&mut file, self.map.raw_data())?;
         file.flush()?;
 
         Result::Ok(())

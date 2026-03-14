@@ -37,7 +37,7 @@ impl Screen {
 
     fn render(&mut self, stats: &Stats, delta: f64) -> io::Result<()> {
         let mut lines_changed = 0;
-        let Point(sx, sy) = self.next.size;
+        let Point(sx, sy) = self.next.size();
         for y in 0..sy {
             let mut start = sx;
             let mut limit = 0;
@@ -219,11 +219,11 @@ fn main() {
         return;
     }
 
-    let mut output = Matrix::default();
+    let mut output = Default::default();
     game.render(&mut output);
 
     let mut events = termion::async_stdin().events();
-    let mut screen = Screen::new(output.size);
+    let mut screen = Screen::new(output.size());
     screen.enter_alt_screen().unwrap();
     screen.write_status_message("<calculating FPS...>").unwrap();
     screen.output.flush().unwrap();

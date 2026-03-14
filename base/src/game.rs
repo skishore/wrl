@@ -453,7 +453,7 @@ impl Board {
 
     pub fn get_light(&self) -> &Light { &self.light }
 
-    pub fn get_size(&self) -> Point { self.map.size }
+    pub fn get_size(&self) -> Point { self.map.size() }
 
     pub fn get_status(&self, p: Point) -> Status {
         let Cell { eid, tile, .. } = self.get_cell(p);
@@ -618,16 +618,16 @@ impl Board {
     }
 
     fn update_edge_shadows(&mut self) {
-        let delta = if self.map.default.tile.casts_shadow() { 1 } else { 0 };
+        let delta = if self.map.default().tile.casts_shadow() { 1 } else { 0 };
         if delta == 0 || self.shadow.is_empty() { return; }
 
-        for x in -1..(self.map.size.0 + 1) {
+        for x in -1..(self.map.size().0 + 1) {
             self.update_shadow(Point(x, -1), delta);
-            self.update_shadow(Point(x, self.map.size.1), delta);
+            self.update_shadow(Point(x, self.map.size().1), delta);
         }
-        for y in 0..self.map.size.1 {
+        for y in 0..self.map.size().1 {
             self.update_shadow(Point(-1, y), delta);
-            self.update_shadow(Point(self.map.size.0, y), delta);
+            self.update_shadow(Point(self.map.size().0, y), delta);
         }
     }
 }

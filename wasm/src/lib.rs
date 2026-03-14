@@ -11,7 +11,7 @@ thread_local! {
 
 #[wasm_bindgen(module = "/web/bindings.js")]
 extern "C" {
-    fn render(ptr: *const Glyph, sx: i32, sy: i32) -> i32;
+    fn render(ptr: *const Glyph) -> i32;
 }
 
 #[wasm_bindgen]
@@ -32,7 +32,7 @@ pub fn keydown(ch: i32, shift: bool) {
 pub fn size() -> Vec<i32> {
     STATE.with_borrow_mut(|(game, buffer)| {
         game.render(buffer);
-        vec![buffer.size.0, buffer.size.1]
+        vec![buffer.size().0, buffer.size().1]
     })
 }
 
@@ -41,6 +41,6 @@ pub fn tick() {
     STATE.with_borrow_mut(|(game, buffer)| {
         game.update();
         game.render(buffer);
-        render(buffer.data.as_ptr(), buffer.size.0, buffer.size.1)
+        render(buffer.raw_data().as_ptr());
     });
 }

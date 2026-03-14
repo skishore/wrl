@@ -166,14 +166,14 @@ impl Vision {
     pub fn clear(&mut self, pos: Point) {
         // Sparse clear optimization. The dense clear has much better constant
         // factors so we only switch over when it's sufficiently sparse.
-        if self.visibility.data.len() < 16 * self.points_seen.len() {
+        if self.visibility.raw_data().len() < 16 * self.points_seen.len() {
             self.visibility.fill(-1);
         } else {
             for &point in &self.points_seen {
                 debug_assert!(self.visibility.get(point + self.offset) >= 0);
                 self.visibility.set(point + self.offset, -1);
             }
-            debug_assert!(self.visibility.data.iter().all(|&x| x == -1));
+            debug_assert!(self.visibility.raw_data().iter().all(|&x| x == -1));
         }
 
         let radius = self.range.radius;
@@ -379,9 +379,9 @@ mod tests {
         let mut vision = Vision::new(radius);
         vision.compute(&args);
 
-        let mut result = Matrix::new(map.size, false);
-        for y in 0..map.size.1 {
-            for x in 0..map.size.0 {
+        let mut result = Matrix::new(map.size(), false);
+        for y in 0..map.size().1 {
+            for x in 0..map.size().0 {
                 let p = Point(x, y);
                 result.set(p, vision.can_see(p));
             }
@@ -389,8 +389,8 @@ mod tests {
 
         // Check that point lookups are consistent with the full computation.
         if check_point_lookups {
-            for y in 0..map.size.1 {
-                for x in 0..map.size.0 {
+            for y in 0..map.size().1 {
+                for x in 0..map.size().0 {
                     let p = Point(x, y);
                     assert!(result.get(p) == vision.check_point(&args, p));
                 }
@@ -425,7 +425,7 @@ mod tests {
         // Get the FOV result and compare it to the expected value.
         let eye = eye.unwrap();
         let dir = if let Some(x) = target { x - eye } else { Point::default() };
-        let visible = run_fov(eye, dir, &map, map.size.0 + map.size.1, true);
+        let visible = run_fov(eye, dir, &map, map.size().0 + map.size().1, true);
         let result = show_fov(eye, &map, &visible);
         if expected != result {
             panic!("\nExpected:\n&{:#?}\n\nGot:\n&{:#?}", expected, result);
@@ -434,9 +434,9 @@ mod tests {
 
     fn show_fov(eye: Point, map: &Matrix<char>, visible: &Matrix<bool>) -> Vec<String> {
         let mut result = Vec::new();
-        for y in 0..map.size.1 {
+        for y in 0..map.size().1 {
             let mut row = String::new();
-            for x in 0..map.size.0 {
+            for x in 0..map.size().0 {
                 let p = Point(x as i32, y as i32);
                 let (is_eye, is_visible) = (p == eye, visible.get(p));
                 let c = if is_eye { '@' } else if !is_visible { '%' } else { map.get(p) };
@@ -848,9 +848,9 @@ mod tests {
         let (pos, map) = generate_fov_input();
         let mapping: crate::base::HashMap<_, _> =
                 [('.', '.'), ('#', '#'), (',', '"')].into_iter().collect();
-        let mut tiles = Matrix::new(map.size, crate::game::Tile::get('#'));
-        for x in 0..map.size.0 {
-            for y in 0..map.size.1 {
+        let mut tiles = Matrix::new(map.size(), crate::game::Tile::get('#'));
+        for x in 0..map.size().0 {
+            for y in 0..map.size().1 {
                 let p = Point(x, y);
                 let c = *mapping.get(&map.get(p)).unwrap();
                 tiles.set(p, crate::game::Tile::get(c));
@@ -869,7 +869,7 @@ mod tests {
         if point_lookups {
             let mut rng = crate::base::RNG::seed_from_u64(17);
             b.iter(|| {
-                let Point(x, y) = map.size;
+                let Point(x, y) = map.size();
                 let target = Point(rng.random_range(0..x), rng.random_range(0..y));
                 vision.check_point(&args, target);
             });
@@ -880,8 +880,8 @@ mod tests {
 
     fn debug_fov_output(eye: Point, map: &Matrix<char>, visible: &Matrix<bool>) {
         if !DEBUG { return; }
-        let count = visible.data.iter().filter(|&&x| x).count();
-        println!("Visibility trie: {} cells visible!", count);
+        let count = visible.raw_data().iter().filter(|&&x| x).count();
+        println!("FOV: {} cells visible!", count);
         for line in show_fov(eye, &map, &visible) { println!("{}", line); }
     }
 

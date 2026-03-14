@@ -133,8 +133,8 @@ fn build_room_cave(size: Point, config: &MapgenConfig, rng: &mut RNG) -> Matrix<
 
 fn try_place_room(map: &mut Matrix<char>, room: &Matrix<char>, rng: &mut RNG) -> bool {
     let mut map_walls = HashSet::default();
-    for x in 0..map.size.0 {
-        for y in 0..map.size.1 {
+    for x in 0..map.size().0 {
+        for y in 0..map.size().1 {
             let p = Point(x, y);
             if map.get(p) == '#' { map_walls.insert(p); }
         }
@@ -142,8 +142,8 @@ fn try_place_room(map: &mut Matrix<char>, room: &Matrix<char>, rng: &mut RNG) ->
 
     let mut room_walls = HashSet::default();
     let mut room_floor = HashSet::default();
-    for x in 0..room.size.0 {
-        for y in 0..room.size.1 {
+    for x in 0..room.size().0 {
+        for y in 0..room.size().1 {
             let p = Point(x, y);
             let tile = room.get(p);
             if tile == '#' { room_walls.insert(p); }
@@ -153,7 +153,7 @@ fn try_place_room(map: &mut Matrix<char>, room: &Matrix<char>, rng: &mut RNG) ->
 
     // Find all offsets at which at least one room wall and map wall align.
     let mut offsets = HashSet::default();
-    let Point(lx, ly) = map.size - room.size;
+    let Point(lx, ly) = map.size() - room.size();
     for &mw in &map_walls {
         for &rw in &room_walls {
             let p = mw - rw;
@@ -176,8 +176,8 @@ fn try_place_room(map: &mut Matrix<char>, room: &Matrix<char>, rng: &mut RNG) ->
             continue;
         }
 
-        for x in 0..room.size.0 {
-            for y in 0..room.size.1 {
+        for x in 0..room.size().0 {
+            for y in 0..room.size().1 {
                 let p = Point(x, y);
                 let c = room.get(p);
                 if c != ' ' { map.set(p + offset, c); }
@@ -210,8 +210,8 @@ fn find_components(map: &Matrix<char>, v: char, dirs: &[Point]) -> Vec<Vec<Point
     let mut result = vec![];
     let mut visited = HashSet::default();
 
-    for x in 0..map.size.0 {
-        for y in 0..map.size.1 {
+    for x in 0..map.size().0 {
+        for y in 0..map.size().1 {
             let p = Point(x, y);
             if map.get(p) != v || visited.contains(&p) { continue; }
 
@@ -581,7 +581,7 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
             if c == '~' || c == 'W' { water_tiles.push(Point(x, y)); }
         }
     }
-    let distance_to_water = BFS(map.size, water_tiles);
+    let distance_to_water = BFS(map.size(), water_tiles);
 
     // Plant grass and other features in each room.
     let l1 = std::cmp::max(2, (0.15 * (rooms.len() as f64)).round() as usize);
