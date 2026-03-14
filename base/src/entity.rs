@@ -4,12 +4,9 @@ use std::num::NonZeroU64;
 use std::ops::{Index, IndexMut};
 use std::rc::Rc;
 
-use slotmap::{DefaultKey, Key, KeyData};
-use slotmap::dense::DenseSlotMap;
-
 use crate::static_assert_size;
 use crate::ai::AIState;
-use crate::base::{dirs, sample, Point, RNG};
+use crate::base::{HashMap, dirs, sample, Point, RNG};
 use crate::dex::Species;
 use crate::knowledge::{Knowledge, Location};
 
@@ -170,45 +167,47 @@ impl Entity {
 pub struct EID(NonZeroU64);
 static_assert_size!(Option<EID>, 8);
 
-impl From<DefaultKey> for EID {
-    fn from(k: DefaultKey) -> Self {
-        Self(NonZeroU64::new(k.data().as_ffi()).unwrap())
-    }
-}
-
-impl EID {
-    fn key(&self) -> DefaultKey {
-        KeyData::from_ffi(self.0.get()).into()
-    }
-}
-
 //////////////////////////////////////////////////////////////////////////////
 
 // EntityMap
 
-type BaseMap = DenseSlotMap<DefaultKey, Entity>;
-
 #[derive(Default)]
-pub struct EntityMap(BaseMap);
+pub struct EntityMap {
+    map: HashMap<EID, Entity>,
+    next: Option<EID>,
+    order: Vec<EID>,
+}
 
 impl EntityMap {
     pub fn add(&mut self, args: &EntityArgs, rng: &mut RNG) -> EID {
-        self.0.insert_with_key(|x| Entity::new(x.into(), args, rng)).into()
+        let eid = self.next.unwrap_or(EID(NonZeroU64::MIN));
+        self.next = Some(EID(eid.0.checked_add(1).unwrap()));
+        let prev = self.map.insert(eid, Entity::new(eid, args, rng));
+        assert!(prev.is_none());
+        self.order.push(eid);
+        eid
     }
 
-    pub fn clear(&mut self) { self.0.clear(); }
+    pub fn remove(&mut self, eid: EID) -> Option<Entity> {
+        self.order.retain(|&x| x != eid);
+        self.map.remove(&eid)
+    }
 
-    pub fn get(&self, eid: EID) -> Option<&Entity> { self.0.get(eid.key()) }
+    pub fn clear(&mut self) { *self = Default::default() }
 
-    pub fn get_mut(&mut self, eid: EID) -> Option<&mut Entity> { self.0.get_mut(eid.key()) }
+    pub fn get(&self, eid: EID) -> Option<&Entity> { self.map.get(&eid) }
 
-    pub fn has(&self, eid: EID) -> bool { self.0.contains_key(eid.key()) }
+    pub fn get_mut(&mut self, eid: EID) -> Option<&mut Entity> { self.map.get_mut(&eid) }
 
-    pub fn remove(&mut self, eid: EID) -> Option<Entity> { self.0.remove(eid.key()) }
+    pub fn has(&self, eid: EID) -> bool { self.map.contains_key(&eid) }
 
-    pub fn iter(&self) -> Iter<'_> { Iter(self.0.iter()) }
+    pub fn iter(&self) -> Iter<'_> {
+        Iter(&self.map, self.order.iter())
+    }
 
-    pub fn iter_mut(&mut self) -> IterMut<'_> { IterMut(self.0.iter_mut()) }
+    pub fn iter_mut(&mut self) -> IterMut<'_> {
+        IterMut(&mut self.map, self.order.iter())
+    }
 }
 
 impl Index<EID> for EntityMap {
@@ -241,9 +240,9 @@ impl<'a> IntoIterator for &'a mut EntityMap {
 
 // EntityMap iterators
 
-pub struct Iter<'a>(slotmap::dense::Iter<'a, DefaultKey, Entity>);
+pub struct Iter<'a>(&'a HashMap<EID, Entity>, std::slice::Iter<'a, EID>);
 
-pub struct IterMut<'a>(slotmap::dense::IterMut<'a, DefaultKey, Entity>);
+pub struct IterMut<'a>(*mut HashMap<EID, Entity>, std::slice::Iter<'a, EID>);
 
 impl<'a> FusedIterator for Iter<'a> {}
 
@@ -252,13 +251,14 @@ impl<'a> FusedIterator for IterMut<'a> {}
 impl<'a> Iterator for Iter<'a> {
     type Item = (EID, &'a Entity);
     fn next(&mut self) -> Option<Self::Item> {
-        self.0.next().map(|(k, v)| (k.into(), v))
+        self.1.next().map(|&x| (x, &self.0[&x]))
     }
 }
 
+// SAFETY: add and remove ensure that EIDs in EntityMap.order are unique.
 impl<'a> Iterator for IterMut<'a> {
     type Item = (EID, &'a mut Entity);
     fn next(&mut self) -> Option<Self::Item> {
-        self.0.next().map(|(k, v)| (k.into(), v))
+        self.1.next().map(|&x| (x, unsafe { &mut *self.0 }.get_mut(&x).unwrap()))
     }
 }
