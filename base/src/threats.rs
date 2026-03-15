@@ -157,6 +157,9 @@ impl Threat {
     //
     //   - Can we make call-for-help carry information about target EID(s)?
     //     Seems hard - we can call based on unknown threats.
+    //
+    //   - We currently count friendlies that we haven't seen for, say, 18
+    //     turns as an ally with weight 0.75 - that's too high.
 
     // State updates:
 
