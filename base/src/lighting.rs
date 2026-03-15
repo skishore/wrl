@@ -164,12 +164,9 @@ mod tests {
         let mut rng = RNG::seed_from_u64(SEED);
         let mut lighting = Lighting::new(size);
 
-        for x in 0..lighting.opacity.size().0 {
-            for y in 0..lighting.opacity.size().1 {
-                let point = Point(x, y);
-                let light = rng.random_range(-1..=6);
-                lighting.set_light(point, light);
-            }
+        for point in lighting.opacity.iter_points() {
+            let light = rng.random_range(-1..=6);
+            lighting.set_light(point, light);
         }
 
         b.iter(|| {
@@ -187,12 +184,9 @@ mod tests {
         let mut rng = RNG::seed_from_u64(SEED);
         let mut lighting = Lighting::new(size);
 
-        for x in 0..lighting.opacity.size().0 {
-            for y in 0..lighting.opacity.size().1 {
-                let point = Point(x, y);
-                let light = rng.random_range(-1..=6);
-                lighting.set_light(point, light);
-            }
+        for point in lighting.opacity.iter_points() {
+            let light = rng.random_range(-1..=6);
+            lighting.set_light(point, light);
         }
 
         b.iter(|| {
@@ -205,10 +199,8 @@ mod tests {
     }
 
     fn check_lighting(lighting: &Lighting) {
-        for x in 0..lighting.opacity.size().0 {
-            for y in 0..lighting.opacity.size().1 {
-                check_lighting_at_cell(lighting, Point(x, y));
-            }
+        for point in lighting.opacity.iter_points() {
+            check_lighting_at_cell(lighting, point);
         }
     }
 
@@ -216,17 +208,14 @@ mod tests {
         let mut expected = 0;
         let mut vision = Vision::new(MAX_LIGHT_RADIUS);
 
-        for x in 0..lighting.opacity.size().0 {
-            for y in 0..lighting.opacity.size().1 {
-                let other = Point(x, y);
-                let light = lighting.light_radius.get(other);
-                if !Bound::new(light).contains(other - point) { continue; }
+        for other in lighting.opacity.iter_points() {
+            let light = lighting.light_radius.get(other);
+            if !Bound::new(light).contains(other - point) { continue; }
 
-                let dir = Point::default();
-                let opacity_lookup = |x| lighting.opacity.get(x);
-                let args = VisionArgs { pos: other, dir, opacity_lookup };
-                if vision.check_point(&args, point) { expected += 1; }
-            }
+            let dir = Point::default();
+            let opacity_lookup = |x| lighting.opacity.get(x);
+            let args = VisionArgs { pos: other, dir, opacity_lookup };
+            if vision.check_point(&args, point) { expected += 1; }
         }
 
         let actual = lighting.get_light(point);
@@ -235,30 +224,31 @@ mod tests {
     }
 
     fn debug_lighting(lighting: &Lighting) {
-        for y in 0..lighting.opacity.size().1 {
-            let mut line = String::new();
-            for x in 0..lighting.opacity.size().0 {
-                let point = Point(x, y);
-                let opacity = lighting.opacity.get(point);
-                let light = lighting.light_radius.get(point);
-                let value = lighting.light_values.get(point);
-                let ch = if opacity > 0 {
-                    '#'
-                } else if light >= 0 {
-                    if light < 10 {
-                        ('0' as i32 + light) as u8 as char
-                    } else {
-                        ('A' as i32 + light - 10) as u8 as char
-                    }
-                } else if value > 0 {
-                    'o'
+        let mut line = String::new();
+        for point in lighting.opacity.iter_points() {
+            let opacity = lighting.opacity.get(point);
+            let light = lighting.light_radius.get(point);
+            let value = lighting.light_values.get(point);
+            let ch = if opacity > 0 {
+                '#'
+            } else if light >= 0 {
+                if light < 10 {
+                    ('0' as i32 + light) as u8 as char
                 } else {
-                    '.'
-                };
-                let ch = ch as u32 - 0x20 + 0xff00;
-                line.push(char::from_u32(ch).unwrap());
+                    ('A' as i32 + light - 10) as u8 as char
+                }
+            } else if value > 0 {
+                'o'
+            } else {
+                '.'
+            };
+            let ch = ch as u32 - 0x20 + 0xff00;
+            line.push(char::from_u32(ch).unwrap());
+
+            if point.0 + 1 == lighting.opacity.size().0 {
+                println!("{}", line);
+                line.clear();
             }
-            println!("{}", line);
         }
         println!("");
     }

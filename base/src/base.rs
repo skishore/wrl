@@ -296,6 +296,21 @@ impl<T: Clone> Matrix<T> {
 
     pub fn size(&self) -> Point { self.size }
 
+    // Iterators:
+
+    pub fn iter(&self) -> impl Iterator<Item = (Point, &T)> {
+        std::iter::zip(self.iter_points(), self.data.iter())
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (Point, &mut T)> {
+        std::iter::zip(self.iter_points(), self.data.iter_mut())
+    }
+
+    pub fn iter_points(&self) -> impl Iterator<Item = Point> + use<T> {
+        let Point(sx, sy) = self.size;
+        (0..sy).flat_map(move |y| (0..sx).map(move |x| Point(x, y)))
+    }
+
     // Non-trivial methods:
 
     pub fn get(&self, point: Point) -> T {

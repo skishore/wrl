@@ -241,11 +241,8 @@ impl DebugFile {
         Self::write_array(&mut file, self.detail.utilities.as_slice())?;
 
         // Anything we scribble on the map shows up in the debug UI.
-        for y in 0..self.map.size().1 {
-            for x in 0..self.map.size().0 {
-                let glyph = UI::render_tile(me, Point(x, y), None);
-                self.map.set(Point(x, y), glyph);
-            }
+        for (p, x) in self.map.iter_mut() {
+            *x = UI::render_tile(me, p, None);
         }
         for &p in me.ai.get_path() {
             if p == me.pos { continue; }

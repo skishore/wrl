@@ -621,13 +621,14 @@ impl Board {
         let delta = if self.map.default().tile.casts_shadow() { 1 } else { 0 };
         if delta == 0 || self.shadow.is_empty() { return; }
 
-        for x in -1..(self.map.size().0 + 1) {
+        let Point(sx, sy) = self.map.size();
+        for x in -1..=sx {
             self.update_shadow(Point(x, -1), delta);
-            self.update_shadow(Point(x, self.map.size().1), delta);
+            self.update_shadow(Point(x, sy), delta);
         }
-        for y in 0..self.map.size().1 {
+        for y in 0..sy {
             self.update_shadow(Point(-1, y), delta);
-            self.update_shadow(Point(self.map.size().0, y), delta);
+            self.update_shadow(Point(sx, y), delta);
         }
     }
 }

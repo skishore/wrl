@@ -380,20 +380,14 @@ mod tests {
         vision.compute(&args);
 
         let mut result = Matrix::new(map.size(), false);
-        for y in 0..map.size().1 {
-            for x in 0..map.size().0 {
-                let p = Point(x, y);
-                result.set(p, vision.can_see(p));
-            }
+        for (p, x) in result.iter_mut() {
+            *x = vision.can_see(p);
         }
 
         // Check that point lookups are consistent with the full computation.
         if check_point_lookups {
-            for y in 0..map.size().1 {
-                for x in 0..map.size().0 {
-                    let p = Point(x, y);
-                    assert!(result.get(p) == vision.check_point(&args, p));
-                }
+            for (p, &x) in result.iter() {
+                assert!(x == vision.check_point(&args, p));
             }
         }
         result
@@ -434,15 +428,11 @@ mod tests {
 
     fn show_fov(eye: Point, map: &Matrix<char>, visible: &Matrix<bool>) -> Vec<String> {
         let mut result = Vec::new();
-        for y in 0..map.size().1 {
-            let mut row = String::new();
-            for x in 0..map.size().0 {
-                let p = Point(x as i32, y as i32);
-                let (is_eye, is_visible) = (p == eye, visible.get(p));
-                let c = if is_eye { '@' } else if !is_visible { '%' } else { map.get(p) };
-                row.push(c);
-            }
-            result.push(row);
+        let mut row = String::new();
+        for (p, &ch) in map.iter() {
+            let (is_eye, is_visible) = (p == eye, visible.get(p));
+            row.push(if is_eye { '@' } else if !is_visible { '%' } else { ch });
+            if p.0 + 1 == map.size().0 { result.push(std::mem::take(&mut row)); }
         }
         result
     }
@@ -849,12 +839,9 @@ mod tests {
         let mapping: crate::base::HashMap<_, _> =
                 [('.', '.'), ('#', '#'), (',', '"')].into_iter().collect();
         let mut tiles = Matrix::new(map.size(), crate::game::Tile::get('#'));
-        for x in 0..map.size().0 {
-            for y in 0..map.size().1 {
-                let p = Point(x, y);
-                let c = *mapping.get(&map.get(p)).unwrap();
-                tiles.set(p, crate::game::Tile::get(c));
-            }
+        for (p, x) in tiles.iter_mut() {
+            let c = *mapping.get(&map.get(p)).unwrap();
+            *x = crate::game::Tile::get(c);
         }
         let opacity_lookup = |p: Point| {
             let tile = tiles.get(p);
