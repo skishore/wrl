@@ -17,8 +17,7 @@ use crate::dex::Species;
 use crate::entity::Entity;
 use crate::game::{FOV_RADIUS_NPC, CALL_VOLUME, FOLLOW_RANGE, Item, move_ready};
 use crate::game::{Action, AttackAction, CallAction, EatAction, MoveAction};
-use crate::knowledge::{Call, Location, Sense, Timestamp};
-use crate::knowledge::{EntityKnowledge, Knowledge, ScentKnowledge};
+use crate::knowledge::{Call, Knowledge, Location, ScentKnowledge, Sense, Timestamp};
 use crate::pathing::{AStar, AStarHeuristic, Status};
 use crate::pathing::{BFS, DijkstraLength, DijkstraMap, Neighborhood};
 use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
@@ -1414,20 +1413,20 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
 
 // TODO: Most of these routines are based only on the leader's knowledge.
 // Instead, we should combine our knowledge and our leader's.
-//
-// TODO: rivals only includes entities we've seen; also include entities that
-// we've heard (especially ones that attacked us).
 
-fn rivals<'a>(me: &'a Entity) -> Vec<&'a EntityKnowledge> {
-    let mut rivals = vec![];
+fn dangers(me: &Entity) -> Vec<Point> {
+    let mut result = HashSet::default();
     for other in &me.known.entities {
         if !other.visible { break; }
-        if !other.friend { rivals.push(other); }
+        if !other.friend { result.insert(other.pos); }
+    }
+    for sound in &me.known.sources {
+        result.insert(sound.pos);
     }
     let pos = me.pos;
-    rivals.sort_by_cached_key(
-        |&x| ((x.pos - pos).len_l2_squared(), x.pos.0, x.pos.1));
-    rivals
+    let mut result: Vec<_> = result.into_iter().collect();
+    result.sort_by_cached_key(|&x| ((x - pos).len_l2_squared(), x.0, x.1));
+    result
 }
 
 // Check if `point` is a valid cell for a follower of the `leader`.
@@ -1449,7 +1448,7 @@ fn CheckFollowerSquare(leader: &Entity, point: Point, ignore_occupant: bool) -> 
 
 // Choose the best cell from which to defend the `leader`, if any.
 fn ChooseDefenseSquare(leader: &Entity, source: Point) -> Option<Point> {
-    let rivals = rivals(leader);
+    let rivals = dangers(leader);
     if rivals.is_empty() { return None; }
 
     let known = &*leader.known;
@@ -1466,11 +1465,11 @@ fn ChooseDefenseSquare(leader: &Entity, source: Point) -> Option<Point> {
     // digital line-of-sight is asymmetric. (Consider a rival positioned a
     // knight's move away from the leader.) We want to block the rival's LOS.
     let mut scores = HashMap::default();
-    for rival in &rivals {
+    for &rival in &rivals {
         let mut marked = HashSet::default();
-        let los = LOS(rival.pos, leader.pos);
+        let los = LOS(rival, leader.pos);
 
-        let diff = rival.pos - leader.pos;
+        let diff = rival - leader.pos;
         let shift_a = if diff.0.abs() > diff.1.abs() {
             Point(0, if diff.1 == 0 { 1 } else { diff.1.signum() })
         } else {

@@ -81,16 +81,16 @@ fn describe_sound(sound: Sound) -> &'static str {
     }
 }
 
-fn rivals<'a>(me: &'a Entity) -> Vec<&'a EntityKnowledge> {
-    let mut rivals = vec![];
+fn rivals(me: &Entity) -> Vec<&EntityKnowledge> {
+    let mut result = vec![];
     for other in &me.known.entities {
         if !other.visible { break; }
-        if !other.friend { rivals.push(other); }
+        if !other.friend { result.push(other); }
     }
     let pos = me.pos;
-    rivals.sort_by_cached_key(
+    result.sort_by_cached_key(
         |&x| ((x.pos - pos).len_l2_squared(), x.pos.0, x.pos.1));
-    rivals
+    result
 }
 
 fn within_map_bounds(ui: &UI, me: &Entity, point: Point) -> bool {
