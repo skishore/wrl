@@ -245,6 +245,7 @@ pub struct CellKnowledge {
     pub items: ThinVec<Item>,
     pub point: Point,
     pub tile: &'static Tile,
+    pub visibility: i32,
 
     // Flags:
     pub light: bool,
@@ -328,6 +329,7 @@ impl CellKnowledge {
             items: thin_vec![],
             point,
             tile,
+            visibility: 0,
 
             // Flags:
             light: false,
@@ -523,6 +525,7 @@ impl Knowledge {
             cell.last_seen = time;
             cell.point = point;
             cell.tile = tile;
+            cell.visibility = vision.get_visibility_at(point);
 
             // Update the cell's flags.
             cell.light = light;
@@ -922,6 +925,10 @@ impl<'a> PointLookup<'a> {
 
     pub fn tile(&self) -> Option<&'static Tile> {
         self.cell().map(|x| x.tile)
+    }
+
+    pub fn visibility(&self) -> i32 {
+        self.cell().map(|x| x.visibility).unwrap_or(-1)
     }
 
     // Derived fields

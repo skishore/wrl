@@ -17,7 +17,8 @@ use crate::dex::Species;
 use crate::entity::Entity;
 use crate::game::{FOV_RADIUS_NPC, CALL_VOLUME, FOLLOW_RANGE, Item, move_ready};
 use crate::game::{Action, AttackAction, CallAction, EatAction, MoveAction};
-use crate::knowledge::{Call, Knowledge, Location, ScentKnowledge, Sense, Timestamp};
+use crate::knowledge::{Call, Location, Sense, Timestamp};
+use crate::knowledge::{EntityKnowledge, Knowledge, ScentKnowledge};
 use crate::pathing::{AStar, AStarHeuristic, Status};
 use crate::pathing::{BFS, DijkstraLength, DijkstraMap, Neighborhood};
 use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
@@ -1409,6 +1410,144 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
 
 //////////////////////////////////////////////////////////////////////////////
 
+// Follower AI:
+
+// TODO: Most of these routines are based only on the leader's knowledge.
+// Instead, we should combine our knowledge and our leader's.
+//
+// TODO: rivals only includes entities we've seen; also include entities that
+// we've heard (especially ones that attacked us).
+
+fn rivals<'a>(me: &'a Entity) -> Vec<&'a EntityKnowledge> {
+    let mut rivals = vec![];
+    for other in &me.known.entities {
+        if !other.visible { break; }
+        if !other.friend { rivals.push(other); }
+    }
+    let pos = me.pos;
+    rivals.sort_by_cached_key(
+        |&x| ((x.pos - pos).len_l2_squared(), x.pos.0, x.pos.1));
+    rivals
+}
+
+// Check if `point` is a valid cell for a follower of the `leader`.
+fn CheckFollowerSquare(leader: &Entity, point: Point, ignore_occupant: bool) -> bool {
+    let known = &*leader.known;
+    let free = match known.get(point).status() {
+        Status::Free => true,
+        Status::Occupied => ignore_occupant,
+        Status::Blocked | Status::Unknown => false,
+    };
+    if !free { return false }
+
+    let delta = leader.pos - point;
+    if !Bound::new(2).contains(delta) { return false; }
+    if delta.len_l1() <= 1  { return true; }
+
+    known.get(leader.pos).visibility() == known.get(point).visibility()
+}
+
+// Choose the best cell from which to defend the `leader`, if any.
+fn ChooseDefenseSquare(leader: &Entity, source: Point) -> Option<Point> {
+    let rivals = rivals(leader);
+    if rivals.is_empty() { return None; }
+
+    let known = &*leader.known;
+    let defended = |p: Point| {
+        if p == source || p == leader.pos { return false; }
+        let cell = known.get(p);
+        cell.blocked() || cell.entity().map(|x| x.friend).unwrap_or(false)
+    };
+
+    // Score each point in a 5x5 cell centered on the leader based on how many
+    // rivals' line-of-sights to the player we'd block from that cell.
+    //
+    // It's important that LOS starts at the rival's position, because the
+    // digital line-of-sight is asymmetric. (Consider a rival positioned a
+    // knight's move away from the leader.) We want to block the rival's LOS.
+    let mut scores = HashMap::default();
+    for rival in &rivals {
+        let mut marked = HashSet::default();
+        let los = LOS(rival.pos, leader.pos);
+
+        let diff = rival.pos - leader.pos;
+        let shift_a = if diff.0.abs() > diff.1.abs() {
+            Point(0, if diff.1 == 0 { 1 } else { diff.1.signum() })
+        } else {
+            Point(if diff.0 == 0 { 1 } else { diff.0.signum() }, 0)
+        };
+        let shift_b = Point::default() - shift_a;
+        let shifts: [(Point, f64); 3] =
+            [(Point::default(), 64.), (shift_a, 8.), (shift_b, 1.)];
+
+        for &(shift, score) in &shifts {
+            if los.iter().any(|&x| defended(x + shift)) { continue; }
+            for &point in &los {
+                let delta = point + shift - leader.pos;
+                if delta.0.abs() > 2 || delta.1.abs() > 2 { continue; }
+                if !marked.insert(delta) { continue; }
+                *scores.entry(delta).or_insert(0.) += score;
+            }
+        }
+    }
+
+    let mut best = (f64::NEG_INFINITY, None);
+    for x in -2..=2 {
+        for y in -2..=2 {
+            if x == 0 && y == 0 { continue; }
+
+            let (d, p) = (Point(x, y), Point(x, y) + leader.pos);
+            if !CheckFollowerSquare(leader, p, p == source) { continue; }
+
+            let mut score = scores.get(&d).cloned().unwrap_or(f64::NEG_INFINITY);
+            if score == f64::NEG_INFINITY { continue; }
+
+            score += 0.0625 * d.len_l2_squared() as f64;
+            score -= 0.015625 * (p - source).len_l2_squared() as f64;
+            if score > best.0 { best = (score, Some(p)); }
+        }
+    }
+    best.1
+}
+
+fn DefendLeader(ctx: &mut Ctx) -> Option<Action> {
+    let source = ctx.pos;
+    let leader = ctx.env.leader?;
+    let target = ChooseDefenseSquare(leader, ctx.pos)?;
+
+    let known = &*leader.known;
+    let check = |p: Point| known.get(p).status();
+    let path = AStar(source, target, ASTAR_LIMIT_ATTACK, check)?;
+
+    let Some(&next) = path.first() else { return Some(Action::Look(source - leader.pos)) };
+
+    let (look, step) = (next - leader.pos, next - source);
+    Some(Action::Move(MoveAction { step, look, turns: 0.5 }))
+}
+
+fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
+    let leader = ctx.env.leader?;
+    let (source, target) = (ctx.pos, leader.pos);
+
+    let turns = 0.5;
+    let known = &*leader.known;
+    let valid = |p: Point| CheckFollowerSquare(leader, p, p == source);
+    let step = |dir: Point| { Action::Move(MoveAction { look: dir, step: dir, turns }) };
+
+    if Bound::new(3).contains(source - target) {
+        let mut moves: Vec<_> = dirs::ALL.iter().filter_map(
+            |&x| if valid(source + x) { Some((1, x)) } else { None }).collect();
+        if valid(source) { moves.push((16, dirs::NONE)); }
+        if !moves.is_empty() { return Some(step(*weighted(&moves, ctx.env.rng))); }
+    }
+
+    let check = |p: Point| known.get(p).status();
+    let path = AStar(source, target, ASTAR_LIMIT_ATTACK, check)?;
+    Some(step(*path.first()? - source))
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 // Behavior tree configuration
 
 // TODO list:
@@ -1673,6 +1812,19 @@ fn FightOrFlight() -> impl Bhv {
     ]
 }
 
+fn SummonRoot() -> impl Bhv {
+    seq![
+        "SummonRoot",
+        cond!("HasLeader", |x| x.env.leader.is_some()),
+        pri![
+            "SummonOptions",
+            act!("DefendLeader", DefendLeader),
+            act!("FollowLeader", FollowLeader),
+            act!("Idle", |_| Some(Action::Idle)),
+        ],
+    ]
+}
+
 fn Root() -> impl Bhv {
     pri![
         "Root",
@@ -1687,6 +1839,7 @@ fn Root() -> impl Bhv {
             cb!("SpotRestArea", |x| UpdateLastSeen(x, PathKind::Rest, CanRestAt)),
             cb!("Fail", |_| Result::Failed),
         ),
+        SummonRoot(),
         FightOrFlight(),
         HuntForMeat(),
         LookForTarget(),
@@ -1705,6 +1858,7 @@ fn Root() -> impl Bhv {
 // Entry point:
 
 pub struct AIEnv<'a> {
+    pub leader: Option<&'a Entity>,
     pub debug: Option<&'a mut DebugFile>,
     pub fov: &'a mut Vision,
     pub rng: &'a mut RNG,

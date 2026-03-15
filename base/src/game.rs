@@ -512,6 +512,27 @@ impl Board {
         self.lighting.set_light(target, light);
     }
 
+    fn swap_entities(&mut self, source: Point, target: Point) {
+        assert!(source != target);
+
+        let old = self.map.entry_mut(source).unwrap().eid.unwrap();
+        let new = self.map.entry_mut(target).unwrap().eid.unwrap();
+
+        let old_entity = &mut self.entities[old];
+        let old_light = old_entity.species.light.radius;
+        old_entity.pos = target;
+
+        let new_entity = &mut self.entities[new];
+        let new_light  = new_entity.species.light.radius;
+        new_entity.pos = source;
+
+        self.map.entry_mut(source).unwrap().eid = Some(new);
+        self.map.entry_mut(target).unwrap().eid = Some(old);
+
+        self.lighting.set_light(source, new_light);
+        self.lighting.set_light(target, old_light);
+    }
+
     fn remove_entity(&mut self, eid: EID) {
         // The player entity is not removed, since it's the player's POV.
         let entity = &mut self.entities[eid];
@@ -900,8 +921,10 @@ fn can_summon(board: &Board, entity: &Entity, target: Point) -> bool {
     })
 }
 
-fn plan(state: &mut State, eid: EID) -> Action {
-    state.board.update_known(eid, &mut state.env);
+fn plan(state: &mut State, eid: EID, leader: Option<EID>) -> Action {
+    let env = &mut state.env;
+    state.board.update_known(eid, env);
+    if let Some(x) = leader { state.board.update_known(x, env); }
 
     let player = eid == state.player;
     if player { return replace(&mut state.input, Action::WaitForInput); }
@@ -912,9 +935,12 @@ fn plan(state: &mut State, eid: EID) -> Action {
     let entity = &mut board.entities[eid];
     swap(ai, &mut entity.ai);
 
-    let env = AIEnv { debug, fov: vision, rng: &mut env.rng };
+    let entity = &board.entities[eid];
+    let leader = leader.map(|x| &board.entities[x]);
+    let env = AIEnv { leader, debug, fov: vision, rng: &mut env.rng };
     let action = ai.plan(entity, env);
 
+    let entity = &mut board.entities[eid];
     swap(ai, &mut entity.ai);
 
     entity.known.events.clear();
@@ -1044,45 +1070,54 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let color = entity.species.glyph.fg();
             let player = entity.player;
             let target = source + step;
+            let allied = player || entity.leader == Some(state.player);
 
-            match state.board.get_status(target) {
-                Status::Blocked | Status::Unknown => {
-                    state.board.entities[eid].face_direction(step);
-                    ActionResult::failure()
+            let (board, log) = (&mut state.board, &mut state.env.ui.log);
+            let cell = board.get_cell(target);
+            let mut swap = false;
+
+            if cell.tile.blocks_movement() {
+                board.entities[eid].face_direction(step);
+                return ActionResult::failure();
+            } else if let Some(other) = cell.eid {
+                let other = &board.entities[other];
+                if other.leader != Some(eid) {
+                    board.entities[eid].face_direction(step);
+                    if player { log.log_failure("There's something in the way!"); }
+                    return ActionResult::failure();
                 }
-                Status::Occupied => {
-                    state.board.entities[eid].face_direction(step);
-                    if player { state.ui.log.log_failure("There's something in the way!"); }
-                    ActionResult::failure()
-                }
-                Status::Free => {
-                    let board = &mut state.board;
-                    board.time = board.time.bump();
-
-                    let volume = if noisy { MOVE_VOLUME } else { SNEAK_VOLUME };
-                    let noise = Noise::from_eid(eid, source, volume);
-                    let saw_source = detect(board, &noise, &mut state.env);
-
-                    board.move_entity(eid, target);
-
-                    let noise = Noise::from_eid(eid, target, volume);
-                    let saw_target = detect(board, &noise, &mut state.env);
-                    let sightings = merge_views(board, &saw_source, &saw_target);
-
-                    // Deliver a MoveEvent to each other entity that saw the move.
-                    let data = EventData::Move(MoveEvent { from: source });
-                    let event = &mut board.create_event(eid, data, target);
-                    for s in &sightings {
-                        state.board.observe_event(s.eid, &s.merged, event, &mut state.env);
-                        if s.eid != state.player { continue; }
-
-                        let color = if s.merged.seen() { color } else { Color::white() };
-                        state.ui.animate_move(color, source, 0);
-                        state.ui.animate_move(color, target, 1);
-                    }
-                    ActionResult::success_turns(turns)
-                }
+                if player { log.log(format!("You swap places with {}.", other.lower())); }
+                swap = true;
             }
+
+            board.time = board.time.bump();
+
+            let volume = if noisy { MOVE_VOLUME } else { SNEAK_VOLUME };
+            let noise = Noise::from_eid(eid, source, volume);
+            let saw_source = detect(board, &noise, &mut state.env);
+
+            if swap {
+                board.swap_entities(source, target);
+            } else {
+                board.move_entity(eid, target);
+            }
+
+            let noise = Noise::from_eid(eid, target, volume);
+            let saw_target = detect(board, &noise, &mut state.env);
+            let sightings = merge_views(board, &saw_source, &saw_target);
+
+            // Deliver a MoveEvent to each other entity that saw the move.
+            let data = EventData::Move(MoveEvent { from: source });
+            let event = &mut board.create_event(eid, data, target);
+            for s in &sightings {
+                state.board.observe_event(s.eid, &s.merged, event, &mut state.env);
+                if allied || s.eid != state.player { continue; }
+
+                let color = if s.merged.seen() { color } else { Color::white() };
+                state.ui.animate_move(color, source, 0);
+                state.ui.animate_move(color, target, 1);
+            }
+            ActionResult::success_turns(turns)
         }
         Action::Attack(action) => {
             let board = &mut state.board;
@@ -1370,11 +1405,11 @@ fn update_state(state: &mut State) {
         let Some(eid) = advance_turn(board) else { break };
 
         let entity = &board.entities[eid];
-        let player = entity.player;
+        let Entity { leader, player, .. } = *entity;
         if player && needs_input(state) { break; }
 
         update = true;
-        let action = plan(state, eid);
+        let action = plan(state, eid, leader);
         state.record_trace(&action, eid);
         let result = act(state, eid, action);
         if player && !result.success { break; }
