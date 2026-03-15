@@ -1,4 +1,3 @@
-use core::ops::{Deref, DerefMut};
 use std::fmt::Debug;
 use std::mem::{replace, swap};
 
@@ -1114,8 +1113,8 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 if allied || s.eid != state.player { continue; }
 
                 let color = if s.merged.seen() { color } else { Color::white() };
-                state.ui.animate_move(color, source, 0);
-                state.ui.animate_move(color, target, 1);
+                state.env.ui.animate_move(color, source, 0);
+                state.env.ui.animate_move(color, target, 1);
             }
             ActionResult::success_turns(turns)
         }
@@ -1168,7 +1167,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 } else {
                     "You hear fighting nearby!".into()
                 };
-                state.ui.log.log(line);
+                state.env.ui.log.log(line);
             }
 
             let cb = move |board: &mut Board, env: &mut UpdateEnv| {
@@ -1465,19 +1464,6 @@ impl Default for State {
     }
 }
 
-impl Deref for State {
-    type Target = UpdateEnv;
-    fn deref(&self) -> &Self::Target {
-        &self.env
-    }
-}
-
-impl DerefMut for State {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.env
-    }
-}
-
 impl State {
     pub fn new(seed: Option<u64>, mode: GameMode) -> Self {
         let size = Point(WORLD_SIZE, WORLD_SIZE);
@@ -1592,7 +1578,7 @@ impl State {
             }
             crate::ui::Effect { frame, known, mask, sources, targets }
         });
-        self.ui.render(buffer, entity, effect.as_ref());
+        self.env.ui.render(buffer, entity, effect.as_ref());
     }
 
     // Private helpers:
