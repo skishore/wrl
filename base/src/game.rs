@@ -489,7 +489,7 @@ impl Board {
 
         self.update_known(eid, env);
         let entity = &mut self.entities[eid];
-        entity.known.mark_turn_boundary(entity.player, entity.speed);
+        entity.known.mark_turn_boundary(entity.player, entity.speed, self.time);
 
         let light = args.species.light.radius;
         self.lighting.set_light(pos, light);
@@ -1403,6 +1403,7 @@ fn update_state(state: &mut State) {
         let board = &mut state.board;
         let Some(eid) = advance_turn(board) else { break };
 
+        let time = board.time;
         let entity = &board.entities[eid];
         let Entity { leader, player, .. } = *entity;
         if player && needs_input(state) { break; }
@@ -1417,7 +1418,7 @@ fn update_state(state: &mut State) {
         let Some(entity) = board.entities.get_mut(eid) else { continue };
 
         let Entity { pos, speed, .. } = *entity;
-        entity.known.mark_turn_boundary(player, speed);
+        entity.known.mark_turn_boundary(player, speed, time);
 
         board.time = board.time.bump();
 

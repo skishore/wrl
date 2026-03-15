@@ -431,7 +431,7 @@ impl Knowledge {
 
     // Writes
 
-    pub fn mark_turn_boundary(&mut self, player: bool, speed: f64) {
+    pub fn mark_turn_boundary(&mut self, player: bool, speed: f64, time: Timestamp) {
         if self.turn_times.len() < MAX_TURN_MEMORY {
             let min = 1e-2;
             let speed = if speed < min { min } else { speed };
@@ -440,14 +440,14 @@ impl Knowledge {
             self.turn_times.reserve_exact(MAX_TURN_MEMORY);
             for i in 0..MAX_TURN_MEMORY {
                 let age = Timedelta::from_seconds(i as f64 * seconds_per_turn);
-                self.turn_times.push_back(self.time - age);
+                self.turn_times.push_back(time - age);
             }
         }
 
         assert!(self.turn_times.len() == MAX_TURN_MEMORY);
         assert!(self.turn_times.capacity() == MAX_TURN_MEMORY);
         self.turn_times.pop_back();
-        self.turn_times.push_front(self.time);
+        self.turn_times.push_front(time);
 
         self.forget_old_scents();
         self.forget_old_sources(player);
