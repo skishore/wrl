@@ -3,6 +3,7 @@ use std::collections::VecDeque;
 
 use rand::Rng;
 
+use crate::ai::{CheckFollowerSquare, ChooseDefenseSquare};
 use crate::base::{HashMap, HashSet, LOS, Point, RNG, dirs};
 use crate::base::{Bound, Buffer, Color, Glyph, Matrix, Rect, Slice};
 use crate::dex::Species;
@@ -229,16 +230,16 @@ fn init_summon_target(me: &Entity, data: TargetData) -> Box<Target> {
     let (known, pos, dir) = (&*me.known, me.pos, me.dir);
     let mut target = init_target(data, pos, pos);
 
-    //if let Some(x) = defend_at_pos(me, pos) {
-    //    let line = LOS(pos, x);
-    //    for p in line.iter().skip(1).rev() {
-    //        update_target(known, &mut target, *p);
-    //        if target.error.is_empty() { return target; }
-    //    }
-    //}
+    if let Some(x) = ChooseDefenseSquare(me, pos) {
+        let line = LOS(pos, x);
+        for p in line.iter().skip(1).rev() {
+            update_target(known, &mut target, *p);
+            if target.error.is_empty() { return target; }
+        }
+    }
 
     let mut okay = |p: Point| {
-        //if !check_follower_square(known, me, p, false) { return false; }
+        if !CheckFollowerSquare(me, p, false) { return false; }
         update_target(known, &mut target, p);
         target.error.is_empty()
     };

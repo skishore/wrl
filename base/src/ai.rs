@@ -1414,7 +1414,7 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
 // TODO: Most of these routines are based only on the leader's knowledge.
 // Instead, we should combine our knowledge and our leader's.
 
-fn dangers(me: &Entity) -> Vec<Point> {
+pub fn dangers(me: &Entity) -> Vec<Point> {
     let mut result = HashSet::default();
     for other in &me.known.entities {
         if !other.visible { break; }
@@ -1430,7 +1430,7 @@ fn dangers(me: &Entity) -> Vec<Point> {
 }
 
 // Check if `point` is a valid cell for a follower of the `leader`.
-fn CheckFollowerSquare(leader: &Entity, point: Point, ignore_occupant: bool) -> bool {
+pub fn CheckFollowerSquare(leader: &Entity, point: Point, ignore_occupant: bool) -> bool {
     let known = &*leader.known;
     let free = match known.get(point).status() {
         Status::Free => true,
@@ -1447,7 +1447,7 @@ fn CheckFollowerSquare(leader: &Entity, point: Point, ignore_occupant: bool) -> 
 }
 
 // Choose the best cell from which to defend the `leader`, if any.
-fn ChooseDefenseSquare(leader: &Entity, source: Point) -> Option<Point> {
+pub fn ChooseDefenseSquare(leader: &Entity, source: Point) -> Option<Point> {
     let rivals = dangers(leader);
     if rivals.is_empty() { return None; }
 
