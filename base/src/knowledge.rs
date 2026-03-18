@@ -232,11 +232,14 @@ impl std::ops::Deref for ScentKnowledge {
 
 // Knowledge
 
-type CellHandle = Handle<CellKnowledge>;
+type CellHandle   = Handle<CellKnowledge>;
 type EntityHandle = Handle<EntityKnowledge>;
 type SourceHandle = Handle<SourceKnowledge>;
 
-type PointIndex  = HashMap<Point, PointState>;
+type PointIndex = HashMap<Point, PointState>;
+
+#[derive(Default, Eq, PartialEq)]
+enum Occupant { Entity(EntityHandle), Source(SourceHandle), #[default] None }
 
 // Detailed knowledge about a map cell. Only updated when we see it.
 pub struct CellKnowledge {
@@ -297,13 +300,16 @@ struct EIDState {
     entity: Option<EntityHandle>,
     source: Option<SourceHandle>,
 }
+#[cfg(target_pointer_width = "64")]
+static_assert_size!(EIDState, 8);
 
 #[derive(Default, Eq, PartialEq)]
 struct PointState {
     cell: Option<CellHandle>,
-    entity: Option<EntityHandle>,
-    source: Option<SourceHandle>,
+    occupant: Occupant,
 }
+#[cfg(target_pointer_width = "64")]
+static_assert_size!(PointState, 12);
 
 #[derive(Default)]
 pub struct Knowledge {
@@ -481,7 +487,7 @@ impl Knowledge {
         for &oid in me.leader.iter().chain(&me.summons) {
             let other = &board.entities[oid];
             let handle = self.update_entity(me, other, Sense::Sound);
-            self.pos_index.entry(other.pos).or_default().entity = Some(handle);
+            self.pos_index.entry(other.pos).or_default().occupant = Occupant::Entity(handle);
         }
 
         // Entities have exact knowledge about anything they can see.
@@ -542,8 +548,7 @@ impl Knowledge {
                 cell.last_see_entity_at = time;
             }
             if see_all_entities || entity.is_some() {
-                entry.entity = entity;
-                entry.source = None;
+                entry.occupant = entity.map(|x| Occupant::Entity(x)).unwrap_or_default();
             }
         }
 
@@ -771,7 +776,7 @@ impl Knowledge {
         if cached.entity.is_some() {
             self.entities.move_to_front(handle);
             let (s, t) = (self.entities[handle].pos, other.pos);
-            if s != t { Self::move_entity(&mut self.pos_index, handle, Some(s), None); }
+            Self::move_entity(&mut self.pos_index, handle, Some(s), Some(t));
         } else {
             cached.entity = Some(handle);
         };
@@ -811,30 +816,28 @@ impl Knowledge {
     fn move_entity(m: &mut PointIndex, h: EntityHandle, from: Option<Point>, to: Option<Point>) {
         if from == to { return; }
 
-        if let Some(p) = from && let Some(x) = m.get_mut(&p) && x.entity == Some(h) {
-            x.entity = None;
+        if let Some(p) = from && let Some(x) = m.get_mut(&p) &&
+           x.occupant == Occupant::Entity(h) {
+            x.occupant = Occupant::None;
             if *x == Default::default() { m.remove(&p); }
         }
 
         if let Some(p) = to {
-            let entry = m.entry(p).or_default();
-            entry.entity = Some(h);
-            entry.source = None;
+            m.entry(p).or_default().occupant = Occupant::Entity(h);
         }
     }
 
     fn move_source(m: &mut PointIndex, h: SourceHandle, from: Option<Point>, to: Option<Point>) {
         if from == to { return; }
 
-        if let Some(p) = from && let Some(x) = m.get_mut(&p) && x.source == Some(h) {
-            x.source = None;
+        if let Some(p) = from && let Some(x) = m.get_mut(&p) &&
+           x.occupant == Occupant::Source(h) {
+            x.occupant = Occupant::None;
             if *x == Default::default() { m.remove(&p); }
         }
 
         if let Some(p) = to {
-            let entry = m.entry(p).or_default();
-            entry.source = Some(h);
-            entry.entity = None;
+            m.entry(p).or_default().occupant = Occupant::Source(h);
         }
     }
 
@@ -872,16 +875,16 @@ impl Knowledge {
         }
 
         // Check that the indices are consistent and minimal:
-        for (&pos, entry) in &self.pos_index {
-            assert!(entry.cell.is_some() || entry.entity.is_some() || entry.source.is_some());
-            if let Some(x) = entry.cell { assert!(self.cells[x].point == pos); }
-            if let Some(x) = entry.entity { assert!(self.entities[x].pos == pos); }
-            if let Some(x) = entry.source { assert!(self.sources[x].pos == pos); }
+        for (&pos, PointState { cell, occupant }) in &self.pos_index {
+            assert!(cell.is_some() || *occupant != Occupant::None);
+            if let Some(x) = *cell { assert!(self.cells[x].point == pos); }
+            if let Occupant::Entity(x) = *occupant { assert!(self.entities[x].pos == pos); }
+            if let Occupant::Source(x) = *occupant { assert!(self.sources[x].pos == pos); }
         }
-        for (&eid, entry) in &self.eid_index {
-            assert!(entry.entity.is_some() || entry.source.is_some());
-            if let Some(x) = entry.entity { assert!(self.entities[x].eid == eid); }
-            if let Some(x) = entry.source { assert!(self.sources[x].eid == Some(eid)); }
+        for (&eid, EIDState { entity, source }) in &self.eid_index {
+            assert!(entity.is_some() || source.is_some());
+            if let Some(x) = *entity { assert!(self.entities[x].eid == eid); }
+            if let Some(x) = *source { assert!(self.sources[x].eid == Some(eid)); }
         }
         true
     }
@@ -936,26 +939,30 @@ impl<'a> PointLookup<'a> {
     }
 
     pub fn entity(&self) -> Option<&'a EntityKnowledge> {
-        Some(&self.root.entities[self.spot?.entity?])
+        let Occupant::Entity(x) = self.spot?.occupant else { return None };
+        Some(&self.root.entities[x])
     }
 
     pub fn source(&self) -> Option<&'a SourceKnowledge> {
-        Some(&self.root.sources[self.spot?.source?])
+        let Occupant::Source(x) = self.spot?.occupant else { return None };
+        Some(&self.root.sources[x])
     }
 
     pub fn status(&self) -> Status {
         let Some(spot) = self.spot else { return Status::Unknown };
         let Some(cell) = spot.cell else { return Status::Unknown };
+
         let tile = self.root.cells[cell].tile;
         if tile.blocks_movement() { return Status::Blocked; }
-        if spot.entity.is_some() { Status::Occupied } else { Status::Free }
+
+        let occupied = spot.occupant != Occupant::None;
+        if occupied { Status::Occupied } else { Status::Free }
     }
 
     // Predicates
 
     pub fn occupied(&self) -> bool {
-        let Some(spot) = self.spot else { return false };
-        spot.entity.is_some() || spot.source.is_some()
+        self.spot.map(|x| x.occupant != Occupant::None).unwrap_or(false)
     }
 
     pub fn blocked(&self) -> bool {
