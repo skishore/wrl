@@ -48,7 +48,7 @@ pub struct Lighting {
     light_values: Matrix<i32>,
     opacity: Matrix<i32>,
     sources: Matrix<LightSourceBitset>,
-    visions: Vec<Vision>,
+    visions: Box<[Vision]>,
 }
 
 impl Lighting {

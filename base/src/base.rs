@@ -271,7 +271,7 @@ pub mod dirs {
 
 #[derive(Clone, Default)]
 pub struct Matrix<T> {
-    data: Vec<T>,
+    data: Box<[T]>,
     size: Point,
     default: T,
 }
@@ -283,14 +283,14 @@ impl<T: Clone> Matrix<T> {
         assert!(0 <= size.1);
         let mut data = Vec::new();
         data.resize((size.0 * size.1) as usize, value.clone());
-        Self { data, size, default: value }
+        Self { data: data.into_boxed_slice(), size, default: value }
     }
 
     // Trivial getters:
 
-    pub fn mut_data(&mut self) -> &mut [T] { self.data.as_mut_slice() }
+    pub fn mut_data(&mut self) -> &mut [T] { &mut *self.data }
 
-    pub fn raw_data(&self) -> &[T] { self.data.as_slice() }
+    pub fn raw_data(&self) -> &[T] { &*self.data }
 
     pub fn default(&self) -> &T { &self.default }
 
