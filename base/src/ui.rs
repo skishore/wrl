@@ -781,11 +781,13 @@ impl UI {
         };
 
         // Render the focused entity on the map.
+        let mut skip_first = false;
         let focused_vision = self.focused.vision.get_points_seen();
         if self.focused.active &&
            let Some(&point) = focused_vision.first() &&
            !effect.map(|x| x.sources.contains(&point)).unwrap_or(false) {
             highlight(slice, point, Color::gray(UI_TARGET_SHADE));
+            skip_first = true;
         }
 
         // Render all of the current animation's particles.
@@ -862,7 +864,8 @@ impl UI {
 
         // Render an estimate of the focused entity's FOV on the map.
         if self.focused.active {
-            for &point in focused_vision.iter().skip(1) {
+            let skip = if skip_first { 1 } else { 0 };
+            for &point in focused_vision.iter().skip(skip) {
                 brighten(slice, point);
             }
         }
