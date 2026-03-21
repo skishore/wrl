@@ -1354,7 +1354,7 @@ impl UI {
         let entity = if let Some(x) = entity && (x.friend || x.visible) { entity } else { None };
         let entity = if is_source { None } else { entity };
 
-        let freshness = source.map(|x| x.freshness());
+        let freshness = source.map(|x| x.freshness(&*me.known));
         let freshness = freshness.unwrap_or(if is_target { 1. } else { -1. });
 
         // Special cases for non-sight-based entity knowledge:

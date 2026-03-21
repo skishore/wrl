@@ -1,4 +1,4 @@
-use std::cmp::{max, min};
+use std::cmp::max;
 use std::collections::VecDeque;
 use std::num::NonZeroU64;
 use std::rc::Rc;
@@ -288,7 +288,6 @@ pub struct SourceKnowledge {
     pub eid: Option<EID>,
     pub loc: Location,
     pub sound: Option<Sound>,
-    pub turns: i32,
 }
 #[cfg(target_pointer_width = "64")]
 static_assert_size!(SourceKnowledge, 40);
@@ -370,12 +369,13 @@ impl EntityKnowledge {
 
 impl SourceKnowledge {
     fn new(uid: UID, event: &Event) -> Self {
-        Self { uid, eid: None, loc: event.loc, sound: None, turns: 0 }
+        Self { uid, eid: None, loc: event.loc, sound: None }
     }
 
-    pub fn freshness(&self) -> f64 {
+    pub fn freshness(&self, known: &Knowledge) -> f64 {
         let limit = max(SOURCE_LIMIT_PC_ - 1, 1);
-        1. - min(self.turns, limit) as f64 / limit as f64
+        let turns = known.time_to_turn(self.time).floor() as i32;
+        1. - clamp(turns, 0, limit) as f64 / limit as f64
     }
 }
 
@@ -642,7 +642,6 @@ impl Knowledge {
         source.eid = Some(eid);
         source.loc = event.loc;
         source.sound = event.sound();
-        source.turns = 0;
 
         clone.uid = Some(source.uid);
         self.events.push(clone);
@@ -713,11 +712,10 @@ impl Knowledge {
     }
 
     fn forget_old_sources(&mut self, player: bool) {
-        for x in &mut self.sources { x.turns += 1; }
+        let turns = if player { SOURCE_LIMIT_PC_ } else { SOURCE_LIMIT_NPC };
+        let limit = self.time_at_turn(turns);
 
-        let limit = if player { SOURCE_LIMIT_PC_ } else { SOURCE_LIMIT_NPC };
-
-        while let Some(x) = self.sources.back() && x.turns >= limit {
+        while let Some(x) = self.sources.back() && x.time <= limit {
             self.forget_last_source();
         }
     }
