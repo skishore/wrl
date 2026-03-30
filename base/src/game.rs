@@ -3,7 +3,7 @@ use std::mem::{replace, swap};
 
 use lazy_static::lazy_static;
 use rand::{Rng, SeedableRng};
-use thin_vec::{ThinVec, thin_vec};
+use thin_vec::ThinVec;
 
 use crate::static_assert_size;
 use crate::ai::{AIEnv, AIState};
@@ -106,10 +106,8 @@ impl Tile {
     }
 }
 
-impl Debug for Tile {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", (self.glyph.ch().0 - 0xff00 + 0x20) as u8 as char)
-    }
+impl Default for &'static Tile {
+    fn default() -> Self { &DEFAULT_TILE }
 }
 
 impl Eq for &'static Tile {}
@@ -121,6 +119,8 @@ impl PartialEq for &'static Tile {
 }
 
 lazy_static! {
+    static ref DEFAULT_TILE: &'static Tile = TILES.get(&'#').unwrap();
+
     static ref TILES: HashMap<char, Tile> = {
         let items = [
             ('#', FLAGS_BLOCKED,     ('#', 0x106000), "a tree"),
@@ -239,7 +239,7 @@ impl FOV {
 
 // Board
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Cell {
     pub eid: Option<EID>,
     pub items: ThinVec<Item>,
@@ -248,12 +248,6 @@ pub struct Cell {
 }
 #[cfg(target_pointer_width = "64")]
 static_assert_size!(Cell, 32);
-
-impl Cell {
-    fn new(tile: &'static Tile) -> Self {
-        Self { eid: None, items: thin_vec![], shadow: 0, tile }
-    }
-}
 
 pub struct Board {
     map: Matrix<Cell>,
@@ -278,7 +272,7 @@ impl Board {
             Light::Sun(x) => LOS(Point::default(), x).into_iter().skip(1).collect(),
             Light::None => vec![],
         };
-        let cell = Cell::new(Tile::get('#'));
+        let cell = Cell::default();
         let time = Timedelta::from_seconds(365.75 * 86400.);
 
         let mut result = Self {
@@ -569,7 +563,7 @@ impl Board {
     }
 
     fn reset(&mut self, tile: &'static Tile) {
-        self.map.fill(Cell::new(tile));
+        self.map.fill(Cell { tile, ..Default::default() });
         self.update_edge_shadows();
         self.active_entity = None;
         self.entities.clear();
@@ -1503,8 +1497,11 @@ impl State {
 
         if matches!(mode, GameMode::Gym | GameMode::Sim | GameMode::Test) {
             board.map.entry_mut(pos).unwrap().eid = None;
-            board.entities[player].pos = Point(-9999, -9999);
-            board.entities[player].known = Default::default();
+            let entity = &mut board.entities[player];
+            let Entity { player, speed, .. } = *entity;
+            entity.known = Default::default();
+            entity.known.mark_turn_boundary(player, speed, board.time);
+            entity.pos = Point(-9999, -9999);
         }
 
         let pos = |board: &Board, rng: &mut RNG| {

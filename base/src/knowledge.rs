@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use rand::Rng;
 
-use thin_vec::{ThinVec, thin_vec};
+use thin_vec::ThinVec;
 
 use crate::static_assert_size;
 use crate::base::{HashMap, HashSet, Point, RNG, clamp};
@@ -242,6 +242,7 @@ type PointIndex = HashMap<Point, PointState>;
 enum Occupant { Entity(EntityHandle), Source(SourceHandle), #[default] None }
 
 // Detailed knowledge about a map cell. Only updated when we see it.
+#[derive(Default)]
 pub struct CellKnowledge {
     pub last_see_entity_at: Timestamp,
     pub last_seen: Timestamp,
@@ -324,25 +325,6 @@ pub struct Knowledge {
     eid_index: HashMap<EID, EIDState>,
     pos_index: HashMap<Point, PointState>,
     last_uid: u64,
-}
-
-impl CellKnowledge {
-    fn new(point: Point, tile: &'static Tile) -> Self {
-        Self {
-            last_seen: Timestamp::default(),
-            last_see_entity_at: Timestamp::default(),
-            items: thin_vec![],
-            point,
-            tile,
-            visibility: 0,
-
-            // Flags:
-            light: false,
-            shade: false,
-            visible: false,
-            see_entity_at: false,
-        }
-    }
 }
 
 impl EntityKnowledge {
@@ -444,7 +426,7 @@ impl Knowledge {
             let seconds_per_turn = 1. / speed;
 
             self.turn_times.reserve_exact(MAX_TURN_MEMORY);
-            for i in 0..MAX_TURN_MEMORY {
+            for i in 1..=MAX_TURN_MEMORY {
                 let age = Timedelta::from_seconds(i as f64 * seconds_per_turn);
                 self.turn_times.push_back(time - age);
             }
@@ -452,6 +434,7 @@ impl Knowledge {
 
         assert!(self.turn_times.len() == MAX_TURN_MEMORY);
         assert!(self.turn_times.capacity() == MAX_TURN_MEMORY);
+        assert!(self.turn_times[0] < time);
         self.turn_times.pop_back();
         self.turn_times.push_front(time);
 
@@ -522,7 +505,7 @@ impl Knowledge {
             // Update this point's cell, or create a new one.
             let entry = self.pos_index.entry(point).or_default();
             let cell = entry.cell.unwrap_or_else(
-                || self.cells.push_front(CellKnowledge::new(point, tile)));
+                || self.cells.push_front(Default::default()));
             if entry.cell.is_some() { self.cells.move_to_front(cell); }
             if entry.cell.is_none() { entry.cell = Some(cell); }
 
@@ -674,7 +657,7 @@ impl Knowledge {
         // We clean up entities up to the first visible one.
         while self.entities.len() > MAX_ENTITY_MEMORY {
             let entity = self.entities.back().unwrap();
-            if entity.visible { break; }
+            if entity.friend || entity.visible { break; }
             self.remove_entity(entity.eid, self.time);
         }
 
