@@ -371,7 +371,7 @@ fn select_explore_target(ctx: &mut Ctx) -> Option<Point> {
         let inv_delta_l2 = safe_inv_l2(delta);
         let cos = delta.dot(dir) as f64 * inv_delta_l2 * inv_dir_l2;
         let unblocked_neighbors = dirs::ALL.iter().filter(
-                |&&x| !known.get(p + x).blocked()).count();
+            |&&x| !known.get(p + x).blocked()).count();
 
         let bonus0 = age_scale * (age as f64 + 1. / 16.);
         let bonus1 = unblocked_neighbors == dirs::ALL.len();
@@ -395,7 +395,7 @@ fn select_chase_target(ctx: &mut Ctx) -> Option<Point> {
     let target = ctx.blackboard.target.as_ref()?;
     let (bias, steps, target) = (target.bias, target.steps, &target.target);
 
-    let age = known.time - target.time;
+    let age = known.time() - target.time;
     let bias = if target.sense == Sense::Smell { Point(0, 0) } else { bias };
     let center = target.pos;
 
@@ -488,7 +488,7 @@ fn select_flight_target(ctx: &mut Ctx, hiding: bool) -> Option<Point> {
 fn TickBasicNeeds(ctx: &mut Ctx) -> Result {
     let (bb, entity) = (&mut *ctx.blackboard, ctx.entity);
     bb.prev_time = bb.turn_time;
-    bb.turn_time = ctx.entity.known.time;
+    bb.turn_time = ctx.entity.known.time();
 
     let delta = if entity.asleep { 0 } else { -1 };
     bb.assess.update(delta);
@@ -683,7 +683,7 @@ fn WarnOffThreats(ctx: &mut Ctx) -> Option<Action> {
         let (call, look) = (Call::Warning, threat.pos - pos);
         if warn {
             result = Some(Action::Call(CallAction { call, look }));
-            bb.last_warning = known.time;
+            bb.last_warning = known.time();
         } else if stare {
             result = Some(Action::Look(look));
         };
@@ -1111,7 +1111,7 @@ fn ClearTargets(ctx: &mut Ctx) {
 
 fn MarkSafeIfLostView(ctx: &mut Ctx) -> bool {
     if !ctx.blackboard.options.is_empty() { return false; }
-    ctx.blackboard.threats.mark_safe(ctx.known.time);
+    ctx.blackboard.threats.mark_safe(ctx.known.time());
     true
 }
 
@@ -1227,7 +1227,7 @@ fn SelectBestTarget(ctx: &mut Ctx) -> bool {
 fn AttackEnemy(ctx: &mut Ctx) -> Option<Action> {
     let state = ctx.blackboard.target.as_ref()?;
     if state.target.sense == Sense::Smell { return None; }
-    if state.target.time != ctx.known.time { return None; }
+    if state.target.time != ctx.known.time() { return None; }
     AttackTarget(ctx, state.target.pos)
 }
 
@@ -1316,7 +1316,7 @@ fn UpdateFlightState(ctx: &mut Ctx) -> bool {
     }
 
     if looking && !reset && bb.dirs.dirs.len() == 1 {
-        bb.threats.mark_safe(ctx.known.time);
+        bb.threats.mark_safe(ctx.known.time());
     } else {
         bb.flight = Some(flight);
     }
@@ -1325,7 +1325,7 @@ fn UpdateFlightState(ctx: &mut Ctx) -> bool {
 
 fn LookForThreats(ctx: &mut Ctx) -> Option<Action> {
     let threats = &ctx.blackboard.threats.menacing;
-    let (pos, rng, time) = (ctx.pos, &mut *ctx.env.rng, ctx.known.time);
+    let (pos, rng, time) = (ctx.pos, &mut *ctx.env.rng, ctx.known.time());
 
     let mut visible: Vec<_> = threats.iter().filter_map(
         |x| if x.time == time && x.pos != pos { Some(x.pos) } else { None }).collect();
@@ -1401,7 +1401,7 @@ fn FlightStrength(ctx: &mut Ctx) -> i64 {
 
 fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
     let threats = &mut ctx.blackboard.threats;
-    threats.on_call_for_help(ctx.pos, ctx.known.time);
+    threats.on_call_for_help(ctx.pos, ctx.known.time());
 
     let look = threats.hostile.first().map(|x| x.pos - ctx.pos).unwrap_or(ctx.dir);
     Some(Action::Call(CallAction { call: Call::Help, look }))

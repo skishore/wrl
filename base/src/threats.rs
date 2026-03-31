@@ -304,6 +304,8 @@ impl ThreatState {
     }
 
     pub fn update(&mut self, me: &Entity) {
+        let time = me.known.time();
+
         for event in &me.known.events {
             let Some(threat) = self.get_by_event(me, event) else { continue };
             threat.update_for_event(me, event);
@@ -362,11 +364,11 @@ impl ThreatState {
         // While active, also attack / flee from potential enemies.
         if active && !self.menacing.is_empty() {
             self.menacing.extend_from_slice(&self.unknown);
-            self.menacing.sort_by_key(|x| me.known.time - x.time);
+            self.menacing.sort_by_key(|x| time - x.time);
         }
         if active && !self.hostile.is_empty() {
             self.hostile.extend_from_slice(&self.unknown);
-            self.hostile.sort_by_key(|x| me.known.time - x.time);
+            self.hostile.sort_by_key(|x| time - x.time);
         }
         self.unknown.retain(|x| x.unknown());
 
@@ -388,8 +390,8 @@ impl ThreatState {
                 foes_strength += strength(x);
             } else if x.friendly() {
                 let base = strength(x);
-                let denom = me.known.time - limit;
-                let delay = me.known.time - x.combat;
+                let denom = time - limit;
+                let delay = time - x.combat;
                 let ratio = delay.nsec() as f64 / max(denom.nsec(), 1) as f64;
                 let decay = if ratio > 1. { 0. } else { 1. - ratio };
                 team_strength += base * decay;
@@ -409,7 +411,7 @@ impl ThreatState {
             if p > 0.6 { self.state = FightOrFlight::Fight; }
             if p < 0.4 { self.state = FightOrFlight::Flight; }
         } else {
-            self.mark_safe(me.known.time);
+            self.mark_safe(time);
         }
 
         self.call_for_help = false;
