@@ -356,6 +356,7 @@ pub struct EntityKnowledge {
     // Flags:
     pub asleep: bool,
     pub friend: bool,
+    pub sensed: bool,
     pub sneaking: bool,
     pub visible: bool,
 }
@@ -423,6 +424,7 @@ impl EntityKnowledge {
             // Flags:
             asleep: false,
             friend: false,
+            sensed: false,
             sneaking: false,
             visible: false,
         }
@@ -605,6 +607,7 @@ impl Knowledge {
             cell.visible = false;
         }
         for entity in &mut self.entities {
+            entity.sensed = false;
             entity.visible = false;
         }
 
@@ -700,10 +703,10 @@ impl Knowledge {
             self.forget_last_cell();
         }
 
-        // We clean up entities up to the first visible one.
+        // We clean up entities up to the first one that we can still sense.
         while self.entities.len() > MAX_ENTITY_MEMORY {
             let entity = self.entities.back().unwrap();
-            if entity.friend || entity.visible { break; }
+            if entity.sensed { break; }
             self.remove_entity(entity.eid, self.timer.time);
         }
 
@@ -833,6 +836,7 @@ impl Knowledge {
 
         entry.asleep = other.asleep;
         entry.friend = leader(me) == leader(other);
+        entry.sensed = true;
         entry.sneaking = other.sneaking;
         entry.visible = sense == Sense::Sight;
 

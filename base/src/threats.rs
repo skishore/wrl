@@ -317,7 +317,7 @@ impl ThreatState {
             }
         }
         for other in &me.known.entities {
-            if !other.visible { break; }
+            if !other.sensed { break; }
             let Some(threat) = self.get_by_entity(me, other.eid) else { continue };
             threat.update_for_sighting(me, other);
             if threat.certain() && threat.hostile() { self.forget_tid(TID::CID); }

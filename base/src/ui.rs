@@ -1351,7 +1351,7 @@ impl UI {
         let source = if is_source { None } else { source };
 
         let entity = cell.entity();
-        let entity = if let Some(x) = entity && (x.friend || x.visible) { entity } else { None };
+        let entity = if let Some(x) = entity && x.sensed { entity } else { None };
         let entity = if is_source { None } else { entity };
 
         let freshness = source.map(|x| x.freshness(&*me.known));
