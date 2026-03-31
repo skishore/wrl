@@ -356,6 +356,7 @@ pub struct EntityKnowledge {
     // Flags:
     pub asleep: bool,
     pub friend: bool,
+    pub rival: bool,
     pub sensed: bool,
     pub sneaking: bool,
     pub visible: bool,
@@ -424,6 +425,7 @@ impl EntityKnowledge {
             // Flags:
             asleep: false,
             friend: false,
+            rival: false,
             sensed: false,
             sneaking: false,
             visible: false,
@@ -818,8 +820,16 @@ impl Knowledge {
         };
         let entry = &mut self.entities[handle];
 
-        // Two entities are friends iff they're in the same party.
+        // Entities are friends iff they're both tame and in the same party.
         let leader = |entity: &Entity| { entity.leader.unwrap_or(entity.eid) };
+
+        // Entities are rivals iff one is tame and one is wild, or they're
+        // both tame but as part of different parties.
+        let trainer = |entity: &Entity| {
+            if let Some(x) = entity.leader { return Some(x) };
+            if entity.species.human() { return Some(entity.eid); }
+            None
+        };
 
         // Only a few species can lie about their identity. Update it anyway.
         entry.species = other.species;
@@ -836,6 +846,7 @@ impl Knowledge {
 
         entry.asleep = other.asleep;
         entry.friend = leader(me) == leader(other);
+        entry.rival = trainer(me) != trainer(other);
         entry.sensed = true;
         entry.sneaking = other.sneaking;
         entry.visible = sense == Sense::Sight;

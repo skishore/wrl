@@ -1413,6 +1413,11 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
 
 // TODO: Most of these routines are based only on the leader's knowledge.
 // Instead, we should combine our knowledge and our leader's.
+//
+// Using only the leader's knowledge already causes all sorts of stupidity.
+// For example, if the follower can see that there's an obstruction on their
+// path to the leader, but the leader can't see it, then the follower will
+// repeatedly try to move into that cell.
 
 pub fn dangers(me: &Entity) -> Vec<Point> {
     let mut result = HashSet::default();
@@ -1509,16 +1514,42 @@ pub fn ChooseDefenseSquare(leader: &Entity, source: Point) -> Option<Point> {
     best.1
 }
 
+fn AttackRivals(ctx: &mut Ctx) -> Option<Action> {
+    if !move_ready(ctx.entity) { return None; }
+
+    for entity in &ctx.known.entities {
+        if entity.rival && entity.visible {
+            let action = AttackTarget(ctx, entity.pos);
+            if let Some(x) = action { return Some(x); }
+        }
+    }
+    None
+}
+
+// TODO: If we don't have any particularly good moves, we may move out of the
+// way of a dangerous enemy. For example, consider allies A and B defending @
+// against enemy X in this configuration:
+//
+// .X
+// AB
+// @.
+//
+// On A's move, they currently choose to move (1, 1), i.e. to the right of
+// the @ instead of staying where they are. Also, they should focus on as
+// many enemies as they can after they move.
+//
 fn DefendLeader(ctx: &mut Ctx) -> Option<Action> {
     let source = ctx.pos;
     let leader = ctx.env.leader?;
-    let target = ChooseDefenseSquare(leader, ctx.pos)?;
+    let target = ChooseDefenseSquare(leader, source)?;
 
     let known = &*leader.known;
     let check = |p: Point| known.get(p).status();
     let path = AStar(source, target, ASTAR_LIMIT_ATTACK, check)?;
 
-    let Some(&next) = path.first() else { return Some(Action::Look(source - leader.pos)) };
+    let Some(&next) = path.first() else {
+        return Some(Action::Look(source - leader.pos))
+    };
 
     let (look, step) = (next - leader.pos, next - source);
     Some(Action::Move(MoveAction { step, look, turns: 0.5 }))
@@ -1531,7 +1562,7 @@ fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
     let turns = 0.5;
     let known = &*leader.known;
     let valid = |p: Point| CheckFollowerSquare(leader, p, p == source);
-    let step = |dir: Point| { Action::Move(MoveAction { look: dir, step: dir, turns }) };
+    let step = |step: Point| { Action::Move(MoveAction { look: step, step, turns }) };
 
     if Bound::new(3).contains(source - target) {
         let mut moves: Vec<_> = dirs::ALL.iter().filter_map(
@@ -1817,6 +1848,7 @@ fn SummonRoot() -> impl Bhv {
         cond!("HasLeader", |x| x.env.leader.is_some()),
         pri![
             "SummonOptions",
+            act!("AttackRivals", AttackRivals),
             act!("DefendLeader", DefendLeader),
             act!("FollowLeader", FollowLeader),
             act!("Idle", |_| Some(Action::Idle)),
