@@ -17,7 +17,8 @@ use crate::dex::Species;
 use crate::entity::Entity;
 use crate::game::{FOV_RADIUS_NPC, CALL_VOLUME, FOLLOW_RANGE, Item, move_ready};
 use crate::game::{Action, AttackAction, CallAction, EatAction, MoveAction};
-use crate::knowledge::{Call, Knowledge, Location, ScentKnowledge, Sense, Timestamp};
+use crate::knowledge::{Knowledge, ScentKnowledge};
+use crate::knowledge::{Call, Location, PointLookup, Sense, Timestamp};
 use crate::pathing::{AStar, AStarHeuristic, Status};
 use crate::pathing::{BFS, DijkstraLength, DijkstraMap, Neighborhood};
 use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
@@ -201,12 +202,42 @@ impl Blackboard {
 
 //////////////////////////////////////////////////////////////////////////////
 
+// MergedKnowledge
+
+#[derive(Clone, Copy)]
+struct MergedKnowledge<'a> {
+    known: &'a Knowledge,
+    extra: Option<&'a Knowledge>,
+}
+
+impl<'a> MergedKnowledge<'a> {
+    fn time(&self) -> Timestamp { self.known.time() }
+
+    fn time_at_turn(&self, turn: i32) -> Timestamp { self.known.time_at_turn(turn) }
+
+    fn time_to_turn(&self, time: Timestamp) -> f64 { self.known.time_to_turn(time) }
+
+    fn get(&self, p: Point) -> PointLookup<'a> {
+        let Some(x) = self.extra else { return self.known.get(p) };
+
+        let extra = x.get(p);
+        let extra_time = extra.time_since_seen();
+        if extra_time == Default::default() { return extra; }
+
+        let known = self.known.get(p);
+        let known_time = known.time_since_seen();
+        if extra_time < known_time { extra } else { known }
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 // Ctx
 
 pub struct Ctx<'a> {
     // Derived from the entity.
     entity: &'a Entity,
-    known: &'a Knowledge,
+    known: MergedKnowledge<'a>,
     pos: Point,
     dir: Point,
     // Computed by the executor during this turn.
@@ -515,7 +546,7 @@ fn ForceThreatState(ctx: &mut Ctx, state: FightOrFlight) {
 // Last-seen cache:
 
 fn UpdateLastSeen<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> Result {
-    for cell in &ctx.known.cells {
+    for cell in &ctx.known.known.cells {
         if !cell.visible { break; }
         if !valid(ctx, cell.point) { continue; }
 
@@ -862,7 +893,8 @@ fn AttackTarget(ctx: &mut Ctx, target: Point) -> Option<Action> {
     PathToTarget(ctx, target, attack.range, valid)
 }
 
-fn CanAttackTarget(source: Point, target: Point, known: &Knowledge, range: Bound) -> bool {
+fn CanAttackTarget(source: Point, target: Point,
+                   known: MergedKnowledge, range: Bound) -> bool {
     if !range.contains(source - target) { return false; }
     if source == target { return false; }
 
@@ -1145,7 +1177,7 @@ fn ListThreatsByScent(ctx: &mut Ctx) -> bool {
 
 fn ListPreyBySight(ctx: &mut Ctx) -> bool {
     let initial = ctx.blackboard.options.len();
-    for other in &ctx.known.entities {
+    for other in &ctx.known.known.entities {
         if other.delta >= 0 { continue; }
         if !check_time!(ctx, other.time, MAX_SEARCH_TURNS) { break; }
 
@@ -1180,7 +1212,7 @@ fn ListHumansByScent(ctx: &mut Ctx) -> bool {
 
 fn ListTargetsByScent<F: Fn(&ScentKnowledge) -> bool>(ctx: &mut Ctx, f: F) -> bool {
     let initial = ctx.blackboard.options.len();
-    for scent in &ctx.known.scents {
+    for scent in &ctx.known.known.scents {
         if !f(scent) { continue; }
         if !check_time!(ctx, scent.time, MAX_TRACKING_TURNS) { continue; }
 
@@ -1411,14 +1443,6 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
 
 // Follower AI:
 
-// TODO: Most of these routines are based only on the leader's knowledge.
-// Instead, we should combine our knowledge and our leader's.
-//
-// Using only the leader's knowledge already causes all sorts of stupidity.
-// For example, if the follower can see that there's an obstruction on their
-// path to the leader, but the leader can't see it, then the follower will
-// repeatedly try to move into that cell.
-
 pub fn dangers(me: &Entity) -> Vec<Point> {
     let mut result = HashSet::default();
     for other in &me.known.entities {
@@ -1435,8 +1459,13 @@ pub fn dangers(me: &Entity) -> Vec<Point> {
 }
 
 // Check if `point` is a valid cell for a follower of the `leader`.
-pub fn CheckFollowerSquare(leader: &Entity, point: Point, ignore_occupant: bool) -> bool {
-    let known = &*leader.known;
+pub fn CheckFollowerSquare(leader: &Entity, point: Point) -> bool {
+    let known = MergedKnowledge { known: &*leader.known, extra: None };
+    CheckFollowerSquareImpl(leader, known, point, /*ignore_occupant=*/false)
+}
+
+fn CheckFollowerSquareImpl(leader: &Entity, known: MergedKnowledge,
+                           point: Point, ignore_occupant: bool) -> bool {
     let free = match known.get(point).status() {
         Status::Free => true,
         Status::Occupied => ignore_occupant,
@@ -1453,10 +1482,15 @@ pub fn CheckFollowerSquare(leader: &Entity, point: Point, ignore_occupant: bool)
 
 // Choose the best cell from which to defend the `leader`, if any.
 pub fn ChooseDefenseSquare(leader: &Entity, source: Point) -> Option<Point> {
+    let known = MergedKnowledge { known: &*leader.known, extra: None };
+    ChooseDefenseSquareImpl(leader, known, source)
+}
+
+fn ChooseDefenseSquareImpl(
+        leader: &Entity, known: MergedKnowledge, source: Point) -> Option<Point> {
     let rivals = dangers(leader);
     if rivals.is_empty() { return None; }
 
-    let known = &*leader.known;
     let defended = |p: Point| {
         if p == source || p == leader.pos { return false; }
         let cell = known.get(p);
@@ -1501,7 +1535,7 @@ pub fn ChooseDefenseSquare(leader: &Entity, source: Point) -> Option<Point> {
             if x == 0 && y == 0 { continue; }
 
             let (d, p) = (Point(x, y), Point(x, y) + leader.pos);
-            if !CheckFollowerSquare(leader, p, p == source) { continue; }
+            if !CheckFollowerSquareImpl(leader, known, p, p == source) { continue; }
 
             let mut score = scores.get(&d).cloned().unwrap_or(f64::NEG_INFINITY);
             if score == f64::NEG_INFINITY { continue; }
@@ -1517,7 +1551,7 @@ pub fn ChooseDefenseSquare(leader: &Entity, source: Point) -> Option<Point> {
 fn AttackRivals(ctx: &mut Ctx) -> Option<Action> {
     if !move_ready(ctx.entity) { return None; }
 
-    for entity in &ctx.known.entities {
+    for entity in &ctx.known.known.entities {
         if entity.rival && entity.visible {
             let action = AttackTarget(ctx, entity.pos);
             if let Some(x) = action { return Some(x); }
@@ -1541,10 +1575,9 @@ fn AttackRivals(ctx: &mut Ctx) -> Option<Action> {
 fn DefendLeader(ctx: &mut Ctx) -> Option<Action> {
     let source = ctx.pos;
     let leader = ctx.env.leader?;
-    let target = ChooseDefenseSquare(leader, source)?;
+    let target = ChooseDefenseSquareImpl(leader, ctx.known, source)?;
 
-    let known = &*leader.known;
-    let check = |p: Point| known.get(p).status();
+    let check = |p: Point| ctx.known.get(p).status();
     let path = AStar(source, target, ASTAR_LIMIT_ATTACK, check)?;
 
     let Some(&next) = path.first() else {
@@ -1557,11 +1590,10 @@ fn DefendLeader(ctx: &mut Ctx) -> Option<Action> {
 
 fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
     let leader = ctx.env.leader?;
-    let (source, target) = (ctx.pos, leader.pos);
+    let (known, source, target) = (ctx.known, ctx.pos, leader.pos);
 
     let turns = 0.5;
-    let known = &*leader.known;
-    let valid = |p: Point| CheckFollowerSquare(leader, p, p == source);
+    let valid = |p: Point| CheckFollowerSquareImpl(leader, known, p, p == source);
     let step = |step: Point| { Action::Move(MoveAction { look: step, step, turns }) };
 
     if Bound::new(3).contains(source - target) {
@@ -1918,7 +1950,8 @@ impl AIState {
     }
 
     pub fn plan(&mut self, entity: &Entity, env: AIEnv) -> Action {
-        let known = &*entity.known;
+        let extra = env.leader.map(|x| &*x.known);
+        let known = MergedKnowledge { known: &*entity.known, extra };
         let blackboard = &mut self.blackboard;
         let mut env = AIEnv { ..env };
 

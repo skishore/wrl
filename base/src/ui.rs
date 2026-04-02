@@ -239,7 +239,7 @@ fn init_summon_target(me: &Entity, data: TargetData) -> Box<Target> {
     }
 
     let mut okay = |p: Point| {
-        if !CheckFollowerSquare(me, p, false) { return false; }
+        if !CheckFollowerSquare(me, p) { return false; }
         update_target(known, &mut target, p);
         target.error.is_empty()
     };
