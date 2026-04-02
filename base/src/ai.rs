@@ -13,9 +13,10 @@ use crate::base::{Bound, HashMap, HashSet, LOS, Point, RNG};
 use crate::base::{clamp, dirs, sample, sortable, weighted};
 use crate::bhv::{Bhv, Result};
 use crate::debug::{DebugFile, DebugLine, DebugLog};
-use crate::dex::Species;
-use crate::entity::Entity;
-use crate::game::{FOV_RADIUS_NPC, CALL_VOLUME, FOLLOW_RANGE, Item, move_ready};
+use crate::dex::{Attack, Species};
+use crate::entity::{AttackTarget, Command, Entity};
+use crate::game::{Item, move_ready};
+use crate::game::{FOV_RADIUS_NPC, CALL_VOLUME, FOLLOW_RANGE, SUMMON_RANGE};
 use crate::game::{Action, AttackAction, CallAction, EatAction, MoveAction};
 use crate::knowledge::{Knowledge, ScentKnowledge};
 use crate::knowledge::{Call, Location, PointLookup, Sense, Timestamp};
@@ -878,7 +879,7 @@ fn AttackPathTarget(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
 }
 
 fn AttackTarget(ctx: &mut Ctx, target: Point) -> Option<Action> {
-    let Ctx { entity, known, pos: source, .. } = *ctx;
+    let Ctx { known, pos: source, .. } = *ctx;
     if !known.get(target).visible() { return None; }
     if source == target { return None; }
 
@@ -886,6 +887,11 @@ fn AttackTarget(ctx: &mut Ctx, target: Point) -> Option<Action> {
     if attacks.is_empty() { return None; }
 
     let attack = *sample(attacks, ctx.env.rng);
+    AttackUse(ctx, target, attack)
+}
+
+fn AttackUse(ctx: &mut Ctx, target: Point, attack: &'static Attack) -> Option<Action> {
+    let Ctx { entity, known, pos: source, .. } = *ctx;
     let valid = |x| CanAttackTarget(x, target, known, attack.range);
     if move_ready(entity) && valid(source) {
         return Some(Action::Attack(AttackAction { attack, target }));
@@ -1236,8 +1242,14 @@ fn SelectBestTarget(ctx: &mut Ctx) -> bool {
         let d1 = prev.map(|x| (target.pos - x.target.pos).len_l2()).unwrap_or(0.0);
         1.0 * age - 2.0 * bonus + 0.5 * d0 + 0.25 * d1
     };
-    let target = *options.select_nth_unstable_by_key(0, |x| sortable(score(x))).1;
 
+    let target = *options.select_nth_unstable_by_key(0, |x| sortable(score(x))).1;
+    UpdateChaseTarget(ctx, target);
+    true
+}
+
+fn UpdateChaseTarget(ctx: &mut Ctx, target: Target) {
+    let (pos, prev) = (ctx.pos, &ctx.blackboard.target);
     let recent = target.time > ctx.blackboard.prev_time;
     let change = if let Some(x) = prev { target.pos != x.target.pos } else { true };
     let fresh = change || (recent && target.sense != Sense::Smell);
@@ -1253,7 +1265,6 @@ fn SelectBestTarget(ctx: &mut Ctx) -> bool {
         (target.pos - pos, 0)
     };
     ctx.blackboard.target = Some(ChaseTarget { bias, fresh, steps, target });
-    true
 }
 
 fn AttackEnemy(ctx: &mut Ctx) -> Option<Action> {
@@ -1548,9 +1559,68 @@ fn ChooseDefenseSquareImpl(
     best.1
 }
 
-fn AttackRivals(ctx: &mut Ctx) -> Option<Action> {
-    if !move_ready(ctx.entity) { return None; }
+fn SelectAttackTarget(ctx: &mut Ctx) -> bool {
+    let Some(command) = ctx.entity.command.get() else { return false };
+    let Command::Attack(attack, target) = command else { return false };
+    let Some(eid) = target.eid else { return false };
 
+    let other = ctx.known.known.entity(eid);
+    if other.is_none() && target.seen {
+        ctx.entity.command.take();
+        return false;
+    }
+
+    let loc = other.map(|x| x.loc).unwrap_or(target.loc);
+    let sense = other.map(|x| x.sense).unwrap_or(Sense::Sound);
+
+    if !check_time!(ctx, loc.time, MIN_SEARCH_TURNS) {
+        ctx.entity.command.take();
+        return false;
+    }
+
+    if other.is_some() && !target.seen {
+        let target = AttackTarget { seen: true, ..target };
+        ctx.entity.command.set(Some(Command::Attack(attack, target)));
+    }
+
+    let target = Target { loc, sense, sure: other.is_some() };
+    UpdateChaseTarget(ctx, target);
+    true
+}
+
+fn UseSelectedAttack(ctx: &mut Ctx) -> Option<Action> {
+    let command = ctx.entity.command.get()?;
+    let Command::Attack(attack, _) = command else { return None };
+
+    let state = ctx.blackboard.target.as_ref()?;
+    if state.target.sense == Sense::Smell { return None; }
+    if state.target.time != ctx.known.time() { return None; }
+
+    let action = AttackUse(ctx, state.target.pos, attack)?;
+    if matches!(action, Action::Attack(..)) { ctx.entity.command.take(); }
+    Some(action)
+}
+
+fn FollowSimpleCommand(ctx: &mut Ctx) -> Option<Action> {
+    let command = ctx.entity.command.get()?;
+    match command {
+        Command::Attack(attack, target) => {
+            if target.eid.is_some() { return None; }
+            let action = AttackUse(ctx, target.loc.pos, attack)?;
+            if matches!(action, Action::Attack(..)) { ctx.entity.command.take(); }
+            Some(action)
+        },
+        Command::Return => {
+            let known = ctx.known;
+            let range = SUMMON_RANGE;
+            let target = ctx.env.leader?.pos;
+            let valid = |p| CanAttackTarget(target, p, known, range);
+            PathToTarget(ctx, target, SUMMON_RANGE, valid)
+        },
+    }
+}
+
+fn AttackRivals(ctx: &mut Ctx) -> Option<Action> {
     for entity in &ctx.known.known.entities {
         if entity.rival && entity.visible {
             let action = AttackTarget(ctx, entity.pos);
@@ -1874,13 +1944,33 @@ fn FightOrFlight() -> impl Bhv {
     ]
 }
 
+fn FollowAttackCommand() -> impl Bhv {
+    seq![
+        "FollowAttackCommand",
+        cond!("SelectAttackTarget", SelectAttackTarget),
+        pri![
+            "HuntAttackTarget",
+            act!("UseSelectedAttack", UseSelectedAttack),
+            act!("Follow(Enemy)", |x| FollowPath(x, PathKind::Enemy)),
+            act!("Search(Enemy)", SearchForEnemy),
+        ]
+        .on_running(|x| x.blackboard.chasing_enemy = true)
+    ]
+}
+
 fn SummonRoot() -> impl Bhv {
     seq![
         "SummonRoot",
         cond!("HasLeader", |x| x.env.leader.is_some()),
         pri![
             "SummonOptions",
-            act!("AttackRivals", AttackRivals),
+            act!("FollowSimpleCommand", FollowSimpleCommand),
+            FollowAttackCommand(),
+            seq![
+                "MaybeAttackRivals",
+                cond!("MoveReady", |x| move_ready(x.entity)),
+                act!("AttackRivals", AttackRivals),
+            ],
             act!("DefendLeader", DefendLeader),
             act!("FollowLeader", FollowLeader),
             act!("Idle", |_| Some(Action::Idle)),

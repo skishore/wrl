@@ -12,7 +12,8 @@ use crate::base::{HashMap, HashSet, LOS, Matrix, Point, RNG, dirs, sample, weigh
 use crate::dex::{Attack, Species};
 use crate::debug::DebugFile;
 use crate::effect::{CB, Effect, Frame, FT, Particle, ParticleData, RenderData, self};
-use crate::entity::{EID, Entity, EntityArgs, EntityMap, Individual, Teammate};
+use crate::entity::{Command, Individual, Teammate};
+use crate::entity::{EID, Entity, EntityArgs, EntityMap};
 use crate::knowledge::{Call, Knowledge, Location, Sense, Timedelta, Timestamp};
 use crate::knowledge::{AttackEvent, CallEvent, Event, EventData, MoveEvent};
 use crate::lighting::Lighting;
@@ -52,6 +53,7 @@ pub const CALL_VOLUME: Bound = Bound::new(FOV_RADIUS_NPC);
 pub const MOVE_VOLUME: Bound = Bound::new(8);
 pub const SNEAK_VOLUME: Bound = Bound::new(1);
 pub const SNIFF_VOLUME: Bound = Bound::new(8);
+pub const SHOUT_VOLUME: Bound = Bound::new(12);
 
 pub const FOLLOW_RANGE: Bound = Bound::new(4);
 pub const SUMMON_RANGE: Bound = Bound::new(12);
@@ -605,6 +607,9 @@ impl Board {
         let Some(entity) = self.entities.get_mut(eid) else { return };
 
         entity.known.remove_entity(oid, self.time);
+
+        let cmd = &entity.command;
+        if let Some(Command::Attack(_, x)) = cmd.get() && x.eid == Some(oid) { cmd.take(); }
     }
 
     fn update_known(&mut self, eid: EID, env: &mut UpdateEnv) {
@@ -748,6 +753,31 @@ fn get_sightings(board: &Board, noise: &Noise, env: &mut UpdateEnv) -> Vec<Sight
 
 // Attack effects
 
+fn shout(state: &mut State, eid: EID, shout: &str) {
+    let board = &mut state.board;
+    let Entity { pos: source, player, species, .. } = board.entities[eid];
+    let noise = Noise::from_eid(eid, source, SHOUT_VOLUME);
+    let sightings = get_sightings(board, &noise, &mut state.env);
+
+    let log = &mut state.env.ui.log;
+    if player { log.log_success(format!("You shout: \"{}\"", shout)); }
+
+    // Create a call event that carries species info.
+    let data = EventData::Call(CallEvent { call: Call::Command, species });
+    let event = &mut board.create_event(eid, data, source);
+
+    // Deliver the CallEvent to each other entity that heard the shout.
+    for s in &sightings {
+        board.observe_event(s.eid, &s.merged, event, &mut state.env);
+        if s.eid != state.player { continue; }
+
+        let log = &mut state.env.ui.log;
+        let entity = &board.entities[eid];
+        let source = if s.merged.seen() { entity.upper() } else { "Someone".into() };
+        log.log_notable(format!("{} shouts: \"{}\"", source, shout));
+    }
+}
+
 fn hit_tile(board: &mut Board, env: &mut UpdateEnv, target: Point) {
     if !board.get_tile(target).drops_berries() { return; }
 
@@ -849,10 +879,13 @@ pub struct EatAction { pub target: Point, pub item: Option<Item> }
 pub struct MoveAction { pub look: Point, pub step: Point, pub turns: f64 }
 
 #[derive(Debug)]
-pub struct RecallAction { pub index: usize }
+pub struct RecallAction { pub summon: usize }
 
 #[derive(Debug)]
-pub struct SummonAction { pub index: usize, pub target: Point }
+pub struct SummonAction { pub team: usize, pub target: Point }
+
+#[derive(Debug)]
+pub struct ShoutAction { pub summon: usize, pub command: Command }
 
 #[derive(Debug)]
 pub enum Action {
@@ -868,6 +901,7 @@ pub enum Action {
     Eat(EatAction),
     Recall(RecallAction),
     Summon(SummonAction),
+    Shout(ShoutAction),
 }
 
 struct ActionResult {
@@ -1182,57 +1216,33 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             state.add_effect(apply_effect(effect, FT::Hit, Box::new(cb)));
             ActionResult::success_moves(1.)
         }
-        Action::Recall(RecallAction { index }) => {
+        Action::Recall(RecallAction { summon }) => {
             let fail = ActionResult::failure();
-            let Some(&Teammate::Out(oid)) = entity.team.get(index) else { return fail };
+            let Some(&oid) = entity.summons.get(summon) else { return fail };
 
             let entity = &state.board.entities[eid];
             let target = state.board.entities[oid].pos;
             if !can_summon(&state.board, entity, target) { return fail; }
 
-            let cb = Box::new(move |board: &mut Board, _: &mut UpdateEnv| {
-                board.remove_entity(oid);
-            });
-
+            let cb: CB = Box::new(move |board, _| board.remove_entity(oid));
             let effect = effect::WithdrawEffect(source, target);
             state.add_effect(apply_effect(effect, FT::Withdraw, cb));
             ActionResult::success()
         }
-        Action::Summon(SummonAction { index, target }) => {
+        Action::Summon(SummonAction { team, target }) => {
             let fail = ActionResult::failure();
-            let Some(Teammate::In(ind)) = entity.team.get(index) else { return fail };
+            let Some(Teammate::In(ind)) = entity.team.get(team) else { return fail };
             if ind.cur_hp == 0 { return fail; }
 
             let summoned = ind.species;
             let entity = &state.board.entities[eid];
-            let Entity { player, species, .. } = *entity;
             if !can_summon(&state.board, entity, target) { return fail; }
 
-            let board = &mut state.board;
-            let noise = Noise::from_eid(eid, source, SUMMON_RANGE);
-            let sightings = get_sightings(board, &noise, &mut state.env);
-
-            // Special case: log our own shout.
-            let log = &mut state.env.ui.log;
-            let command = format!("Go! {}!", summoned.name);
-            if player { log.log_success(format!("You shout: \"{}\"", command)); }
-
-            // Deliver a CallEvent to each other entity that heard the shout.
-            let data = EventData::Call(CallEvent { call: Call::Command, species });
-            let event = &mut board.create_event(eid, data, source);
-            for s in &sightings {
-                board.observe_event(s.eid, &s.merged, event, &mut state.env);
-                if s.eid != state.player { continue; }
-
-                let log = &mut state.env.ui.log;
-                let entity = &board.entities[eid];
-                let source = if s.merged.seen() { entity.upper() } else { "Someone".into() };
-                log.log_notable(format!("{} shouts: \"{}\"", source, command));
-            }
+            shout(state, eid, &format!("Go! {}!", summoned.name));
 
             let cb = Box::new(move | board: &mut Board, env: &mut UpdateEnv| {
                 let entity = &board.entities[eid];
-                let Some(Teammate::In(ind)) = entity.team.get(index) else { return };
+                let Some(Teammate::In(ind)) = entity.team.get(team) else { return };
 
                 let Individual { species, cur_hp } = *ind;
                 let args = EntityArgs { name: None, pos: target, player: false, species };
@@ -1243,12 +1253,47 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 other.cur_hp = cur_hp;
 
                 let me = &mut board.entities[eid];
-                me.team[index] = Teammate::Out(oid);
+                me.team[team] = Teammate::Out(oid);
                 me.summons.push(oid);
             });
 
             let effect = effect::SummonEffect(source, target);
             state.add_effect(apply_effect(effect, FT::Summon, cb));
+            ActionResult::success()
+        }
+        Action::Shout(ShoutAction { summon, command }) => {
+            let fail = ActionResult::failure();
+            let Some(&oid) = entity.summons.get(summon) else { return fail };
+
+            if matches!(command, Command::Return) {
+                let entity = &state.board.entities[eid];
+                let target = state.board.entities[oid].pos;
+                if can_summon(&state.board, entity, target) {
+                    let cb: CB = Box::new(move |board, _| board.remove_entity(oid));
+                    let effect = effect::WithdrawEffect(source, target);
+                    state.add_effect(apply_effect(effect, FT::Withdraw, cb));
+                    return ActionResult::success();
+                }
+            }
+
+            let summon = &mut state.board.entities[oid];
+            let name = summon.species.name;
+
+            summon.command.set(Some(command));
+
+            let command = match command {
+                Command::Attack(attack, target) => {
+                    let foe = target.eid.and_then(|x| state.board.entities.get(x));
+                    if let Some(foe) = foe.map(|x| x.species.name) {
+                        format!("{}, attack {} with {}!", name, foe, attack.name)
+                    } else {
+                        format!("{}, use {}!", name, attack.name)
+                    }
+                },
+                Command::Return => format!("{}, return!", name),
+            };
+            shout(state, eid, &command);
+
             ActionResult::success()
         }
     }
@@ -1380,12 +1425,26 @@ fn update_state(state: &mut State) {
     let game_loop_active = |state: &State| {
         state.get_player().cur_hp > 0 && state.board.get_frame().is_none()
     };
-    let needs_input = |state: &State| {
-        game_loop_active(state) && matches!(state.input, Action::WaitForInput)
+    let stage_input = |state: &mut State| {
+        if !game_loop_active(state) { return true; }
+        if !matches!(state.input, Action::WaitForInput) { return true; }
+
+        // Automatically stage the recall action.
+        let player = &state.board.entities[state.player];
+        for (i, &summon) in player.summons.iter().enumerate() {
+            let summon = &state.board.entities[summon];
+            if !matches!(summon.command.get(), Some(Command::Return)) { continue; }
+            if !can_summon(&state.board, player, summon.pos) { continue; }
+
+            state.input = Action::Recall(RecallAction { summon: i });
+            summon.command.take();
+            return true;
+        }
+        false
     };
 
     let mut update = false;
-    while !state.inputs.is_empty() && needs_input(state) {
+    while !state.inputs.is_empty() && !stage_input(state) {
         let input = state.inputs.remove(0);
         process_input(state, input);
         update = true;
@@ -1400,7 +1459,7 @@ fn update_state(state: &mut State) {
         let time = board.time;
         let entity = &board.entities[eid];
         let Entity { leader, player, .. } = *entity;
-        if player && needs_input(state) { break; }
+        if player && !stage_input(state) { break; }
 
         update = true;
         let action = plan(state, eid, leader);

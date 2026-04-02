@@ -6,12 +6,12 @@ use rand::Rng;
 use crate::ai::{CheckFollowerSquare, ChooseDefenseSquare};
 use crate::base::{HashMap, HashSet, LOS, Point, RNG, dirs};
 use crate::base::{Bound, Buffer, Color, Glyph, Matrix, Rect, Slice};
-use crate::dex::Species;
+use crate::dex::{Attack, Species};
 use crate::effect::{Frame, ParticleData, RenderData};
-use crate::entity::{EID, Entity, Teammate};
+use crate::entity::{AttackTarget, Command, EID, Entity, Teammate};
 use crate::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_, SUMMON_RANGE};
-use crate::game::{Action, Input, SummonAction, Tile, show_item};
-use crate::knowledge::{Call, PointLookup, Sound};
+use crate::game::{Action, Input, ShoutAction, SummonAction, Tile, show_item};
+use crate::knowledge::{Call, Location, PointLookup, Sound};
 use crate::knowledge::{EntityKnowledge, Knowledge};
 use crate::pathing::Status;
 use crate::shadowcast::{Vision, VisionArgs};
@@ -49,7 +49,9 @@ const UI_LOG_SUCCESS: i32 = 0xc0ff80;
 const UI_GRAY_OPTION: i32 = 0x545454;
 
 const PLAYER_KEY: char = 'a';
+const RETURN_KEY: char = 'r';
 const SUMMON_KEYS: [char; 3] = ['s', 'd', 'f'];
+const ATTACK_KEYS: [char; 4] = ['a', 's', 'd', 'f'];
 const PARTY_KEYS: [char; 6] = ['a', 'b', 'c', 'd', 'e', 'f'];
 
 //////////////////////////////////////////////////////////////////////////////
@@ -204,7 +206,8 @@ struct Rainfall {
 
 enum TargetData {
     FarLook,
-    Summon { index: usize, range: Bound },
+    Attack { summon: usize, attack: &'static Attack },
+    Summon { team: usize, range: Bound },
 }
 
 pub struct Target {
@@ -268,7 +271,7 @@ fn init_summon_target(me: &Entity, data: TargetData) -> Box<Target> {
 fn update_target(known: &Knowledge, target: &mut Target, update: Point) {
     let los = LOS(target.source, update);
 
-    target.error = "".into();
+    target.error.clear();
     target.frame = 0;
     target.path = los.into_iter().skip(1).collect();
     target.target = update;
@@ -281,6 +284,16 @@ fn update_target(known: &Knowledge, target: &mut Target, update: Point) {
             if target.okay_until < target.path.len() {
                 target.error = "You can't see a clear path there.".into();
             }
+        }
+        TargetData::Attack { .. } => {
+            let cell = known.get(update);
+            if !cell.visible() {
+                target.error = "You can't see a clear path there.".into();
+            } else if let Some(x) = cell.entity() && x.friend {
+                target.error = "That target is friendly.".into();
+            }
+            let okay = target.error.is_empty();
+            target.okay_until = if okay { target.path.len() } else { 0 };
         }
         TargetData::Summon { range, .. } => {
             if target.path.is_empty() {
@@ -303,18 +316,28 @@ fn update_target(known: &Knowledge, target: &mut Target, update: Point) {
     }
 }
 
-fn select_valid_target(ui: &mut UI, known: &Knowledge) -> Option<EID> {
+fn select_valid_target(ui: &mut UI, me: &Entity) -> Option<EID> {
     let target = ui.target.as_ref()?;
-    let entity = known.get(target.target).entity();
+    let entity = me.known.get(target.target).entity();
 
     match &target.data {
         TargetData::FarLook => {
             let entity = entity?;
             if can_target(entity) { Some(entity.eid) } else { None }
         }
-        &TargetData::Summon { index, .. } => {
+        &TargetData::Attack { summon, attack } => {
+            let seen = false;
+            let eid = entity.map(|x| x.eid);
+            let loc = Location { pos: target.target, time: me.known.time() };
+            let command = Command::Attack(attack, AttackTarget { eid, loc, seen });
+            ui.action = Some(Action::Shout(ShoutAction { summon, command }));
+
+            let entity = entity?;
+            if can_target(entity) { Some(entity.eid) } else { None }
+        }
+        &TargetData::Summon { team, .. } => {
             let target = target.target;
-            ui.action = Some(Action::Summon(SummonAction { index, target }));
+            ui.action = Some(Action::Summon(SummonAction { team, target }));
             ui.focus
         }
     }
@@ -354,7 +377,7 @@ fn process_ui_input(ui: &mut UI, me: &Entity, input: Input) -> bool {
                 let error = format!("{} has no strength left!", x.species.name);
                 ui.log.log_failure(error);
             } else if let Some(Teammate::In(x)) = teammate {
-                let data = TargetData::Summon { index: choice, range: SUMMON_RANGE };
+                let data = TargetData::Summon { team: choice, range: SUMMON_RANGE };
                 let target = init_summon_target(me, data);
                 let message = format!("Choose where to summon {}:", x.species.name);
                 ui.log.log_neutral(message);
@@ -418,7 +441,7 @@ fn process_ui_input(ui: &mut UI, me: &Entity, input: Input) -> bool {
             ui.target = target;
         } else if enter {
             if x.error.is_empty() {
-                ui.focus = select_valid_target(ui, known);
+                ui.focus = select_valid_target(ui, me);
                 ui.target = None;
             } else {
                 ui.log.log_failure(&x.error);
@@ -426,10 +449,55 @@ fn process_ui_input(ui: &mut UI, me: &Entity, input: Input) -> bool {
         } else if input == Input::Escape {
             if let TargetData::FarLook = x.data {
                 let valid = x.error.is_empty();
-                ui.focus = if valid { select_valid_target(ui, known) } else { None }
+                ui.focus = if valid { select_valid_target(ui, me) } else { None }
             }
             ui.log.log_neutral("Canceled.");
             ui.target = None;
+        }
+        return true;
+    }
+
+    if let Some(x) = &mut ui.menu {
+        let summon = me.known.entity(me.summons[x.summon as usize]).unwrap();
+        let attack = summon.species.attacks.len() as i32;
+        let count = ATTACK_KEYS.len() as i32 + 1;
+        let valid = |x: i32| { x == count - 1 || 0 <= x && x < attack };
+
+        type I = Input;
+        let chosen = if enter { x.choice } else {
+            ATTACK_KEYS.iter().position(|x| input == I::Char(*x)).map(|x| x as i32)
+                .unwrap_or(if input == I::Char(RETURN_KEY) { count - 1} else { -1})
+        };
+        let dir = if let I::Char(x) = input { get_direction(x) } else { None };
+
+        if let Some(dir) = dir && dir.0 == 0 {
+            loop {
+                x.choice += dir.1;
+                if x.choice >= count { x.choice = 0; }
+                if x.choice < 0 { x.choice = max(count - 1, 0); }
+                if valid(x.choice) { break; }
+            }
+        } else if chosen >= 0 {
+            if chosen == count - 1 {
+                let (summon, command) = (x.summon as usize, Command::Return);
+                ui.action = Some(Action::Shout(ShoutAction { summon, command }));
+                ui.menu = None;
+            } else if !valid(chosen) {
+                let name = summon.species.name;
+                ui.log.log_failure(format!("{} does not have that attack.", name));
+            } else {
+                let update = get_initial_target(summon.pos);
+                let attack = summon.species.attacks[chosen as usize];
+                let data = TargetData::Attack { summon: x.summon as usize, attack };
+                let mut target = init_target(data, summon.pos, update);
+                update_target(known, &mut target, update);
+                ui.log.log_neutral("Use the movement keys to select a target:");
+                ui.target = Some(target);
+                ui.menu = None;
+            }
+        } else if input == Input::Escape {
+            ui.log.log_neutral("Canceled.");
+            ui.menu = None;
         }
         return true;
     }
@@ -459,7 +527,7 @@ fn process_ui_input(ui: &mut UI, me: &Entity, input: Input) -> bool {
         return true;
     } else if let Some(i) = index {
         ui.log.log_neutral("Choose a command with J/K:");
-        ui.menu = Some(Menu { index: 0, summon: i as i32 });
+        ui.menu = Some(Menu { choice: 0, summon: i });
         return true;
     }
 
@@ -566,8 +634,8 @@ impl Focused {
 // UI
 
 struct Menu {
-    index: i32,
-    summon: i32,
+    choice: i32,
+    summon: usize,
 }
 
 pub struct Effect<'a> {
@@ -1025,9 +1093,9 @@ impl UI {
             let eid = me.summons.get(i);
             if let Some(view) = eid.and_then(|&x| known.entity(x)) {
                 self.render_entity(Some(key), None, view, slice);
-                //if let Some(x) = menu && x.summon == i as i32 {
-                //    self.render_menu(slice, x.index, summon.unwrap());
-                //}
+                if let Some(x) = &self.menu && x.summon == i {
+                    self.render_menu(slice, x.choice, view);
+                }
             } else {
                 self.render_empty_option(key, 0, slice);
             }
@@ -1056,8 +1124,12 @@ impl UI {
                 let view = if cell.can_see_entity_at() { cell.entity() } else { None };
                 let header = match &x.data {
                     TargetData::FarLook => "Examining...".into(),
-                    &TargetData::Summon { index, .. } => {
-                        let name = match &me.team[index] {
+                    &TargetData::Attack { summon, attack } => {
+                        let summon = me.known.entity(me.summons[summon]).unwrap();
+                        format!("Using {}'s {}...", summon.species.name, attack.name)
+                    },
+                    &TargetData::Summon { team, .. } => {
+                        let name = match &me.team[team] {
                             Teammate::In(x) => x.species.name,
                             Teammate::Out(_) => "?",
                         };
@@ -1133,24 +1205,24 @@ impl UI {
 
     // High-level private rendering helpers
 
-    //fn render_menu(&self, slice: &mut Slice, index: i32, summon: &Pokemon) {
-    //    let spaces = UI::render_key('-').chars().count();
+    fn render_menu(&self, slice: &mut Slice, index: i32, summon: &EntityKnowledge) {
+        let spaces = UI::render_key('-').chars().count();
 
-    //    for (i, key) in ATTACK_KEYS.iter().enumerate() {
-    //        let prefix = if index == i as i32 { " > " } else { "  " };
-    //        let attack = summon.data.me.attacks.get(i);
-    //        let name = attack.map(|x| x.name).unwrap_or("---");
-    //        let fg = if attack.is_some() { None } else { Some(0x111.into()) };
-    //        slice.set_fg(fg).spaces(spaces).write_str(prefix);
-    //        slice.write_str(&Self::render_key(*key)).write_str(name);
-    //        slice.newline().newline();
-    //    }
+        for (i, key) in ATTACK_KEYS.iter().enumerate() {
+            let prefix = if index == i as i32 { " > " } else { "  " };
+            let attack = summon.species.attacks.get(i);
+            let name = attack.map(|x| x.name).unwrap_or("---");
+            let fg = if attack.is_some() { None } else { Some(UI_GRAY_OPTION.into()) };
+            slice.set_fg(fg).spaces(spaces).write_str(prefix);
+            slice.write_str(&Self::render_key(*key)).write_str(name);
+            slice.newline().newline();
+        }
 
-    //    let prefix = if index == ATTACK_KEYS.len() as i32 { " > " } else { "  " };
-    //    slice.spaces(spaces).write_str(prefix);
-    //    slice.write_str(&Self::render_key(RETURN_KEY)).write_str("Call back");
-    //    slice.newline().newline();
-    //}
+        let prefix = if index == ATTACK_KEYS.len() as i32 { " > " } else { "  " };
+        slice.spaces(spaces).write_str(prefix);
+        slice.write_str(&Self::render_key(RETURN_KEY)).write_str("Call back");
+        slice.newline().newline();
+    }
 
     fn render_empty_option(&self, key: char, space: i32, slice: &mut Slice) {
         let n = space as usize;

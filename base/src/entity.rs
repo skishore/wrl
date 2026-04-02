@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::iter::FusedIterator;
 use std::num::NonZeroU64;
@@ -7,7 +8,7 @@ use std::rc::Rc;
 use crate::static_assert_size;
 use crate::ai::AIState;
 use crate::base::{HashMap, dirs, sample, Point, RNG};
-use crate::dex::Species;
+use crate::dex::{Attack, Species};
 use crate::knowledge::{Knowledge, Location};
 
 //////////////////////////////////////////////////////////////////////////////
@@ -16,6 +17,16 @@ const SCENT_TRAIL_SIZE: usize = 64;
 const SCENT_SPREAD: f64 = 1.;
 const SCENT_DECAY: f64 = 1.;
 const SCENT_BASE: f64 = 0.25;
+
+//////////////////////////////////////////////////////////////////////////////
+
+// Command
+
+#[derive(Clone, Copy, Debug)]
+pub struct AttackTarget { pub eid: Option<EID>, pub loc: Location, pub seen: bool }
+
+#[derive(Clone, Copy, Debug)]
+pub enum Command { Attack(&'static Attack, AttackTarget), Return }
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -62,6 +73,7 @@ pub struct Entity {
 
     // Team:
     pub leader: Option<EID>,
+    pub command: Cell<Option<Command>>,
     pub summons: Vec<EID>,
     pub team: Vec<Teammate>,
 }
@@ -92,6 +104,7 @@ impl Entity {
 
             // Team:
             leader: None,
+            command: None.into(),
             summons: vec![],
             team: vec![],
         }
