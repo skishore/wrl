@@ -772,7 +772,7 @@ impl Knowledge {
             let mut remainder = rng.random::<f64>();
 
             for (&loc, scent) in other.get_scent_trail(me.pos) {
-                remainder -= scent;
+                remainder -= scent * me.species.scent;
                 if remainder >= 0. { continue; }
 
                 let species = other.species;

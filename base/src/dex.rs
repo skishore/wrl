@@ -60,6 +60,7 @@ pub struct Species {
     pub flags: u32,
     pub glyph: Glyph,
     pub light: Bound,
+    pub scent: f64,
     pub speed: f64,
     pub hp: i32,
 }
@@ -91,24 +92,26 @@ impl PartialEq for &'static Species {
 lazy_static! {
     static ref SPECIES: HashMap<&'static str, Species> = {
         let items = vec![
-            ("Human",      ('@', 0xffffff), 0, 0, 0.9, 3,   vec![]),
-            ("Pidgey",     ('P', 0xd0a070), 0, 0, 1.0, 200, vec!["Tackle"]),
-            ("Rattata",    ('R', 0xa060ff), 1, 0, 1.0, 200, vec!["Tackle", "Headbutt"]),
-            ("Bulbasaur",  ('B', 0x408020), 0, 0, 1.0, 300, vec!["Tackle"]),
-            ("Charmander", ('C', 0xea8b24), 1, 4, 1.0, 200, vec!["Tackle", "Ember"]),
-            ("Squirtle",   ('S', 0x80c0ff), 0, 0, 1.0, 200, vec!["Tackle", "Ice Beam"]),
-            ("Pikachu",    ('P', 0xffff00), 0, 4, 1.1, 200, vec!["Tackle"]),
-            ("Eevee",      ('E', 0xd0a070), 0, 0, 1.0, 200, vec!["Tackle", "Headbutt"]),
+            ("Human",      0xffffff, 0, 0, 0.0,  0.9, 3,   vec![]),
+            ("Pidgey",     0xd0a070, 0, 0, 0.25, 1.0, 200, vec!["Tackle"]),
+            ("Rattata",    0xa060ff, 1, 0, 1.0,  1.0, 200, vec!["Tackle", "Headbutt"]),
+            ("Bulbasaur",  0x408020, 0, 0, 0.5,  1.0, 300, vec!["Tackle"]),
+            ("Charmander", 0xea8b24, 1, 4, 1.0,  1.0, 200, vec!["Tackle", "Ember"]),
+            ("Squirtle",   0x80c0ff, 0, 0, 0.5,  1.0, 200, vec!["Tackle", "Ice Beam"]),
+            ("Pikachu",    0xffff00, 0, 4, 1.0,  1.1, 200, vec!["Tackle"]),
+            ("Eevee",      0xd0a070, 0, 0, 1.0,  1.0, 200, vec!["Tackle", "Headbutt"]),
         ];
         let mut result = HashMap::default();
-        for (name, glyph, predator, light, speed, hp, attacks) in items {
+        for (name, color, predator, light, scent, speed, hp, attacks) in items {
             let attacks = attacks.into_iter().map(&Attack::get).collect();
+            let ch = if name == "Human" { '@' } else { name.chars().next().unwrap() };
             let f0 = if name == "Human" { FLAGS_HUMAN } else { FLAGS_NONE };
             let f1 = if predator != 0 { FLAGS_PREDATOR } else { FLAGS_NONE };
             let flags = f0 | f1;
-            let glyph = Glyph::wdfg(glyph.0, glyph.1);
+            let glyph = Glyph::wdfg(ch, color);
             let light = Bound::new(if light == 0 { -1 } else { light });
-            result.insert(name, Species { name, attacks, flags, glyph, light, speed, hp });
+            result.insert(name, Species {
+                name, attacks, flags, glyph, light, scent, speed, hp });
         }
         result
     };
