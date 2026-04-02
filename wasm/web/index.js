@@ -28,6 +28,7 @@ const main = async () => {
     x.stopPropagation();
   }
   terminal.app.ticker.add(() => { tick(); });
+  terminal.app.ticker.maxFPS = 60;
 };
 
 main();
