@@ -1245,11 +1245,11 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 let Some(Teammate::In(ind)) = entity.team.get(team) else { return };
 
                 let Individual { species, cur_hp } = *ind;
-                let args = EntityArgs { name: None, pos: target, player: false, species };
+                let (name, leader, player) = (None, Some(eid), false);
+                let args = EntityArgs { name, pos: target, player, leader, species };
                 let oid = board.add_entity(&args, env);
 
                 let other = &mut board.entities[oid];
-                other.leader = Some(eid);
                 other.cur_hp = cur_hp;
 
                 let me = &mut board.entities[eid];
@@ -1550,8 +1550,9 @@ impl State {
         }
 
         let input = Action::WaitForInput;
-        let (player, species) = (true, Species::get("Human"));
-        let args = EntityArgs { name: Some("skishore".into()), pos, player, species };
+        let species = Species::get("Human");
+        let (name, leader, player) = (Some("skishore".into()), None, true);
+        let args = EntityArgs { name, pos, player, leader, species };
         let player = board.add_entity(&args, &mut env);
 
         if matches!(mode, GameMode::Gym | GameMode::Sim | GameMode::Test) {
@@ -1580,7 +1581,8 @@ impl State {
                     (false, _) => "Pidgey",
                 };
                 let species = Species::get(species);
-                let args = EntityArgs { name: None, pos: x, player: false, species };
+                let (name, leader, player) = (None, None, false);
+                let args = EntityArgs { name, pos: x, player, leader, species };
                 board.add_entity(&args, &mut env);
             }
         }

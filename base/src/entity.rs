@@ -9,6 +9,7 @@ use crate::static_assert_size;
 use crate::ai::AIState;
 use crate::base::{HashMap, dirs, sample, Point, RNG};
 use crate::dex::{Attack, Species};
+use crate::game::MOVE_TIMER;
 use crate::knowledge::{Knowledge, Location};
 
 //////////////////////////////////////////////////////////////////////////////
@@ -36,6 +37,7 @@ pub struct EntityArgs {
     pub name: Option<Rc<str>>,
     pub pos: Point,
     pub player: bool,
+    pub leader: Option<EID>,
     pub species: &'static Species,
 }
 
@@ -89,7 +91,7 @@ impl Entity {
             cur_hp: args.species.hp,
             speed: args.species.speed,
             max_hp: args.species.hp,
-            move_timer: 0,
+            move_timer: if args.leader.is_some() { MOVE_TIMER } else { 0 },
             turn_timer: 0,
 
             // Location:
@@ -103,7 +105,7 @@ impl Entity {
             sneaking: false,
 
             // Team:
-            leader: None,
+            leader: args.leader,
             command: None.into(),
             summons: vec![],
             team: vec![],
