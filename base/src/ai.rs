@@ -1560,6 +1560,9 @@ fn ChooseDefenseSquareImpl(
     best.1
 }
 
+// TODO: Horrible bug: We always face away from the player right now. If we
+// are facing away from a rival, and the player commands us to attack them,
+// but it's been too long since we've seen them, we ignore the command...
 fn SelectAttackTarget(ctx: &mut Ctx) -> bool {
     let Some(command) = ctx.entity.command.get() else { return false };
     let Command::Attack(attack, target) = command else { return false };
