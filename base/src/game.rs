@@ -920,28 +920,26 @@ impl ActionResult {
 fn can_attack(board: &Board, entity: &Entity, action: &AttackAction) -> bool {
     let (known, source) = (&entity.known, entity.pos);
     let (range, target) = (action.attack.range, action.target);
+
+    if source == target { return false; }
     if !range.contains(source - target) { return false; }
     if !known.get(target).visible() { return false; }
-    if source == target { return false; }
 
     let los = LOS(source, target);
-    let last = los.len() - 1;
-    los.iter().enumerate().all(|(i, &p)| {
-        if i == 0 || i == last { return true; }
+    los[1..los.len() - 1].iter().all(|&p| {
         known.get(p).status() == Status::Free && board.get_status(p) == Status::Free
     })
 }
 
 fn can_summon(board: &Board, entity: &Entity, target: Point) -> bool {
     let (known, range, source) = (&entity.known, SUMMON_RANGE, entity.pos);
-    if !range.contains(source - target) { return false; }
-    if !known.get(target).visible() { return false; }
+
     if source == target { return false; }
+    if !range.contains(source - target) { return false; }
+    if !known.get(target).can_see_entity_at() { return false; }
 
     let los = LOS(source, target);
-    let last = los.len() - 1;
-    los.iter().enumerate().all(|(i, &p)| {
-        if i == 0 || i == last { return true; }
+    los[1..los.len() - 1].iter().all(|&p| {
         if known.get(p).status() != Status::Free { return false; }
         let status = board.get_status(p);
         status == Status::Free || status == Status::Occupied
