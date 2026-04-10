@@ -575,10 +575,12 @@ fn UpdateLastSeen<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> 
 }
 
 fn CheckLastSeen(ctx: &mut Ctx, kind: PathKind) -> bool {
+    if kind == PathKind::Leader { return true; }
     ctx.blackboard.last_seen.contains_key(&kind)
 }
 
 fn ClearLastSeen(ctx: &mut Ctx, kind: PathKind) -> Result {
+    if kind == PathKind::Leader { return Result::Failed; }
     ctx.blackboard.last_seen.remove(&kind);
     Result::Failed
 }
@@ -729,6 +731,7 @@ fn WarnOffThreats(ctx: &mut Ctx) -> Option<Action> {
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 enum PathKind {
+    Leader,
     Enemy,
     Hide,
     Flee,
@@ -800,7 +803,7 @@ fn FindPath(ctx: &mut Ctx, target: Point, kind: PathKind) -> bool {
 
     type K = PathKind;
     let skip = match kind {
-        K::Meat | K::Water | K::Berry | K::BerryTree => 1,
+        K::Leader | K::Meat | K::Water | K::Berry | K::BerryTree => 1,
         K::Enemy | K::Hide | K::Flee | K::Rest | K::Explore | K::None => 0,
     };
     ctx.blackboard.path = CachedPath { kind, path, skip, step: 0 };
@@ -983,6 +986,10 @@ fn Weariness(ctx: &mut Ctx) -> i64 {
     if !ctx.blackboard.weariness.active { return -1; }
     if ctx.blackboard.getting_rest_ { return 101; }
     ctx.blackboard.weariness.percent()
+}
+
+fn IsLeader(ctx: &Ctx, point: Point) -> bool {
+    ctx.env.leader.map(|x| x.pos == point).unwrap_or(false)
 }
 
 fn HasMeat(ctx: &Ctx, point: Point) -> bool {
@@ -1965,6 +1972,11 @@ fn FollowAttackCommand() -> impl Bhv {
     ]
 }
 
+fn ReturnToLeader() -> impl Bhv {
+    const KIND: PathKind = PathKind::Leader;
+    path!("Leader", KIND, IsLeader, act!("FollowPath", |x| FollowPath(x, KIND)))
+}
+
 fn SummonRoot() -> impl Bhv {
     seq![
         "SummonRoot",
@@ -1980,6 +1992,7 @@ fn SummonRoot() -> impl Bhv {
             ],
             act!("DefendLeader", DefendLeader),
             act!("FollowLeader", FollowLeader),
+            ReturnToLeader(),
             act!("Idle", |_| Some(Action::Idle)),
         ],
     ]
