@@ -1517,25 +1517,39 @@ fn ChooseDefenseSquareImpl(
     // knight's move away from the leader.) We want to block the rival's LOS.
     let mut scores = HashMap::default();
     for &rival in &rivals {
-        let mut marked = HashSet::default();
+        if rival == leader.pos { continue; }
+
         let los = LOS(rival, leader.pos);
+        let los = &los[1..los.len() - 1];
 
-        let diff = rival - leader.pos;
-        let shift_a = if diff.0.abs() > diff.1.abs() {
-            Point(0, if diff.1 == 0 { 1 } else { diff.1.signum() })
-        } else {
-            Point(if diff.0 == 0 { 1 } else { diff.0.signum() }, 0)
-        };
-        let shift_b = Point::default() - shift_a;
-        let shifts: [(Point, f64); 3] =
-            [(Point::default(), 64.), (shift_a, 8.), (shift_b, 1.)];
+        let Point(dx, dy) = rival - leader.pos;
+        let vertical = dy.abs() > dx.abs();
+        let sign = if vertical { dy.signum() } else { dx.signum() };
+        assert!(sign != 0);
 
-        for &(shift, score) in &shifts {
+        let shift = if vertical { Point(1, 0) } else { Point(0, 1) };
+        let shifts: [Point; 3] = [Point::default(), shift, Point::default() - shift];
+
+        for shift in shifts {
             if los.iter().any(|&x| defended(x + shift)) { continue; }
-            for &point in &los {
+
+            for &point in los {
                 let delta = point + shift - leader.pos;
                 if delta.0.abs() > 2 || delta.1.abs() > 2 { continue; }
-                if !marked.insert(delta) { continue; }
+
+                let score = (||{
+                    if shift == Point::default() { return 64. };
+
+                    let Point(px, py) = point - leader.pos;
+                    let (a, b) = (px * dy * sign, py * dx * sign);
+                    if a == b { return 6. }
+
+                    if vertical {
+                        if (a < b) == (shift.0 > 0) { 8. } else { 6. }
+                    } else {
+                        if (a < b) == (shift.1 < 0) { 8. } else { 6. }
+                    }
+                })();
                 *scores.entry(delta).or_insert(0.) += score;
             }
         }
@@ -1552,6 +1566,7 @@ fn ChooseDefenseSquareImpl(
             let mut score = scores.get(&d).cloned().unwrap_or(f64::NEG_INFINITY);
             if score == f64::NEG_INFINITY { continue; }
 
+            score += if d.len_l1() > 1 { 4. } else { 0. };
             score += 0.0625 * d.len_l2_squared() as f64;
             score -= 0.015625 * (p - source).len_l2_squared() as f64;
             if score > best.0 { best = (score, Some(p)); }
@@ -1634,18 +1649,6 @@ fn AttackRivals(ctx: &mut Ctx) -> Option<Action> {
     None
 }
 
-// TODO: If we don't have any particularly good moves, we may move out of the
-// way of a dangerous enemy. For example, consider allies A and B defending @
-// against enemy X in this configuration:
-//
-// .X
-// AB
-// @.
-//
-// On A's move, they currently choose to move (1, 1), i.e. to the right of
-// the @ instead of staying where they are. Also, they should focus on as
-// many enemies as they can after they move.
-//
 fn DefendLeader(ctx: &mut Ctx) -> Option<Action> {
     let source = ctx.pos;
     let leader = ctx.env.leader?;
