@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 use std::mem::{replace, swap};
+use std::sync::LazyLock;
 
-use lazy_static::lazy_static;
 use rand::{Rng, SeedableRng};
 use thin_vec::ThinVec;
 
@@ -120,30 +120,28 @@ impl PartialEq for &'static Tile {
     }
 }
 
-lazy_static! {
-    static ref DEFAULT_TILE: &'static Tile = TILES.get(&'#').unwrap();
+static DEFAULT_TILE: LazyLock<&'static Tile> = LazyLock::new(|| TILES.get(&'#').unwrap());
 
-    static ref TILES: HashMap<char, Tile> = {
-        let items = [
-            ('#', FLAGS_BLOCKED,     ('#', 0x106000), "a tree"),
-            ('.', FLAGS_NONE,        ('.', 0xe0ffc0), "grass"),
-            (',', FLAGS_NONE,        ('`', 0x60c060), "weeds"),
-            ('"', FLAGS_TALL_GRASS,  ('"', 0x60c000), "tall grass"),
-            ('|', FLAGS_TALL_GRASS,  ('|', 0x60c000), "reeds"),
-            ('+', FLAGS_NONE,        ('+', 0xff6060), "a flower"),
-            ('~', FLAGS_FRESH_WATER, ('~', 0x0080ff), "water"),
-            ('B', FLAGS_BERRY_TREE,  ('#', 0xc08000), "a berry tree"),
-            ('=', FLAGS_NONE,        ('=', 0xff8000), "a bridge"),
-            ('R', FLAGS_NONE,        ('.', 0xff8000), "a path"),
-        ];
-        let mut result = HashMap::default();
-        for (ch, flags, glyph, description) in items {
-            let glyph = Glyph::wdfg(glyph.0, glyph.1);
-            result.insert(ch, Tile { flags, glyph, description });
-        }
-        result
-    };
-}
+static TILES: LazyLock<HashMap<char, Tile>> = LazyLock::new(|| {
+    let items = [
+        ('#', FLAGS_BLOCKED,     ('#', 0x106000), "a tree"),
+        ('.', FLAGS_NONE,        ('.', 0xe0ffc0), "grass"),
+        (',', FLAGS_NONE,        ('`', 0x60c060), "weeds"),
+        ('"', FLAGS_TALL_GRASS,  ('"', 0x60c000), "tall grass"),
+        ('|', FLAGS_TALL_GRASS,  ('|', 0x60c000), "reeds"),
+        ('+', FLAGS_NONE,        ('+', 0xff6060), "a flower"),
+        ('~', FLAGS_FRESH_WATER, ('~', 0x0080ff), "water"),
+        ('B', FLAGS_BERRY_TREE,  ('#', 0xc08000), "a berry tree"),
+        ('=', FLAGS_NONE,        ('=', 0xff8000), "a bridge"),
+        ('R', FLAGS_NONE,        ('.', 0xff8000), "a path"),
+    ];
+    let mut result = HashMap::default();
+    for (ch, flags, glyph, description) in items {
+        let glyph = Glyph::wdfg(glyph.0, glyph.1);
+        result.insert(ch, Tile { flags, glyph, description });
+    }
+    result
+});
 
 //////////////////////////////////////////////////////////////////////////////
 

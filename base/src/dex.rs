@@ -1,4 +1,4 @@
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 
 use crate::base::{Bound, Glyph, HashMap, Point, RNG};
 use crate::effect::*;
@@ -28,23 +28,21 @@ impl std::fmt::Debug for Attack {
     }
 }
 
-lazy_static! {
-    static ref ATTACKS: HashMap<&'static str, Attack> = {
-        let items: Vec<(&'static str, i32, i32, AttackEffect)> = vec![
-            ("Blizzard", 12, 120, BlizzardEffect),
-            ("Ember",    12, 40,  EmberEffect),
-            ("Headbutt", 6,  70,  HeadbuttEffect),
-            ("Ice Beam", 12, 60,  IceBeamEffect),
-            ("Tackle",   6,  40,  HeadbuttEffect),
-        ];
-        let mut result = HashMap::default();
-        for (name, range, damage, effect) in items {
-            let range = Bound::new(range);
-            result.insert(name, Attack { name, range, damage, effect });
-        }
-        result
-    };
-}
+static ATTACKS: LazyLock<HashMap<&'static str, Attack>> = LazyLock::new(|| {
+    let items: Vec<(&'static str, i32, i32, AttackEffect)> = vec![
+        ("Blizzard", 12, 120, BlizzardEffect),
+        ("Ember",    12, 40,  EmberEffect),
+        ("Headbutt", 6,  70,  HeadbuttEffect),
+        ("Ice Beam", 12, 60,  IceBeamEffect),
+        ("Tackle",   6,  40,  HeadbuttEffect),
+    ];
+    let mut result = HashMap::default();
+    for (name, range, damage, effect) in items {
+        let range = Bound::new(range);
+        result.insert(name, Attack { name, range, damage, effect });
+    }
+    result
+});
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -89,30 +87,28 @@ impl PartialEq for &'static Species {
     }
 }
 
-lazy_static! {
-    static ref SPECIES: HashMap<&'static str, Species> = {
-        let items = vec![
-            ("Human",      0xffffff, 0, 0, 0.0,  0.9, 3,   vec![]),
-            ("Pidgey",     0xd0a070, 0, 0, 0.25, 1.0, 200, vec!["Tackle"]),
-            ("Rattata",    0xa060ff, 1, 0, 1.0,  1.0, 200, vec!["Tackle", "Headbutt"]),
-            ("Bulbasaur",  0x408020, 0, 0, 0.5,  1.0, 300, vec!["Tackle"]),
-            ("Charmander", 0xea8b24, 1, 4, 1.0,  1.0, 200, vec!["Tackle", "Ember"]),
-            ("Squirtle",   0x80c0ff, 0, 0, 0.5,  1.0, 200, vec!["Tackle", "Ice Beam"]),
-            ("Pikachu",    0xffff00, 0, 4, 1.0,  1.1, 200, vec!["Tackle"]),
-            ("Eevee",      0xd0a070, 0, 0, 1.0,  1.0, 200, vec!["Tackle", "Headbutt"]),
-        ];
-        let mut result = HashMap::default();
-        for (name, color, predator, light, scent, speed, hp, attacks) in items {
-            let attacks = attacks.into_iter().map(&Attack::get).collect();
-            let ch = if name == "Human" { '@' } else { name.chars().next().unwrap() };
-            let f0 = if name == "Human" { FLAGS_HUMAN } else { FLAGS_NONE };
-            let f1 = if predator != 0 { FLAGS_PREDATOR } else { FLAGS_NONE };
-            let flags = f0 | f1;
-            let glyph = Glyph::wdfg(ch, color);
-            let light = Bound::new(if light == 0 { -1 } else { light });
-            result.insert(name, Species {
-                name, attacks, flags, glyph, light, scent, speed, hp });
-        }
-        result
-    };
-}
+static SPECIES: LazyLock<HashMap<&'static str, Species>> = LazyLock::new(|| {
+    let items = vec![
+        ("Human",      0xffffff, 0, 0, 0.0,  0.9, 3,   vec![]),
+        ("Pidgey",     0xd0a070, 0, 0, 0.25, 1.0, 200, vec!["Tackle"]),
+        ("Rattata",    0xa060ff, 1, 0, 1.0,  1.0, 200, vec!["Tackle", "Headbutt"]),
+        ("Bulbasaur",  0x408020, 0, 0, 0.5,  1.0, 300, vec!["Tackle"]),
+        ("Charmander", 0xea8b24, 1, 4, 1.0,  1.0, 200, vec!["Tackle", "Ember"]),
+        ("Squirtle",   0x80c0ff, 0, 0, 0.5,  1.0, 200, vec!["Tackle", "Ice Beam"]),
+        ("Pikachu",    0xffff00, 0, 4, 1.0,  1.1, 200, vec!["Tackle"]),
+        ("Eevee",      0xd0a070, 0, 0, 1.0,  1.0, 200, vec!["Tackle", "Headbutt"]),
+    ];
+    let mut result = HashMap::default();
+    for (name, color, predator, light, scent, speed, hp, attacks) in items {
+        let attacks = attacks.into_iter().map(&Attack::get).collect();
+        let ch = if name == "Human" { '@' } else { name.chars().next().unwrap() };
+        let f0 = if name == "Human" { FLAGS_HUMAN } else { FLAGS_NONE };
+        let f1 = if predator != 0 { FLAGS_PREDATOR } else { FLAGS_NONE };
+        let flags = f0 | f1;
+        let glyph = Glyph::wdfg(ch, color);
+        let light = Bound::new(if light == 0 { -1 } else { light });
+        result.insert(name, Species {
+            name, attacks, flags, glyph, light, scent, speed, hp });
+    }
+    result
+});
