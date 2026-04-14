@@ -1276,7 +1276,15 @@ impl UI {
         let name = if let Some(x) = &view.name { x.as_ref() } else { view.species.name };
         slice.set_fg(fg).write_str(&prefix).write_str(name).newline();
         status_bar_line("HP: ", hp, hp_color, slice);
-        status_bar_line("PP: ", pp, pp_color, slice);
+        if !view.species.human() {
+            status_bar_line("PP: ", pp, pp_color, slice);
+        } else {
+            slice.spaces(n + 4);
+            for &ready in &view.team {
+                slice.set_fg(if ready { None } else { Some(UI_GRAY_OPTION.into()) });
+                slice.write_str("* ");
+            }
+        }
         slice.newline();
     }
 

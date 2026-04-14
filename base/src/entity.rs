@@ -68,16 +68,16 @@ pub struct Entity {
     pub dir: Point,
     pub trail: VecDeque<Location>,
 
-    // Flags:
-    pub asleep: bool,
-    pub player: bool,
-    pub sneaking: bool,
-
     // Team:
     pub leader: Option<EID>,
     pub command: Cell<Option<Command>>,
     pub summons: Vec<EID>,
     pub team: Vec<Teammate>,
+
+    // Flags:
+    pub asleep: bool,
+    pub player: bool,
+    pub sneaking: bool,
 }
 
 impl Entity {
@@ -99,16 +99,16 @@ impl Entity {
             dir: *sample(&dirs::ALL, rng),
             trail: VecDeque::with_capacity(SCENT_TRAIL_SIZE),
 
-            // Flags:
-            asleep: false,
-            player: args.player,
-            sneaking: false,
-
             // Team:
             leader: args.leader,
             command: None.into(),
             summons: vec![],
             team: vec![],
+
+            // Flags:
+            asleep: false,
+            player: args.player,
+            sneaking: false,
         }
     }
 

@@ -10,7 +10,7 @@ use thin_vec::ThinVec;
 use crate::static_assert_size;
 use crate::base::{HashMap, HashSet, Point, RNG, clamp};
 use crate::dex::Species;
-use crate::entity::{EID, Entity};
+use crate::entity::{EID, Entity, Teammate};
 use crate::game::{MOVE_TIMER, Board, Item, Light, Tile};
 use crate::list::{Handle, List};
 use crate::pathing::Status;
@@ -353,6 +353,9 @@ pub struct EntityKnowledge {
     pub pp: f64,
     pub delta: i32,
 
+    // Team:
+    pub team: ThinVec<bool>,
+
     // Flags:
     pub asleep: bool,
     pub friend: bool,
@@ -362,7 +365,7 @@ pub struct EntityKnowledge {
     pub visible: bool,
 }
 #[cfg(target_pointer_width = "64")]
-static_assert_size!(EntityKnowledge, 88);
+static_assert_size!(EntityKnowledge, 96);
 
 // Minimal knowledge about entities that we're only tracking indirectly.
 // We may have heard or glimpsed the entity, but we did not see it clearly.
@@ -421,6 +424,9 @@ impl EntityKnowledge {
             hp: Default::default(),
             pp: Default::default(),
             delta: Default::default(),
+
+            // Team:
+            team: Default::default(),
 
             // Flags:
             asleep: false,
@@ -843,6 +849,13 @@ impl Knowledge {
         entry.hp = other.hp_fraction();
         entry.pp = 1. - clamp(other.move_timer as f64 / MOVE_TIMER as f64, 0., 1.);
         entry.delta = trophic_level(other) - trophic_level(me);
+
+        // Clone the team, but reuse the existing allocation, if any.
+        entry.team.clear();
+        other.team.iter().for_each(|x| match x {
+            Teammate::Out(_) => entry.team.push(true),
+            Teammate::In(x) => entry.team.push(x.cur_hp > 0),
+        });
 
         entry.asleep = other.asleep;
         entry.friend = leader(me) == leader(other);
