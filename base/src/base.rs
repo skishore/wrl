@@ -19,6 +19,57 @@ macro_rules! static_assert_size {
     }
 }
 
+#[macro_export]
+macro_rules! flags {
+    (@go $i:expr; $x:ident) => {
+        #[allow(non_upper_case_globals)]
+        pub const $x: Self = Self($i);
+    };
+    (@go $i:expr; $x:ident $($l:tt)+) => {
+        crate::flags!(@go $i; $x);
+        crate::flags!(@go 2 * $i; $($l)+);
+    };
+    (@derive $x:ident = $z:ident $(| $zs:ident)*,) => {
+        #[allow(non_upper_case_globals)]
+        pub const $x: Self = Self(Self::$z.0 $(| Self::$zs.0)*);
+    };
+    (@derive $x:ident = $z:ident $(| $zs:ident)*, $($l:tt)+) => {
+        #[allow(non_upper_case_globals)]
+        crate::flags!(@derive $x = $z $(| $zs)*,);
+        crate::flags!(@derive $($l)+);
+    };
+    ($v:vis $n:ident($t:ty) { $($x:ident $(,)?)+
+     $(#[$_:meta] $($y:ident = $z:ident $(| $zs:ident)* $(,)?)+)? }) => {
+        #[derive(Clone, Copy, Default, Eq, PartialEq)]
+        $v struct $n($t);
+        impl $n {
+            #[allow(dead_code,non_upper_case_globals)]
+            pub const Empty: Self = Self(0);
+            crate::flags!(@go 1; $($x)+);
+            $($(crate::flags!(@derive $y = $z $(| $zs)*,);)+)?
+            fn any(self: Self, r: Self) -> bool { self.0 & r.0 != 0 }
+        }
+        impl std::ops::Not for $n {
+            type Output = Self;
+            fn not(self: Self) -> Self::Output { Self(!self.0) }
+        }
+        impl std::ops::BitOr for $n {
+            type Output = Self;
+            fn bitor(self: Self, r: Self) -> Self::Output { Self(self.0 | r.0) }
+        }
+        impl std::ops::BitAnd for $n {
+            type Output = Self;
+            fn bitand(self: Self, r: Self) -> Self::Output { Self(self.0 & r.0) }
+        }
+        impl std::ops::BitOrAssign for $n {
+            fn bitor_assign(self: &mut Self, r: Self) { self.0 |= r.0; }
+        }
+        impl std::ops::BitAndAssign for $n {
+            fn bitand_assign(self: &mut Self, r: Self) { self.0 &= r.0; }
+        }
+    };
+}
+
 pub type RNG = rand::rngs::StdRng;
 pub type HashSet<K> = fxhash::FxHashSet<K>;
 pub type HashMap<K, V> = fxhash::FxHashMap<K, V>;

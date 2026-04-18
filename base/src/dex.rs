@@ -1,5 +1,6 @@
 use std::sync::LazyLock;
 
+use crate::flags;
 use crate::base::{Bound, Glyph, HashMap, Point, RNG};
 use crate::effect::*;
 
@@ -48,14 +49,14 @@ static ATTACKS: LazyLock<HashMap<&'static str, Attack>> = LazyLock::new(|| {
 
 // Species
 
-const FLAGS_NONE: u32 = 0;
-const FLAGS_HUMAN: u32 = 1 << 0;
-const FLAGS_PREDATOR: u32 = 1 << 1;
+flags! { pub SpeciesFlags(u32) { Human, Predator } }
+
+type SF = SpeciesFlags;
 
 pub struct Species {
     pub name: &'static str,
     pub attacks: Vec<&'static Attack>,
-    pub flags: u32,
+    pub flags: SpeciesFlags,
     pub glyph: Glyph,
     pub light: Bound,
     pub scent: f64,
@@ -69,8 +70,8 @@ impl Species {
     }
 
     // Raw flags-based predicates.
-    pub fn human(&self) -> bool { self.flags & FLAGS_HUMAN != 0 }
-    pub fn predator(&self) -> bool { self.flags & FLAGS_PREDATOR != 0 }
+    pub fn human(&self) -> bool { self.flags.any(SF::Human) }
+    pub fn predator(&self) -> bool { self.flags.any(SF::Predator) }
 }
 
 impl std::fmt::Debug for Species {
@@ -102,8 +103,8 @@ static SPECIES: LazyLock<HashMap<&'static str, Species>> = LazyLock::new(|| {
     for (name, color, predator, light, scent, speed, hp, attacks) in items {
         let attacks = attacks.into_iter().map(&Attack::get).collect();
         let ch = if name == "Human" { '@' } else { name.chars().next().unwrap() };
-        let f0 = if name == "Human" { FLAGS_HUMAN } else { FLAGS_NONE };
-        let f1 = if predator != 0 { FLAGS_PREDATOR } else { FLAGS_NONE };
+        let f0 = if name == "Human" { SF::Human } else { SF::Empty };
+        let f1 = if predator != 0 { SF::Predator } else { SF::Empty };
         let flags = f0 | f1;
         let glyph = Glyph::wdfg(ch, color);
         let light = Bound::new(if light == 0 { -1 } else { light });

@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 use rand::{Rng, SeedableRng};
 use thin_vec::ThinVec;
 
-use crate::static_assert_size;
+use crate::{flags, static_assert_size};
 use crate::ai::{AIEnv, AIState};
 use crate::base::{Bound, Buffer, Color, Glyph};
 use crate::base::{HashMap, HashSet, LOS, Matrix, Point, RNG, dirs, sample, weighted};
@@ -65,21 +65,27 @@ pub enum Input { Escape, BackTab, Char(char), Click(Point) }
 
 // Tile
 
-const FLAG_BLOCKS_VISION: u32 = 1 << 0;
-const FLAG_LIMITS_VISION: u32 = 1 << 1;
-const FLAG_BLOCKS_MOVEMENT: u32 = 1 << 2;
-const FLAG_CAN_DRINK: u32 = 1 << 3;
-const FLAG_CAN_EAT: u32 = 1 << 4;
-const FLAG_BERRY: u32 = 1 << 5;
+flags! {
+    pub TileFlags(u32) {
+        BlocksMovement,
+        BlocksVision,
+        LimitsVision,
+        DropsBerries,
+        CanDrink,
+        CanEat,
 
-const FLAGS_NONE: u32 = 0;
-const FLAGS_BLOCKED: u32 = FLAG_BLOCKS_MOVEMENT | FLAG_BLOCKS_VISION;
-const FLAGS_FRESH_WATER: u32 = FLAG_BLOCKS_MOVEMENT | FLAG_CAN_DRINK;
-const FLAGS_BERRY_TREE: u32 = FLAG_BLOCKS_MOVEMENT | FLAG_LIMITS_VISION | FLAG_BERRY;
-const FLAGS_TALL_GRASS: u32 = FLAG_LIMITS_VISION;
+        /// Deriving:
+        Blocked = BlocksMovement | BlocksVision,
+        FreshWater = BlocksMovement | CanDrink,
+        BerryTree = BlocksMovement | LimitsVision | DropsBerries,
+        TallGrass = LimitsVision,
+    }
+}
+
+type TF = TileFlags;
 
 pub struct Tile {
-    pub flags: u32,
+    pub flags: TileFlags,
     pub glyph: Glyph,
     pub description: &'static str,
 }
@@ -89,12 +95,12 @@ impl Tile {
     pub fn try_get(ch: char) -> Option<&'static Tile> { TILES.get(&ch) }
 
     // Raw flags-based predicates.
-    pub fn can_eat(&self) -> bool { self.flags & FLAG_CAN_EAT != 0 }
-    pub fn can_drink(&self) -> bool { self.flags & FLAG_CAN_DRINK != 0 }
-    pub fn blocks_vision(&self) -> bool { self.flags & FLAG_BLOCKS_VISION != 0 }
-    pub fn limits_vision(&self) -> bool { self.flags & FLAG_LIMITS_VISION != 0 }
-    pub fn blocks_movement(&self) -> bool { self.flags & FLAG_BLOCKS_MOVEMENT != 0 }
-    pub fn drops_berries(&self) -> bool { self.flags & FLAG_BERRY != 0 }
+    pub fn can_eat(&self) -> bool { self.flags.any(TF::CanEat) }
+    pub fn can_drink(&self) -> bool { self.flags.any(TF::CanDrink) }
+    pub fn blocks_vision(&self) -> bool { self.flags.any(TF::BlocksVision) }
+    pub fn limits_vision(&self) -> bool { self.flags.any(TF::LimitsVision) }
+    pub fn blocks_movement(&self) -> bool { self.flags.any(TF::BlocksMovement) }
+    pub fn drops_berries(&self) -> bool { self.flags.any(TF::DropsBerries) }
 
     // Derived predicates.
     pub fn casts_shadow(&self) -> bool { self.blocks_vision() }
@@ -124,16 +130,16 @@ static DEFAULT_TILE: LazyLock<&'static Tile> = LazyLock::new(|| TILES.get(&'#').
 
 static TILES: LazyLock<HashMap<char, Tile>> = LazyLock::new(|| {
     let items = [
-        ('#', FLAGS_BLOCKED,     ('#', 0x106000), "a tree"),
-        ('.', FLAGS_NONE,        ('.', 0xe0ffc0), "grass"),
-        (',', FLAGS_NONE,        ('`', 0x60c060), "weeds"),
-        ('"', FLAGS_TALL_GRASS,  ('"', 0x60c000), "tall grass"),
-        ('|', FLAGS_TALL_GRASS,  ('|', 0x60c000), "reeds"),
-        ('+', FLAGS_NONE,        ('+', 0xff6060), "a flower"),
-        ('~', FLAGS_FRESH_WATER, ('~', 0x0080ff), "water"),
-        ('B', FLAGS_BERRY_TREE,  ('#', 0xc08000), "a berry tree"),
-        ('=', FLAGS_NONE,        ('=', 0xff8000), "a bridge"),
-        ('R', FLAGS_NONE,        ('.', 0xff8000), "a path"),
+        ('#', TF::Blocked,    ('#', 0x106000), "a tree"),
+        ('.', TF::Empty,      ('.', 0xe0ffc0), "grass"),
+        (',', TF::Empty,      ('`', 0x60c060), "weeds"),
+        ('"', TF::TallGrass,  ('"', 0x60c000), "tall grass"),
+        ('|', TF::TallGrass,  ('|', 0x60c000), "reeds"),
+        ('+', TF::Empty,      ('+', 0xff6060), "a flower"),
+        ('~', TF::FreshWater, ('~', 0x0080ff), "water"),
+        ('B', TF::BerryTree,  ('#', 0xc08000), "a berry tree"),
+        ('=', TF::Empty,      ('=', 0xff8000), "a bridge"),
+        ('R', TF::Empty,      ('.', 0xff8000), "a path"),
     ];
     let mut result = HashMap::default();
     for (ch, flags, glyph, description) in items {
