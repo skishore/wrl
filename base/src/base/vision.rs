@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use crate::base::{Bound, Matrix, Point};
+use super::point::{Bound, Matrix, Point};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -357,6 +357,8 @@ impl Vision {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::util::{HashMap, RNG};
+    use crate::wrl::game::Tile;
 
     use rand::{Rng, SeedableRng};
 
@@ -836,12 +838,12 @@ mod tests {
 
     fn run_vision_benchmark(b: &mut test::Bencher, directional: bool, point_lookups: bool) {
         let (pos, map) = generate_fov_input();
-        let mapping: crate::base::HashMap<_, _> =
+        let mapping: HashMap<_, _> =
                 [('.', '.'), ('#', '#'), (',', '"')].into_iter().collect();
-        let mut tiles = Matrix::new(map.size(), crate::game::Tile::get('#'));
+        let mut tiles = Matrix::new(map.size(), Tile::get('#'));
         for (p, x) in tiles.iter_mut() {
             let c = *mapping.get(&map.get(p)).unwrap();
-            *x = crate::game::Tile::get(c);
+            *x = Tile::get(c);
         }
         let opacity_lookup = |p: Point| {
             let tile = tiles.get(p);
@@ -854,7 +856,7 @@ mod tests {
 
         let mut vision = Vision::new(pos.0);
         if point_lookups {
-            let mut rng = crate::base::RNG::seed_from_u64(17);
+            let mut rng = RNG::seed_from_u64(17);
             b.iter(|| {
                 let Point(x, y) = map.size();
                 let target = Point(rng.random_range(0..x), rng.random_range(0..y));
@@ -878,7 +880,7 @@ mod tests {
         let size = Point(side, side);
         let eye = Point(radius, radius);
 
-        let mut rng = crate::base::RNG::seed_from_u64(17);
+        let mut rng = RNG::seed_from_u64(17);
         let mut map = Matrix::new(size, '#');
         for x in 0..size.0 {
             for y in 0..size.1 {

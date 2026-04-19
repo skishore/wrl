@@ -1,6 +1,6 @@
-use wrl_base::base::RNG;
-use wrl_base::game::Tile;
-use wrl_base::mapgen::{legacy_mapgen, mapgen};
+use wrl_base::base::util::RNG;
+use wrl_base::wrl::game::Tile;
+use wrl_base::wrl::mapgen::{legacy_mapgen, mapgen};
 
 use rand::SeedableRng;
 

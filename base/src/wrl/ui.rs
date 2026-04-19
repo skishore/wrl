@@ -3,18 +3,20 @@ use std::collections::VecDeque;
 
 use rand::Rng;
 
-use crate::ai::{CheckFollowerSquare, ChooseDefenseSquare};
-use crate::base::{HashMap, HashSet, LOS, Point, RNG, dirs};
-use crate::base::{Bound, Buffer, Color, Glyph, Matrix, Rect, Slice};
-use crate::dex::{Attack, Species};
-use crate::effect::{Frame, ParticleData, RenderData};
-use crate::entity::{AttackTarget, Command, EID, Entity, Teammate};
-use crate::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_, SUMMON_RANGE};
-use crate::game::{Action, Input, ShoutAction, SummonAction, Tile, show_item};
-use crate::knowledge::{Call, Location, PointLookup, Sound};
-use crate::knowledge::{EntityKnowledge, Knowledge};
-use crate::pathing::Status;
-use crate::shadowcast::{Vision, VisionArgs};
+use crate::base::glyph::{Buffer, Color, Glyph, Rect, Slice};
+use crate::base::point::{Bound, LOS, Matrix, Point, dirs};
+use crate::base::pathing::Status;
+use crate::base::util::{HashMap, HashSet, RNG};
+use crate::base::vision::{Vision, VisionArgs};
+
+use super::ai::{CheckFollowerSquare, ChooseDefenseSquare};
+use super::dex::{Attack, Species};
+use super::effect::{Frame, ParticleData, RenderData};
+use super::entity::{AttackTarget, Command, EID, Entity, Teammate};
+use super::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_, SUMMON_RANGE};
+use super::game::{Action, Input, ShoutAction, SummonAction, Tile, show_item};
+use super::knowledge::{Call, Location, PointLookup, Sound};
+use super::knowledge::{EntityKnowledge, Knowledge};
 
 //////////////////////////////////////////////////////////////////////////////
 

@@ -8,22 +8,23 @@ use rand::Rng;
 use rand_distr::{Distribution, Normal};
 use rand_distr::num_traits::Pow;
 
+use crate::base::point::{Bound, LOS, Point, dirs};
+use crate::base::pathing::{AStar, AStarHeuristic, Status};
+use crate::base::pathing::{BFS, DijkstraLength, DijkstraMap, Neighborhood};
+use crate::base::util::{HashMap, HashSet, RNG, clamp, sample, sortable, weighted};
+use crate::base::vision::{INITIAL_VISIBILITY, Vision, VisionArgs};
+
 use crate::{act, cb, cond, pri, run, seq, util};
-use crate::base::{Bound, HashMap, HashSet, LOS, Point, RNG};
-use crate::base::{clamp, dirs, sample, sortable, weighted};
-use crate::bhv::{Bhv, Result};
-use crate::debug::{DebugFile, DebugLine, DebugLog};
-use crate::dex::{Attack, Species};
-use crate::entity::{AttackTarget, Command, Entity};
-use crate::game::{Item, move_ready};
-use crate::game::{FOV_RADIUS_NPC, CALL_VOLUME, FOLLOW_RANGE, SUMMON_RANGE};
-use crate::game::{Action, AttackAction, CallAction, EatAction, MoveAction};
-use crate::knowledge::{Knowledge, ScentKnowledge};
-use crate::knowledge::{Call, Location, PointLookup, Sense, Timestamp};
-use crate::pathing::{AStar, AStarHeuristic, Status};
-use crate::pathing::{BFS, DijkstraLength, DijkstraMap, Neighborhood};
-use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
-use crate::threats::{FightOrFlight, ThreatState};
+use super::bhv::{Bhv, Result};
+use super::debug::{DebugFile, DebugLine, DebugLog};
+use super::dex::{Attack, Species};
+use super::entity::{AttackTarget, Command, Entity};
+use super::game::{Item, move_ready};
+use super::game::{FOV_RADIUS_NPC, CALL_VOLUME, FOLLOW_RANGE, SUMMON_RANGE};
+use super::game::{Action, AttackAction, CallAction, EatAction, MoveAction};
+use super::knowledge::{Knowledge, ScentKnowledge};
+use super::knowledge::{Call, Location, PointLookup, Sense, Timestamp};
+use super::threats::{FightOrFlight, ThreatState};
 
 //////////////////////////////////////////////////////////////////////////////
 

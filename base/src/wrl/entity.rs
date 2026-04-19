@@ -6,11 +6,13 @@ use std::ops::{Index, IndexMut};
 use std::rc::Rc;
 
 use crate::static_assert_size;
-use crate::ai::AIState;
-use crate::base::{HashMap, dirs, sample, Point, RNG};
-use crate::dex::{Attack, Species};
-use crate::game::MOVE_TIMER;
-use crate::knowledge::{Knowledge, Location};
+use crate::base::point::{Point, dirs};
+use crate::base::util::{HashMap, RNG, sample};
+
+use super::ai::AIState;
+use super::dex::{Attack, Species};
+use super::game::MOVE_TIMER;
+use super::knowledge::{Knowledge, Location};
 
 //////////////////////////////////////////////////////////////////////////////
 

@@ -5,13 +5,15 @@ use std::io::{BufWriter, Result, Write};
 use flate2::Compression;
 use flate2::write::GzEncoder;
 
-use crate::base::{Color, Glyph, Matrix, Point};
-use crate::effect::{Frame, ParticleData, RenderData};
-use crate::entity::{EID, Entity};
-use crate::game::{WORLD_SIZE, Action, Board, Cell, show_item};
-use crate::knowledge::EntityKnowledge;
-use crate::pathing::Neighborhood;
-use crate::ui::UI;
+use crate::base::glyph::{Color, Glyph};
+use crate::base::point::{Matrix, Point};
+use crate::base::pathing::Neighborhood;
+
+use super::effect::{Frame, ParticleData, RenderData};
+use super::entity::{EID, Entity};
+use super::game::{WORLD_SIZE, Action, Board, Cell, show_item};
+use super::knowledge::EntityKnowledge;
+use super::ui::UI;
 
 //////////////////////////////////////////////////////////////////////////////
 

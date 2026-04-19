@@ -4,17 +4,18 @@ use std::num::NonZeroU64;
 use std::rc::Rc;
 
 use rand::Rng;
-
 use thin_vec::ThinVec;
 
 use crate::static_assert_size;
-use crate::base::{HashMap, HashSet, Point, RNG, clamp};
-use crate::dex::Species;
-use crate::entity::{EID, Entity, Teammate};
-use crate::game::{MOVE_TIMER, Board, Item, Light, Tile};
-use crate::list::{Handle, List};
-use crate::pathing::Status;
-use crate::shadowcast::Vision;
+use crate::base::point::Point;
+use crate::base::pathing::Status;
+use crate::base::util::{HashMap, HashSet, RNG, clamp};
+use crate::base::vision::Vision;
+
+use super::dex::Species;
+use super::entity::{EID, Entity, Teammate};
+use super::game::{MOVE_TIMER, Board, Item, Light, Tile};
+use super::list::{Handle, List};
 
 //////////////////////////////////////////////////////////////////////////////
 

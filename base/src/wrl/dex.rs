@@ -1,8 +1,11 @@
 use std::sync::LazyLock;
 
 use crate::flags;
-use crate::base::{Bound, Glyph, HashMap, Point, RNG};
-use crate::effect::*;
+use crate::base::glyph::Glyph;
+use crate::base::point::{Bound, Point};
+use crate::base::util::{HashMap, RNG};
+
+use super::effect::{Effect, self};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -31,11 +34,11 @@ impl std::fmt::Debug for Attack {
 
 static ATTACKS: LazyLock<HashMap<&'static str, Attack>> = LazyLock::new(|| {
     let items: Vec<(&'static str, i32, i32, AttackEffect)> = vec![
-        ("Blizzard", 12, 120, BlizzardEffect),
-        ("Ember",    12, 40,  EmberEffect),
-        ("Headbutt", 6,  70,  HeadbuttEffect),
-        ("Ice Beam", 12, 60,  IceBeamEffect),
-        ("Tackle",   6,  40,  HeadbuttEffect),
+        ("Blizzard", 12, 120, effect::BlizzardEffect),
+        ("Ember",    12, 40,  effect::EmberEffect),
+        ("Headbutt", 6,  70,  effect::HeadbuttEffect),
+        ("Ice Beam", 12, 60,  effect::IceBeamEffect),
+        ("Tackle",   6,  40,  effect::HeadbuttEffect),
     ];
     let mut result = HashMap::default();
     for (name, range, damage, effect) in items {

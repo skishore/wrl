@@ -2,14 +2,16 @@ use std::cmp::max;
 
 use rand::Rng;
 
-use crate::base::{HashMap, Point, RNG};
-use crate::debug::DebugLog;
-use crate::dex::Species;
-use crate::entity::{Entity, EID};
-use crate::knowledge::{AttackEvent, Call, CallEvent, Event, EventData, Sense};
-use crate::knowledge::{EntityKnowledge, Knowledge, Location, Timestamp, UID};
-use crate::game::CALL_VOLUME;
-use crate::list::{Handle, List};
+use crate::base::point::Point;
+use crate::base::util::{HashMap, RNG};
+
+use super::debug::DebugLog;
+use super::dex::Species;
+use super::entity::{Entity, EID};
+use super::knowledge::{AttackEvent, Call, CallEvent, Event, EventData, Sense};
+use super::knowledge::{EntityKnowledge, Knowledge, Location, Timestamp, UID};
+use super::game::CALL_VOLUME;
+use super::list::{Handle, List};
 
 //////////////////////////////////////////////////////////////////////////////
 

@@ -3,8 +3,8 @@ use std::cmp::{max, min};
 use rand::Rng;
 use rand::seq::SliceRandom;
 
-use crate::base::{HashMap, HashSet, LOS, Matrix, Point, dirs};
-use crate::base::{RNG, sample};
+use crate::base::point::{LOS, Matrix, Point, dirs};
+use crate::base::util::{HashMap, HashSet, RNG, sample};
 
 //////////////////////////////////////////////////////////////////////////////
 

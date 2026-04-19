@@ -1,5 +1,5 @@
-use crate::base::{Matrix, Point};
-use crate::shadowcast::{INITIAL_VISIBILITY, Vision, VisionArgs};
+use super::point::{Matrix, Point};
+use super::vision::{INITIAL_VISIBILITY, Vision, VisionArgs};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -125,8 +125,11 @@ impl Lighting {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::base::{Bound, RNG};
+    use super::super::point::Bound;
+    use super::super::util::RNG;
+
     use rand::{Rng, SeedableRng};
+
     extern crate test;
 
     const SEED: u64 = 17;

@@ -1,6 +1,6 @@
-use crate::ai::Ctx;
-use crate::debug::DebugLog;
-use crate::game::Action;
+use super::ai::Ctx;
+use super::debug::DebugLog;
+use super::game::Action;
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -316,28 +316,31 @@ impl<S: Policy, T: Bhv, U: Bhv> Bhv for Composite<S, T, U> {
 #[macro_export]
 macro_rules! act {
     ($name:literal, $x:expr) => {{
-        $crate::bhv::Node::new(concat!("! ", $name), $crate::bhv::Act::new($x))
+        use super::bhv::{Act, Node};
+        Node::new(concat!("! ", $name), Act::new($x))
     }};
 }
 
 #[macro_export]
 macro_rules! cb {
     ($name:literal, $x:expr) => {{
-        $crate::bhv::Node::new(concat!("\\ ", $name), $crate::bhv::Lambda::new($x))
+        use super::bhv::{Lambda, Node};
+        Node::new(concat!("\\ ", $name), Lambda::new($x))
     }};
 }
 
 #[macro_export]
 macro_rules! cond {
     ($name:literal, $x:expr) => {{
-        $crate::bhv::Node::new(concat!("= ", $name), $crate::bhv::Cond::new($x))
+        use super::bhv::{Cond, Node};
+        Node::new(concat!("= ", $name), Cond::new($x))
     }};
 }
 
 #[macro_export]
 macro_rules! util {
     ($name:literal $(,($x:expr, $y:expr))+ $(,)?) => {{
-        use $crate::bhv::{Node, Utility, UtilityNode};
+        use super::bhv::{Node, Utility, UtilityNode};
         let utility = Utility::new(vec![$(Box::new(UtilityNode::new($x, $y)),)+]);
         Node::new(concat!("# ", $name), utility)
     }};
@@ -347,7 +350,7 @@ macro_rules! util {
 macro_rules! pri {
     (@go $name:expr, $x:expr) => { $x };
     (@go $name:expr, $x:expr $(,$xs:expr)+) => {{
-        use $crate::bhv::{Composite, Node, PriPolicy};
+        use super::bhv::{Composite, Node, PriPolicy};
         Node::new($name, Composite::new(PriPolicy {}, $x, pri![@go () $(,$xs)+]))
     }};
     ($name:expr $(,$xs:expr)+ $(,)?) => { pri![@go concat!("? ", $name) $(,$xs)+] };
@@ -357,7 +360,7 @@ macro_rules! pri {
 macro_rules! run {
     (@go $name:expr, $x:expr) => { $x };
     (@go $name:expr, $x:expr $(,$xs:expr)+) => {{
-        use $crate::bhv::{Composite, Node, RunPolicy};
+        use super::bhv::{Composite, Node, RunPolicy};
         Node::new($name, Composite::new(RunPolicy {}, $x, run![@go () $(,$xs)+]))
     }};
     ($name:expr $(,$xs:expr)+ $(,)?) => { run![@go concat!("* ", $name) $(,$xs)+] };
@@ -367,7 +370,7 @@ macro_rules! run {
 macro_rules! seq {
     (@go $name:expr, $x:expr) => { $x };
     (@go $name:expr, $x:expr $(,$xs:expr)+) => {{
-        use $crate::bhv::{Composite, Node, SeqPolicy};
+        use super::bhv::{Composite, Node, SeqPolicy};
         Node::new($name, Composite::new(SeqPolicy {}, $x, seq![@go () $(,$xs)+]))
     }};
     ($name:expr $(,$xs:expr)+ $(,)?) => { seq![@go concat!("> ", $name) $(,$xs)+] };

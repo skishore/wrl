@@ -6,21 +6,23 @@ use rand::{Rng, SeedableRng};
 use thin_vec::ThinVec;
 
 use crate::{flags, static_assert_size};
-use crate::ai::{AIEnv, AIState};
-use crate::base::{Bound, Buffer, Color, Glyph};
-use crate::base::{HashMap, HashSet, LOS, Matrix, Point, RNG, dirs, sample, weighted};
-use crate::dex::{Attack, Species};
-use crate::debug::DebugFile;
-use crate::effect::{CB, Effect, Frame, FT, Particle, ParticleData, RenderData, self};
-use crate::entity::{Command, Individual, Teammate};
-use crate::entity::{EID, Entity, EntityArgs, EntityMap};
-use crate::knowledge::{Call, Knowledge, Location, Sense, Timedelta, Timestamp};
-use crate::knowledge::{AttackEvent, CallEvent, Event, EventData, MoveEvent};
-use crate::lighting::Lighting;
-use crate::mapgen::mapgen_with_size as mapgen;
-use crate::pathing::Status;
-use crate::shadowcast::{INITIAL_VISIBILITY, VISIBILITY_LOSSES, Vision, VisionArgs};
-use crate::ui::{UI, get_direction};
+use crate::base::glyph::{Color, Glyph, Buffer};
+use crate::base::lighting::Lighting;
+use crate::base::pathing::Status;
+use crate::base::point::{Bound, LOS, Matrix, Point, dirs};
+use crate::base::util::{HashMap, HashSet, RNG, sample, weighted};
+use crate::base::vision::{INITIAL_VISIBILITY, VISIBILITY_LOSSES, Vision, VisionArgs};
+
+use super::ai::{AIEnv, AIState};
+use super::dex::{Attack, Species};
+use super::debug::DebugFile;
+use super::effect::{CB, Effect, Frame, FT, Particle, ParticleData, RenderData, self};
+use super::entity::{Command, Individual, Teammate};
+use super::entity::{EID, Entity, EntityArgs, EntityMap};
+use super::knowledge::{Call, Knowledge, Location, Sense, Timedelta, Timestamp};
+use super::knowledge::{AttackEvent, CallEvent, Event, EventData, MoveEvent};
+use super::mapgen::mapgen_with_size as mapgen;
+use super::ui::{UI, get_direction};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -1637,7 +1639,7 @@ impl State {
                 sources.insert(source);
                 targets.insert(target);
             }
-            crate::ui::Effect { frame, known, mask, sources, targets }
+            super::ui::Effect { frame, known, mask, sources, targets }
         });
         self.env.ui.render(buffer, entity, effect.as_ref());
     }

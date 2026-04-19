@@ -2,8 +2,9 @@ use std::cell::RefCell;
 
 use wasm_bindgen::prelude::*;
 
-use wrl_base::base::{Glyph, Matrix};
-use wrl_base::game::{Input, State};
+use wrl_base::base::point::Matrix;
+use wrl_base::base::glyph::Glyph;
+use wrl_base::wrl::game::{Input, State};
 
 thread_local! {
     static STATE: RefCell<(State, Matrix<Glyph>)> = Default::default()

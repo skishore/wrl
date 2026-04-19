@@ -6,7 +6,8 @@ use std::num::NonZeroI32;
 use std::ops::{Index, IndexMut};
 
 use crate::static_assert_size;
-use crate::base::{HashMap, LOS, Matrix, Point, dirs};
+use super::point::{LOS, Matrix, Point, dirs};
+use super::util::HashMap;
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -584,8 +585,10 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::util::RNG;
+
     use rand::{Rng, SeedableRng};
-    use crate::base::RNG;
+
     extern crate test;
 
     const BFS_LIMIT: i32 = 32;

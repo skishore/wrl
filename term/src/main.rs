@@ -8,8 +8,9 @@ use termion::input::{MouseTerminal, TermRead};
 use termion::raw::{IntoRawMode, RawTerminal};
 use termion::screen::{ToAlternateScreen, ToMainScreen};
 
-use wrl_base::base::{Char, Color, Glyph, Matrix, Point};
-use wrl_base::game::{GameMode, Input, State};
+use wrl_base::base::glyph::{Char, Color, Glyph};
+use wrl_base::base::point::{Matrix, Point};
+use wrl_base::wrl::game::{GameMode, Input, State};
 
 type RawMouseTerminal = MouseTerminal<RawTerminal<io::Stdout>>;
 

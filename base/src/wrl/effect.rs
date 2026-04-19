@@ -4,8 +4,11 @@ use std::cmp::{max, min};
 
 use rand::Rng;
 
-use crate::base::{Bound, Color, HashSet, Glyph, LOS, Point, RNG, dirs, sample};
-use crate::game::{Board, UpdateEnv};
+use crate::base::glyph::{Color, Glyph};
+use crate::base::point::{Bound, LOS, Point, dirs};
+use crate::base::util::{HashSet, RNG, sample};
+
+use super::game::{Board, UpdateEnv};
 
 //////////////////////////////////////////////////////////////////////////////
 
