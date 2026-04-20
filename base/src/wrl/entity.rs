@@ -11,8 +11,9 @@ use crate::base::util::{HashMap, RNG, sample};
 
 use super::ai::AIState;
 use super::dex::{Attack, Species};
+use super::event::Location;
 use super::game::MOVE_TIMER;
-use super::knowledge::{Knowledge, Location};
+use super::knowledge::Knowledge;
 
 //////////////////////////////////////////////////////////////////////////////
 

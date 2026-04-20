@@ -13,10 +13,10 @@ use super::ai::{CheckFollowerSquare, ChooseDefenseSquare};
 use super::dex::{Attack, Species};
 use super::effect::{Frame, ParticleData, RenderData};
 use super::entity::{AttackTarget, Command, EID, Entity, Teammate};
+use super::event::{Call, Location, Sound};
 use super::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_, SUMMON_RANGE};
 use super::game::{Action, Input, ShoutAction, SummonAction, Tile, show_item};
-use super::knowledge::{Call, Location, PointLookup, Sound};
-use super::knowledge::{EntityKnowledge, Knowledge};
+use super::knowledge::{EntityKnowledge, Knowledge, PointLookup};
 
 //////////////////////////////////////////////////////////////////////////////
 

@@ -8,10 +8,11 @@ use crate::base::util::{HashMap, RNG};
 use super::debug::DebugLog;
 use super::dex::Species;
 use super::entity::{Entity, EID};
-use super::knowledge::{AttackEvent, Call, CallEvent, Event, EventData, Sense};
-use super::knowledge::{EntityKnowledge, Knowledge, Location, Timestamp, UID};
+use super::event::{AttackEvent, Call, CallEvent, Event, EventData, Location, Sense, UID};
+use super::knowledge::{EntityKnowledge, Knowledge};
 use super::game::CALL_VOLUME;
 use super::list::{Handle, List};
+use super::time::Timestamp;
 
 //////////////////////////////////////////////////////////////////////////////
 

@@ -19,9 +19,11 @@ use super::debug::DebugFile;
 use super::effect::{CB, Effect, Frame, FT, Particle, ParticleData, RenderData, self};
 use super::entity::{Command, Individual, Teammate};
 use super::entity::{EID, Entity, EntityArgs, EntityMap};
-use super::knowledge::{Call, Knowledge, Location, Sense, Timedelta, Timestamp};
-use super::knowledge::{AttackEvent, CallEvent, Event, EventData, MoveEvent};
+use super::event::{Call, Location, Sense};
+use super::event::{AttackEvent, CallEvent, Event, EventData, MoveEvent};
+use super::knowledge::Knowledge;
 use super::mapgen::mapgen_with_size as mapgen;
+use super::time::{Timedelta, Timestamp};
 use super::ui::{UI, get_direction};
 
 //////////////////////////////////////////////////////////////////////////////

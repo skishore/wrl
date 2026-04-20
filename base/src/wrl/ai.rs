@@ -19,12 +19,13 @@ use super::bhv::{Bhv, Result};
 use super::debug::{DebugFile, DebugLine, DebugLog};
 use super::dex::{Attack, Species};
 use super::entity::{AttackTarget, Command, Entity};
+use super::event::{Call, Location, Sense};
 use super::game::{Item, move_ready};
 use super::game::{FOV_RADIUS_NPC, CALL_VOLUME, FOLLOW_RANGE, SUMMON_RANGE};
 use super::game::{Action, AttackAction, CallAction, EatAction, MoveAction};
-use super::knowledge::{Knowledge, ScentKnowledge};
-use super::knowledge::{Call, Location, PointLookup, Sense, Timestamp};
+use super::knowledge::{Knowledge, PointLookup, ScentKnowledge};
 use super::threats::{FightOrFlight, ThreatState};
+use super::time::Timestamp;
 
 //////////////////////////////////////////////////////////////////////////////
 
