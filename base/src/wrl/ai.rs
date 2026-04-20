@@ -20,9 +20,8 @@ use super::debug::{DebugFile, DebugLine, DebugLog};
 use super::dex::{Attack, Species};
 use super::entity::{AttackTarget, Command, Entity};
 use super::event::{Call, Location, Sense};
-use super::game::{Item, move_ready};
+use super::game::{Action, Item, move_ready};
 use super::game::{FOV_RADIUS_NPC, CALL_VOLUME, FOLLOW_RANGE, SUMMON_RANGE};
-use super::game::{Action, AttackAction, CallAction, EatAction, MoveAction};
 use super::knowledge::{Knowledge, PointLookup, ScentKnowledge};
 use super::threats::{FightOrFlight, ThreatState};
 use super::time::Timestamp;
@@ -644,7 +643,7 @@ fn FollowDirs(ctx: &mut Ctx, kind: DirsKind) -> Option<Action> {
     } else {
         bb.dirs.used = true;
     }
-    Some(Action::Look(dir))
+    Some(Action::Look { look: dir })
 }
 
 fn Assess(ctx: &mut Ctx) -> Option<Action> {
@@ -716,12 +715,12 @@ fn WarnOffThreats(ctx: &mut Ctx) -> Option<Action> {
 
         if result.is_some() { continue; }
 
-        let (call, look) = (Call::Warning, threat.pos - pos);
+        let look = threat.pos - pos;
         if warn {
-            result = Some(Action::Call(CallAction { call, look }));
+            result = Some(Action::Call { look, call: Call::Warning });
             bb.last_warning = known.time();
         } else if stare {
-            result = Some(Action::Look(look));
+            result = Some(Action::Look { look });
         };
     }
     result
@@ -870,7 +869,7 @@ fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
         ctx.blackboard.path = path;
         ctx.blackboard.path.step += 1;
     }
-    Some(Action::Move(MoveAction { look, step, turns }))
+    Some(Action::Move { look, step, turns })
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -892,14 +891,14 @@ fn AttackTarget(ctx: &mut Ctx, target: Point) -> Option<Action> {
     if attacks.is_empty() { return None; }
 
     let attack = *sample(attacks, ctx.env.rng);
-    AttackUse(ctx, target, attack)
+    AttackWith(ctx, target, attack)
 }
 
-fn AttackUse(ctx: &mut Ctx, target: Point, attack: &'static Attack) -> Option<Action> {
+fn AttackWith(ctx: &mut Ctx, target: Point, attack: &'static Attack) -> Option<Action> {
     let Ctx { entity, known, pos: source, .. } = *ctx;
     let valid = |x| CanAttackTarget(x, target, known, attack.range);
     if move_ready(entity) && valid(source) {
-        return Some(Action::Attack(AttackAction { attack, target }));
+        return Some(Action::Attack { target, attack });
     }
     PathToTarget(ctx, target, attack.range, valid)
 }
@@ -920,7 +919,7 @@ fn PathToTarget<F: Fn(Point) -> bool>(
     let check = |p: Point| known.get(p).status();
     let step = |dir: Point| {
         let look = target - source - dir;
-        Action::Move(MoveAction { step: dir, look, turns: 1. })
+        Action::Move { step: dir, look, turns: 1. }
     };
 
     // Given a non-empty list of "good" directions (each of which brings us
@@ -1059,17 +1058,17 @@ fn ChooseNeighbor<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> 
 fn EatMeatNearby(ctx: &mut Ctx) -> Option<Action> {
     let Ctx { known, pos, .. } = *ctx;
     let target = ChooseNeighbor(ctx, PathKind::Meat, HasMeat)?;
-    if !known.get(target).visible() { return Some(Action::Look(target - pos)); }
+    if !known.get(target).visible() { return Some(Action::Look { look: target - pos }); }
 
     ctx.blackboard.hunger.update(MAX_HUNGER);
 
-    Some(Action::Eat(EatAction { target, item: Some(Item::Corpse) }))
+    Some(Action::Eat { target, item: Some(Item::Corpse) })
 }
 
 fn EatBerryNearby(ctx: &mut Ctx) -> Option<Action> {
     let Ctx { known, pos, .. } = *ctx;
     let target = ChooseNeighbor(ctx, PathKind::Berry, HasBerry)?;
-    if !known.get(target).visible() { return Some(Action::Look(target - pos)); }
+    if !known.get(target).visible() { return Some(Action::Look { look: target - pos }); }
 
     let prev = ctx.blackboard.hunger.cur;
     let gain = ctx.env.rng.random_range(HUNGER_GAIN);
@@ -1080,18 +1079,18 @@ fn EatBerryNearby(ctx: &mut Ctx) -> Option<Action> {
         ctx.blackboard.hunger.active = false;
     }
 
-    Some(Action::Eat(EatAction { target, item: Some(Item::Berry) }))
+    Some(Action::Eat { target, item: Some(Item::Berry) })
 }
 
 fn DrinkWaterNearby(ctx: &mut Ctx) -> Option<Action> {
     let Ctx { known, pos, .. } = *ctx;
     let target = ChooseNeighbor(ctx, PathKind::Water, HasWater)?;
-    if !known.get(target).visible() { return Some(Action::Look(target - pos)); }
+    if !known.get(target).visible() { return Some(Action::Look { look: target - pos }); }
 
     let gain = ctx.env.rng.random_range(THIRST_GAIN);
     ctx.blackboard.thirst.update(gain);
 
-    Some(Action::Drink(target))
+    Some(Action::Drink { target })
 }
 
 fn FindNearbyBerryTree(ctx: &mut Ctx) -> Option<Action> {
@@ -1104,7 +1103,8 @@ fn FindNearbyBerryTree(ctx: &mut Ctx) -> Option<Action> {
     }
 
     let target = ChooseNeighbor(ctx, kind, valid)?;
-    if !known.get(target).visible() { Some(Action::Look(target - pos)) } else { None }
+    if !known.get(target).visible() { return Some(Action::Look { look: target - pos }); }
+    None
 }
 
 fn RestHere(ctx: &mut Ctx) -> Option<Action> {
@@ -1296,7 +1296,7 @@ fn SearchForEnemy(ctx: &mut Ctx) -> Option<Action> {
     if (target - pos).len_l1() == 1 {
         let status = known.get(target).status();
         let look = matches!(status, Status::Blocked | Status::Occupied);
-        if look { return Some(Action::Look(target - pos)); }
+        if look { return Some(Action::Look { look: target - pos }); }
     }
 
     let kind = PathKind::Enemy;
@@ -1384,7 +1384,7 @@ fn LookForThreats(ctx: &mut Ctx) -> Option<Action> {
     if !visible.is_empty() {
         let threat = *visible.select_nth_unstable_by_key(
             0, |&p| ((p - pos).len_l2_squared(), p.0, p.1)).1;
-        return Some(Action::Look(threat - pos));
+        return Some(Action::Look { look: threat - pos });
     }
 
     let dirs: Vec<_> = threats.iter().filter_map(
@@ -1456,7 +1456,7 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
     threats.on_call_for_help(ctx.pos, ctx.known.time());
 
     let look = threats.hostile.first().map(|x| x.pos - ctx.pos).unwrap_or(ctx.dir);
-    Some(Action::Call(CallAction { call: Call::Help, look }))
+    Some(Action::Call { look, call: Call::Help })
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -1624,8 +1624,8 @@ fn UseSelectedAttack(ctx: &mut Ctx) -> Option<Action> {
     if state.target.sense == Sense::Smell { return None; }
     if state.target.time != ctx.known.time() { return None; }
 
-    let action = AttackUse(ctx, state.target.pos, attack)?;
-    if matches!(action, Action::Attack(..)) { ctx.entity.command.take(); }
+    let action = AttackWith(ctx, state.target.pos, attack)?;
+    if matches!(action, Action::Attack { .. }) { ctx.entity.command.take(); }
     Some(action)
 }
 
@@ -1634,8 +1634,8 @@ fn FollowSimpleCommand(ctx: &mut Ctx) -> Option<Action> {
     match command {
         Command::Attack(attack, target) => {
             if target.eid.is_some() { return None; }
-            let action = AttackUse(ctx, target.loc.pos, attack)?;
-            if matches!(action, Action::Attack(..)) { ctx.entity.command.take(); }
+            let action = AttackWith(ctx, target.loc.pos, attack)?;
+            if matches!(action, Action::Attack { .. }) { ctx.entity.command.take(); }
             Some(action)
         },
         Command::Return => {
@@ -1667,11 +1667,11 @@ fn DefendLeader(ctx: &mut Ctx) -> Option<Action> {
     let path = AStar(source, target, ASTAR_LIMIT_ATTACK, check)?;
 
     let Some(&next) = path.first() else {
-        return Some(Action::Look(source - leader.pos))
+        return Some(Action::Look { look: source - leader.pos })
     };
 
     let (look, step) = (next - leader.pos, next - source);
-    Some(Action::Move(MoveAction { step, look, turns: 0.5 }))
+    Some(Action::Move { step, look, turns: 0.5 })
 }
 
 fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
@@ -1680,7 +1680,7 @@ fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
 
     let turns = 0.5;
     let valid = |p: Point| CheckFollowerSquareImpl(leader, known, p, p == source);
-    let step = |step: Point| { Action::Move(MoveAction { look: step, step, turns }) };
+    let step = |step: Point| { Action::Move { look: step, step, turns } };
 
     if Bound::new(3).contains(source - target) {
         let mut moves: Vec<_> = dirs::ALL.iter().filter_map(

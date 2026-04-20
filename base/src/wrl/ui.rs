@@ -15,7 +15,7 @@ use super::effect::{Frame, ParticleData, RenderData};
 use super::entity::{AttackTarget, Command, EID, Entity, Teammate};
 use super::event::{Call, Location, Sound};
 use super::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_, SUMMON_RANGE};
-use super::game::{Action, Input, ShoutAction, SummonAction, Tile, show_item};
+use super::game::{Action, Input, Tile, show_item};
 use super::knowledge::{EntityKnowledge, Knowledge, PointLookup};
 
 //////////////////////////////////////////////////////////////////////////////
@@ -332,14 +332,14 @@ fn select_valid_target(ui: &mut UI, me: &Entity) -> Option<EID> {
             let eid = entity.map(|x| x.eid);
             let loc = Location { pos: target.target, time: me.known.time() };
             let command = Command::Attack(attack, AttackTarget { eid, loc, seen });
-            ui.action = Some(Action::Shout(ShoutAction { summon, command }));
+            ui.action = Some(Action::Shout { summon, command });
 
             let entity = entity?;
             if can_target(entity) { Some(entity.eid) } else { None }
         }
         &TargetData::Summon { team, .. } => {
             let target = target.target;
-            ui.action = Some(Action::Summon(SummonAction { team, target }));
+            ui.action = Some(Action::Summon { team, target });
             ui.focus
         }
     }
@@ -482,7 +482,7 @@ fn process_ui_input(ui: &mut UI, me: &Entity, input: Input) -> bool {
         } else if chosen >= 0 {
             if chosen == count - 1 {
                 let (summon, command) = (x.summon as usize, Command::Return);
-                ui.action = Some(Action::Shout(ShoutAction { summon, command }));
+                ui.action = Some(Action::Shout { summon, command });
                 ui.menu = None;
             } else if !valid(chosen) {
                 let name = summon.species.name;

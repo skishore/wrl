@@ -875,41 +875,20 @@ fn advance_turn(board: &mut Board) -> Option<EID> {
 // Action
 
 #[derive(Debug)]
-pub struct AttackAction { pub attack: &'static Attack, pub target: Point }
-
-#[derive(Debug)]
-pub struct CallAction { pub call: Call, pub look: Point }
-
-#[derive(Debug)]
-pub struct EatAction { pub target: Point, pub item: Option<Item> }
-
-#[derive(Debug)]
-pub struct MoveAction { pub look: Point, pub step: Point, pub turns: f64 }
-
-#[derive(Debug)]
-pub struct RecallAction { pub summon: usize }
-
-#[derive(Debug)]
-pub struct SummonAction { pub team: usize, pub target: Point }
-
-#[derive(Debug)]
-pub struct ShoutAction { pub summon: usize, pub command: Command }
-
-#[derive(Debug)]
 pub enum Action {
     Idle,
     Rest,
-    SniffAround,
     WaitForInput,
-    Look(Point),
-    Call(CallAction),
-    Move(MoveAction),
-    Attack(AttackAction),
-    Drink(Point),
-    Eat(EatAction),
-    Recall(RecallAction),
-    Summon(SummonAction),
-    Shout(ShoutAction),
+    SniffAround,
+    Look { look: Point },
+    Drink { target: Point },
+    Eat { target: Point, item: Option<Item> },
+    Call { look: Point, call: Call },
+    Move { look: Point, step: Point, turns: f64 },
+    Attack { target: Point, attack: &'static Attack },
+    Recall { summon: usize },
+    Summon { team: usize, target: Point },
+    Shout { summon: usize, command: Command },
 }
 
 struct ActionResult {
@@ -925,9 +904,8 @@ impl ActionResult {
     fn success_turns(turns: f64) -> Self { Self { success: true,  moves: 0., turns } }
 }
 
-fn can_attack(board: &Board, entity: &Entity, action: &AttackAction) -> bool {
-    let (known, source) = (&entity.known, entity.pos);
-    let (range, target) = (action.attack.range, action.target);
+fn can_attack(board: &Board, me: &Entity, target: Point, range: Bound) -> bool {
+    let (known, source) = (&me.known, me.pos);
 
     if source == target { return false; }
     if !range.contains(source - target) { return false; }
@@ -939,8 +917,8 @@ fn can_attack(board: &Board, entity: &Entity, action: &AttackAction) -> bool {
     })
 }
 
-fn can_summon(board: &Board, entity: &Entity, target: Point) -> bool {
-    let (known, range, source) = (&entity.known, SUMMON_RANGE, entity.pos);
+fn can_summon(board: &Board, me: &Entity, target: Point) -> bool {
+    let (known, range, source) = (&me.known, SUMMON_RANGE, me.pos);
 
     if source == target { return false; }
     if !range.contains(source - target) { return false; }
@@ -1006,11 +984,11 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             board.add_effect(effect, &mut state.env);
             ActionResult::success()
         }
-        Action::Look(dir) => {
-            entity.face_direction(dir);
+        Action::Look { look } => {
+            entity.face_direction(look);
             ActionResult::success()
         }
-        Action::Drink(target) => {
+        Action::Drink { target } => {
             let (source, dir) = (entity.pos, target - entity.pos);
             if dir.len_l1() > 1 { return ActionResult::failure(); }
 
@@ -1027,7 +1005,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             board.add_effect(effect, &mut state.env);
             ActionResult::success()
         }
-        Action::Eat(EatAction { target, item }) => {
+        Action::Eat { target, item } => {
             let dir = target - source;
             if dir.len_l1() > 1 { return ActionResult::failure(); }
 
@@ -1052,7 +1030,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             board.add_effect(effect, &mut state.env);
             ActionResult::success()
         }
-        Action::Call(CallAction { call, look }) => {
+        Action::Call { call, look } => {
             let species = entity.species;
             let noise = Noise::from_entity(entity, CALL_VOLUME);
             let board = &mut state.board;
@@ -1090,7 +1068,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             board.add_effect(effect, &mut state.env);
             ActionResult::success()
         }
-        Action::Move(MoveAction { look, step, turns }) => {
+        Action::Move { look, step, turns } => {
             entity.face_direction(look);
             let slowed = turns < SLOWED_TURNS && !move_ready(entity);
             let turns = if slowed { SLOWED_TURNS } else { turns };
@@ -1152,11 +1130,10 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             }
             ActionResult::success_turns(turns)
         }
-        Action::Attack(action) => {
+        Action::Attack { attack, target } => {
             let board = &mut state.board;
             let entity = &board.entities[eid];
-            let AttackAction { attack, target } = action;
-            if !can_attack(board, entity, &action) {
+            if !can_attack(board, entity, target, attack.range) {
                 board.entities[eid].face_direction(target - source);
                 return ActionResult::failure();
             }
@@ -1222,7 +1199,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             state.add_effect(apply_effect(effect, FT::Hit, Box::new(cb)));
             ActionResult::success_moves(1.)
         }
-        Action::Recall(RecallAction { summon }) => {
+        Action::Recall { summon } => {
             let fail = ActionResult::failure();
             let Some(&oid) = entity.summons.get(summon) else { return fail };
 
@@ -1235,7 +1212,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             state.add_effect(apply_effect(effect, FT::Withdraw, cb));
             ActionResult::success()
         }
-        Action::Summon(SummonAction { team, target }) => {
+        Action::Summon { team, target } => {
             let fail = ActionResult::failure();
             let Some(Teammate::In(ind)) = entity.team.get(team) else { return fail };
             if ind.cur_hp == 0 { return fail; }
@@ -1267,7 +1244,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             state.add_effect(apply_effect(effect, FT::Summon, cb));
             ActionResult::success()
         }
-        Action::Shout(ShoutAction { summon, command }) => {
+        Action::Shout { summon, command } => {
             let fail = ActionResult::failure();
             let Some(&oid) = entity.summons.get(summon) else { return fail };
 
@@ -1382,7 +1359,7 @@ fn process_input(state: &mut State, input: Input) {
 
     let player = state.get_player();
     let turns = if player.sneaking { 2. } else { 1. };
-    state.input = Action::Move(MoveAction { look: dir, step: dir, turns });
+    state.input = Action::Move { look: dir, step: dir, turns };
 }
 
 fn update_player_knowledge(state: &mut State) {
@@ -1442,7 +1419,7 @@ fn update_state(state: &mut State) {
             if !matches!(summon.command.get(), Some(Command::Return)) { continue; }
             if !can_summon(&state.board, player, summon.pos) { continue; }
 
-            state.input = Action::Recall(RecallAction { summon: i });
+            state.input = Action::Recall { summon: i };
             summon.command.take();
             return true;
         }

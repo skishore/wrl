@@ -115,12 +115,7 @@ impl Entity {
         }
     }
 
-    pub fn to_individual(&self) -> Individual {
-        let Self { species, cur_hp, .. } = *self;
-        Individual { species, cur_hp }
-    }
-
-    // Getters
+    // Text formatting:
 
     pub fn lower(&self) -> String {
         if self.player { return "you".into() };
@@ -137,6 +132,8 @@ impl Entity {
         let name = self.species.name;
         if self.leader.is_some() { name.into() } else { format!("The wild {}", name) }
     }
+
+    // Getters:
 
     pub fn hp_fraction(&self) -> f64 {
         self.cur_hp as f64 / std::cmp::max(self.max_hp, 1) as f64
@@ -160,11 +157,16 @@ impl Entity {
         })
     }
 
+    pub fn to_individual(&self) -> Individual {
+        let Self { species, cur_hp, .. } = *self;
+        Individual { species, cur_hp }
+    }
+
     pub fn too_big_to_hide(&self) -> bool {
         self.species.human() && !self.sneaking
     }
 
-    // Mutators
+    // Mutators:
 
     pub fn face_direction(&mut self, dir: Point) {
         if dir != dirs::NONE { self.dir = dir; }
