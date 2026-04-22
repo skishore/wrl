@@ -24,7 +24,7 @@ use super::event::{AttackEvent, CallEvent, Event, EventData, MoveEvent};
 use super::knowledge::Knowledge;
 use super::mapgen::mapgen_with_size as mapgen;
 use super::time::{Timedelta, Timestamp};
-use super::ui::{UI, get_direction};
+use super::ui::UI;
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -1337,29 +1337,9 @@ fn apply_effect(mut effect: Effect, what: FT, callback: CB) -> Effect {
 // Update
 
 fn process_input(state: &mut State, input: Input) {
-    let player = &state.board.entities[state.player];
-    let processed = state.env.ui.process_input(player, input);
+    let player = &mut state.board.entities[state.player];
+    state.env.ui.process_input(player, input);
     state.input = state.env.ui.action.take().unwrap_or(Action::WaitForInput);
-    if processed { return; }
-
-    let Input::Char(ch) = input else { return; };
-
-    if ch == 'c' {
-        let player = state.mut_player();
-        player.sneaking = !player.sneaking;
-        return;
-    }
-
-    let Some(dir) = get_direction(ch) else { return; };
-
-    if dir == Point::default() {
-        state.input = Action::Idle;
-        return;
-    }
-
-    let player = state.get_player();
-    let turns = if player.sneaking { 2. } else { 1. };
-    state.input = Action::Move { look: dir, step: dir, turns };
 }
 
 fn update_player_knowledge(state: &mut State) {
@@ -1626,8 +1606,6 @@ impl State {
     // Private helpers:
 
     fn get_player(&self) -> &Entity { &self.board.entities[self.player] }
-
-    fn mut_player(&mut self) -> &mut Entity { &mut self.board.entities[self.player] }
 
     fn record_trace(&mut self, action: &Action, eid: EID) {
         if matches!(action, Action::WaitForInput) { return; }

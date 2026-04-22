@@ -60,7 +60,7 @@ const PARTY_KEYS: [char; 6] = ['a', 'b', 'c', 'd', 'e', 'f'];
 
 // Helpers
 
-pub fn get_direction(ch: char) -> Option<Point> {
+fn get_direction(ch: char) -> Option<Point> {
     match ch {
         'h' => Some(dirs::W),
         'j' => Some(dirs::S),
@@ -349,49 +349,106 @@ fn select_valid_target(ui: &mut UI, me: &Entity) -> Option<EID> {
 
 // UI inputs
 
-fn process_ui_input(ui: &mut UI, me: &Entity, input: Input) -> bool {
+fn process_summon_input(ui: &mut UI, me: &Entity, input: Input) {
+    let choice = ui.choice.as_mut().unwrap();
+
+    // Cancel out of the dialog:
+
+    if input == Input::Escape {
+        ui.log.log_neutral("Canceled.");
+        ui.choice = None;
+        return;
+    }
+
+    // Use direction keys to scroll up and down:
+
+    let n = me.team.len();
+    let dir = if let Input::Char(x) = input { get_direction(x) } else { None };
+
+    if let Some(dir) = dir && dir.0 == 0 {
+        *choice += dir.1;
+        if *choice >= n as i32 { *choice = 0; }
+        if *choice < 0 { *choice = max(n as i32 - 1, 0); }
+        return;
+    }
+
+    // Select an entry with either its key or Enter:
+
+    let enter = input == Input::Char('\n') || input == Input::Char('.');
+    let chosen = if enter {
+        Some(*choice as usize)
+    } else {
+        PARTY_KEYS.iter().position(|x| input == Input::Char(*x))
+    };
+
+    if let Some(chosen) = chosen {
+        let teammate = me.team.get(chosen);
+        if teammate.is_none() {
+            let error = format!("You are only carrying {} Pokemon!", n);
+            ui.log.log_failure(error);
+        } else if let Some(&Teammate::Out(x)) = teammate {
+            let x = me.known.entity(x).unwrap();
+            let error = format!("{} is already out!", x.species.name);
+            ui.log.log_failure(error);
+        } else if let Some(Teammate::In(x)) = teammate && x.cur_hp == 0 {
+            let error = format!("{} has no strength left!", x.species.name);
+            ui.log.log_failure(error);
+        } else if let Some(Teammate::In(x)) = teammate {
+            let data = TargetData::Summon { team: chosen, range: SUMMON_RANGE };
+            let target = init_summon_target(me, data);
+            let message = format!("Choose where to summon {}:", x.species.name);
+            ui.log.log_neutral(message);
+            ui.target = Some(target);
+            ui.choice = None;
+        }
+        return;
+    }
+}
+
+fn process_regular_input(ui: &mut UI, me: &mut Entity, input: Input) -> bool {
+    let index = SUMMON_KEYS.iter().position(|&x| input == Input::Char(x));
+    if let Some(i) = index && i >= me.summons.len() {
+        ui.log.log_neutral("Choose a Pokemon to send out with J/K:");
+        ui.choice = Some(0);
+        return true;
+    } else if let Some(i) = index {
+        ui.log.log_neutral("Choose a command with J/K:");
+        ui.menu = Some(Menu { choice: 0, summon: i });
+        return true;
+    }
+
+    let Input::Char(ch) = input else { return false; };
+
+    if ch == 'c' {
+        me.sneaking = !me.sneaking;
+        return true;
+    }
+
+    let Some(dir) = get_direction(ch) else { return false };
+
+    if dir == Point::default() {
+        ui.action = Some(Action::Idle);
+        return true;
+    }
+
+    let turns = if me.sneaking { 2. } else { 1. };
+    ui.action = Some(Action::Move { look: dir, step: dir, turns });
+    true
+}
+
+fn process_ui_input(ui: &mut UI, me: &mut Entity, input: Input) -> bool {
     let known = &*me.known;
     let tab = input == Input::Char('\t') || input == Input::BackTab;
     let enter = input == Input::Char('\n') || input == Input::Char('.');
 
-    if let Some(x) = &mut ui.choice {
-        let choice = if enter {
-            Some(*x as usize)
-        } else {
-            PARTY_KEYS.iter().position(|x| input == Input::Char(*x))
-        };
-        let n = me.team.len();
-        let dir = if let Input::Char(x) = input { get_direction(x) } else { None };
-        if let Some(dir) = dir && dir.0 == 0 {
-            *x += dir.1;
-            if *x >= n as i32 { *x = 0; }
-            if *x < 0 { *x = max(n as i32 - 1, 0); }
-        } else if let Some(choice) = choice {
-            let teammate = me.team.get(choice);
-            if teammate.is_none() {
-                let error = format!("You are only carrying {} Pokemon!", n);
-                ui.log.log_failure(error);
-            } else if let Some(&Teammate::Out(x)) = teammate {
-                let x = me.known.entity(x).unwrap();
-                let error = format!("{} is already out!", x.species.name);
-                ui.log.log_failure(error);
-            } else if let Some(Teammate::In(x)) = teammate && x.cur_hp == 0 {
-                let error = format!("{} has no strength left!", x.species.name);
-                ui.log.log_failure(error);
-            } else if let Some(Teammate::In(x)) = teammate {
-                let data = TargetData::Summon { team: choice, range: SUMMON_RANGE };
-                let target = init_summon_target(me, data);
-                let message = format!("Choose where to summon {}:", x.species.name);
-                ui.log.log_neutral(message);
-                ui.target = Some(target);
-                ui.choice = None;
-            }
-        } else if input == Input::Escape {
-            ui.log.log_neutral("Canceled.");
-            ui.choice = None;
-        }
+    // Mode: selecting a party member to summon:
+
+    if ui.choice.is_some() {
+        process_summon_input(ui, me, input);
         return true;
     }
+
+    // Multi-use target selection helpers:
 
     let apply_tab = |prev: Option<EID>, off: bool| -> Option<EID> {
         let rivals = rivals(me);
@@ -435,6 +492,8 @@ fn process_ui_input(ui: &mut UI, me: &Entity, input: Input) -> bool {
         Some(prev)
     };
 
+    // Mode: selecting a target on the map:
+
     if let Some(x) = &ui.target {
         let update = get_updated_target(x.target);
         if let Some(update) = update && update != x.target {
@@ -458,6 +517,8 @@ fn process_ui_input(ui: &mut UI, me: &Entity, input: Input) -> bool {
         }
         return true;
     }
+
+    // Mode: giving a command to a party member:
 
     if let Some(x) = &mut ui.menu {
         let summon = me.known.entity(me.summons[x.summon as usize]).unwrap();
@@ -504,6 +565,8 @@ fn process_ui_input(ui: &mut UI, me: &Entity, input: Input) -> bool {
         return true;
     }
 
+    // Regular mode: no modals active:
+
     if tab {
         ui.focus = apply_tab(ui.focus, true);
         return true;
@@ -522,18 +585,7 @@ fn process_ui_input(ui: &mut UI, me: &Entity, input: Input) -> bool {
         return true;
     }
 
-    let index = SUMMON_KEYS.iter().position(|&x| input == Input::Char(x));
-    if let Some(i) = index && i >= me.summons.len() {
-        ui.log.log_neutral("Choose a Pokemon to send out with J/K:");
-        ui.choice = Some(0);
-        return true;
-    } else if let Some(i) = index {
-        ui.log.log_neutral("Choose a command with J/K:");
-        ui.menu = Some(Menu { choice: 0, summon: i });
-        return true;
-    }
-
-    false
+    process_regular_input(ui, me, input)
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -704,7 +756,7 @@ impl UI {
         self.calls.insert(point, tanim);
     }
 
-    pub fn process_input(&mut self, me: &Entity, input: Input) -> bool {
+    pub fn process_input(&mut self, me: &mut Entity, input: Input) -> bool {
         process_ui_input(self, me, input)
     }
 
