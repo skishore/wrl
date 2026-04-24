@@ -4,16 +4,16 @@ use std::rc::Rc;
 use rand::Rng;
 use thin_vec::ThinVec;
 
-use crate::static_assert_size;
+use crate::flags;
 use crate::base::point::Point;
-use crate::base::pathing::Status;
 use crate::base::util::{HashMap, HashSet, RNG, clamp};
+use crate::base::pathing::Status;
 use crate::base::vision::Vision;
 
 use super::dex::Species;
 use super::entity::{EID, Entity, Teammate};
 use super::event::{Event, EventData, Location, Sense, Sound, UID};
-use super::game::{MOVE_TIMER, Board, Item, Light, Tile};
+use super::game::{MOVE_TIMER, Board, Cell, Item, Light, Tile};
 use super::list::{Handle, List};
 use super::time::{Timedelta, Timestamp, TurnTimer};
 
@@ -38,132 +38,84 @@ fn trophic_level(x: &Entity) -> i32 {
 
 //////////////////////////////////////////////////////////////////////////////
 
-impl std::ops::Deref for EntityKnowledge {
-    type Target = Location;
-    fn deref(&self) -> &Self::Target { &self.loc }
-}
+// Per-cell knowledge:
 
-impl std::ops::Deref for SourceKnowledge {
-    type Target = Location;
-    fn deref(&self) -> &Self::Target { &self.loc }
-}
+flags! { pub CellFlags(u32) { Light, Shade, Visible, SeeEntityAt } }
 
-impl std::ops::Deref for ScentKnowledge {
-    type Target = Location;
-    fn deref(&self) -> &Self::Target { &self.loc }
-}
+type CF = CellFlags;
 
-//////////////////////////////////////////////////////////////////////////////
-
-// Knowledge
-
-type CellHandle   = Handle<CellKnowledge>;
-type EntityHandle = Handle<EntityKnowledge>;
-type SourceHandle = Handle<SourceKnowledge>;
-
-type PointIndex = HashMap<Point, PointState>;
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum OccupantHandle { Entity(EntityHandle), Source(SourceHandle) }
-
-// Detailed knowledge about a map cell. Only updated when we see it.
 #[derive(Default)]
 pub struct CellKnowledge {
-    pub last_see_entity_at: Timestamp,
-    pub last_seen: Timestamp,
+    pub flags: CellFlags,
     pub items: ThinVec<Item>,
     pub point: Point,
     pub tile: &'static Tile,
     pub visibility: i32,
 
-    // Flags:
-    pub light: bool,
-    pub shade: bool,
-    pub visible: bool,
-    pub see_entity_at: bool,
+    pub last_seen: Timestamp,
+    pub last_see_entity_at: Timestamp,
 }
-#[cfg(target_pointer_width = "64")]
-static_assert_size!(CellKnowledge, 48);
 
-// Detailed knowledge about an entity. Only updated when we see it.
+impl CellKnowledge {
+    fn new(point: Point) -> Self {
+        Self { point, ..Default::default() }
+    }
+
+    // Raw flags-based predicates:
+
+    pub fn light(&self) -> bool { self.flags.any(CF::Light) }
+    pub fn shade(&self) -> bool { self.flags.any(CF::Shade) }
+    pub fn visible(&self) -> bool { self.flags.any(CF::Visible) }
+    pub fn see_entity_at(&self) -> bool { self.flags.any(CF::SeeEntityAt) }
+
+    // Updates:
+
+    fn clear_visibility_flags(&mut self) {
+        self.flags &= !(CF::Visible | CF::SeeEntityAt);
+    }
+
+    fn update(&mut self, cell: &Cell, flags: CellFlags, time: Timestamp, vision: &Vision) {
+        self.flags = flags;
+        self.tile = cell.tile;
+        self.visibility = vision.get_visibility_at(self.point);
+
+        // Update the cell's time fields.
+        self.last_seen = time;
+        if self.see_entity_at() { self.last_see_entity_at = time; }
+
+        // Clone items, but reuse the existing allocation, if any.
+        self.items.clear();
+        for &x in &cell.items { self.items.push(x); }
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// Per-entity knowledge:
+
+flags! { pub EntityFlags(u32) { Asleep, Friend, Rival, Sensed, Sneaking, Visible } }
+
+type EF = EntityFlags;
+
 pub struct EntityKnowledge {
     pub eid: EID,
     pub dir: Point,
     pub loc: Location,
     pub name: Option<Rc<str>>,
+    pub flags: EntityFlags,
     pub sense: Sense,
     pub species: &'static Species,
+    pub team: ThinVec<bool>,
 
     // Stats:
     pub hp: f64,
     pub pp: f64,
     pub delta: i32,
-
-    // Team:
-    pub team: ThinVec<bool>,
-
-    // Flags:
-    pub asleep: bool,
-    pub friend: bool,
-    pub rival: bool,
-    pub sensed: bool,
-    pub sneaking: bool,
-    pub visible: bool,
 }
-#[cfg(target_pointer_width = "64")]
-static_assert_size!(EntityKnowledge, 96);
 
-// Minimal knowledge about entities that we're only tracking indirectly.
-// We may have heard or glimpsed the entity, but we did not see it clearly.
-//
-// Used to tag events with a UID such that same UID => same event source.
-pub struct SourceKnowledge {
-    pub uid: UID,
-    pub eid: Option<EID>,
-    pub loc: Location,
-    pub sound: Option<Sound>,
-}
-#[cfg(target_pointer_width = "64")]
-static_assert_size!(SourceKnowledge, 40);
-
-// Limited information about a scent we detected.
-#[derive(Clone, Copy)]
-pub struct ScentKnowledge {
-    pub delta: i32,
-    pub loc: Location,
-    pub species: &'static Species,
-}
-#[cfg(target_pointer_width = "64")]
-static_assert_size!(ScentKnowledge, 32);
-
-#[derive(Default, Eq, PartialEq)]
-struct EIDState {
-    entity: Option<EntityHandle>,
-    source: Option<SourceHandle>,
-}
-#[cfg(target_pointer_width = "64")]
-static_assert_size!(EIDState, 8);
-
-#[derive(Default, Eq, PartialEq)]
-struct PointState {
-    cell: Option<CellHandle>,
-    occupant: Option<OccupantHandle>,
-}
-#[cfg(target_pointer_width = "64")]
-static_assert_size!(PointState, 12);
-
-#[derive(Default)]
-pub struct Knowledge {
-    pub cells: List<CellKnowledge>,
-    pub entities: List<EntityKnowledge>,
-    pub sources: List<SourceKnowledge>,
-    pub scents: Vec<ScentKnowledge>,
-    pub events: Vec<Event>,
-
-    timer: TurnTimer,
-    eid_index: HashMap<EID, EIDState>,
-    pos_index: HashMap<Point, PointState>,
-    last_uid: u64,
+impl std::ops::Deref for EntityKnowledge {
+    type Target = Location;
+    fn deref(&self) -> &Self::Target { &self.loc }
 }
 
 impl EntityKnowledge {
@@ -173,35 +125,98 @@ impl EntityKnowledge {
             dir: Default::default(),
             loc: Default::default(),
             name: Default::default(),
+            flags: EF::Empty,
             sense: Sense::Sight,
             species,
-
-            // Stats:
-            hp: Default::default(),
-            pp: Default::default(),
-            delta: Default::default(),
-
-            // Team:
             team: Default::default(),
 
-            // Flags:
-            asleep: false,
-            friend: false,
-            rival: false,
-            sensed: false,
-            sneaking: false,
-            visible: false,
+            // Stats:
+            hp: 0.,
+            pp: 0.,
+            delta: 0,
         }
     }
 
-    pub fn too_big_to_hide(&self) -> bool {
-        self.species.human() && !self.sneaking
+    // Raw flags-based predicates:
+
+    pub fn asleep(&self) -> bool { self.flags.any(EF::Asleep) }
+    pub fn friend(&self) -> bool { self.flags.any(EF::Friend) }
+    pub fn rival(&self) -> bool { self.flags.any(EF::Rival) }
+    pub fn sensed(&self) -> bool { self.flags.any(EF::Sensed) }
+    pub fn sneaking(&self) -> bool { self.flags.any(EF::Sneaking) }
+    pub fn visible(&self) -> bool { self.flags.any(EF::Visible) }
+
+    pub fn too_big_to_hide(&self) -> bool { self.species.human() && !self.sneaking() }
+
+    // Updates:
+
+    fn clear_visibility_flags(&mut self) {
+        self.flags &= !(EF::Sensed | EF::Visible);
     }
+
+    fn update_for_event(&mut self, event: &Event) {
+        self.loc = event.loc;
+        self.sense = event.sense;
+    }
+
+    fn update(&mut self, me: &Entity, other: &Entity, sense: Sense, time: Timestamp) {
+        // Entities are friends iff they're both tame and in the same party.
+        let leader = |entity: &Entity| { entity.leader.unwrap_or(entity.eid) };
+
+        // Entities are rivals iff one is tame and one is wild, or they're
+        // both tame but in different parties.
+        let trainer = |entity: &Entity| {
+            if let Some(x) = entity.leader { return Some(x) };
+            if entity.species.human() { return Some(entity.eid); }
+            None
+        };
+
+        self.dir = other.dir;
+        self.loc = Location { pos: other.pos, time };
+        self.name = other.name.clone();
+        self.sense = sense;
+        self.species = other.species;
+
+        self.team.clear();
+        other.team.iter().for_each(|x| match x {
+            Teammate::Out(_) => self.team.push(true),
+            Teammate::In(x) => self.team.push(x.cur_hp > 0),
+        });
+
+        self.hp = other.hp_fraction();
+        self.pp = 1. - clamp(other.move_timer as f64 / MOVE_TIMER as f64, 0., 1.);
+        self.delta = trophic_level(other) - trophic_level(me);
+
+        self.flags = EF::Sensed;
+        if other.asleep { self.flags |= EF::Asleep; }
+        if other.sneaking { self.flags |= EF::Sneaking; }
+        if sense == Sense::Sight { self.flags |= EF::Visible; }
+        if leader(me) == leader(other) { self.flags |= EF::Friend; }
+        if trainer(me) != trainer(other) { self.flags |= EF::Rival; }
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// Per-source knowledge:
+
+pub struct SourceKnowledge {
+    eid: Option<EID>,
+    pub uid: UID,
+    pub loc: Location,
+    pub sense: Sense,
+    pub sound: Option<Sound>,
+}
+
+impl std::ops::Deref for SourceKnowledge {
+    type Target = Location;
+    fn deref(&self) -> &Self::Target { &self.loc }
 }
 
 impl SourceKnowledge {
     fn new(uid: UID, event: &Event) -> Self {
-        Self { uid, eid: None, loc: event.loc, sound: None }
+        let Event { eid, loc, sense, .. } = *event;
+        Self { eid, uid, loc, sense, sound: event.sound() }
     }
 
     pub fn freshness(&self, known: &Knowledge) -> f64 {
@@ -209,6 +224,64 @@ impl SourceKnowledge {
         let turns = known.time_to_turn(self.time).floor() as i32;
         1. - clamp(turns, 0, limit) as f64 / limit as f64
     }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// Per-scent knowledge:
+
+#[derive(Clone, Copy)]
+pub struct ScentKnowledge {
+    pub delta: i32,
+    pub loc: Location,
+    pub species: &'static Species,
+}
+
+impl std::ops::Deref for ScentKnowledge {
+    type Target = Location;
+    fn deref(&self) -> &Self::Target { &self.loc }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// Overall knowledge index:
+
+type CellHandle = Handle<CellKnowledge>;
+type EntityHandle = Handle<EntityKnowledge>;
+type SourceHandle = Handle<SourceKnowledge>;
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum OccupantHandle { Entity(EntityHandle), Source(SourceHandle) }
+
+#[derive(Default, Eq, PartialEq)]
+struct EIDEntry {
+    entity: Option<EntityHandle>,
+    source: Option<SourceHandle>,
+}
+
+#[derive(Default, Eq, PartialEq)]
+struct PointEntry {
+    cell: Option<CellHandle>,
+    occupant: Option<OccupantHandle>,
+}
+
+#[derive(Default)]
+pub struct Knowledge {
+    // Core memories. Recent memories come first.
+    pub cells: List<CellKnowledge>,
+    pub entities: List<EntityKnowledge>,
+    pub sources: List<SourceKnowledge>,
+
+    // Scents. Recent scents come first.
+    pub scents: Vec<ScentKnowledge>,
+
+    // Events. Recent events come last, unlike the other lists.
+    pub events: Vec<Event>,
+
+    timer: TurnTimer,
+    eid_index: HashMap<EID, EIDEntry>,
+    pos_index: HashMap<Point, PointEntry>,
+    last_uid: u64,
 }
 
 impl Knowledge {
@@ -256,80 +329,13 @@ impl Knowledge {
     pub fn observe_event(&mut self, me: &Entity, event: &Event) {
         self.timer.update(event.time);
 
-        let mut clone = event.clone();
-        clone.eid = None;
-        clone.uid = None;
-
-        let Some(eid) = event.eid else {
-            let uid = Self::get_next_uid(&mut self.last_uid);
-            let handle = self.sources.push_front(SourceKnowledge::new(uid, event));
-            let occupant = OccupantHandle::Source(handle);
-            Self::update_pos(&mut self.pos_index, occupant, None, Some(event.pos));
-            clone.uid = Some(uid);
-            self.events.push(clone);
-            return;
-        };
-
-        let limit = self.time_at_turn(SOURCE_TRACKING_LIMIT);
-        let entry = self.eid_index.entry(eid).or_default();
-
-        // Check if we can link this event to an existing source.
-        if let Some(x) = entry.source {
-            let source = &mut self.sources[x];
-            if source.time > limit {
-                clone.uid = Some(source.uid);
-            } else {
-                entry.source = None;
-            }
+        type OH = OccupantHandle;
+        let mut cloned = event.clone();
+        match self.source_for_event(me, &mut cloned) {
+            OH::Entity(x) => self.update_entity(x, |x| x.update_for_event(event)),
+            OH::Source(x) => self.update_source(x, |x| *x = SourceKnowledge::new(x.uid, event)),
         }
-
-        // Check if we can link this event to an existing entity.
-        let link_to_entity = |x: &EntityKnowledge| match event.sense {
-            Sense::Sight => true,
-            Sense::Smell => false,
-            Sense::Sound => x.time > limit,
-        };
-        if !me.player && let Some(h) = entry.entity && link_to_entity(&self.entities[h]) {
-            let entity = &mut self.entities[h];
-            let (s, t) = (entity.pos, event.pos);
-            let occupant = OccupantHandle::Entity(h);
-            Self::update_pos(&mut self.pos_index, occupant, Some(s), Some(t));
-
-            if let Some(x) = entry.source.take() {
-                let occupant = OccupantHandle::Source(x);
-                let SourceKnowledge { loc, .. } = self.sources.remove(x);
-                Self::update_pos(&mut self.pos_index, occupant, Some(loc.pos), None);
-            }
-
-            entity.loc = event.loc;
-            entity.sense = event.sense;
-
-            self.entities.move_to_front(h);
-
-            clone.eid = Some(eid);
-            self.events.push(clone);
-            return;
-        }
-
-        let existing = entry.source;
-        let handle = existing.unwrap_or_else(|| {
-            let uid = Self::get_next_uid(&mut self.last_uid);
-            self.sources.push_front(SourceKnowledge::new(uid, &event))
-        });
-        if entry.source.is_some() { self.sources.move_to_front(handle); }
-        if entry.source.is_none() { entry.source = Some(handle); }
-
-        let source = &mut self.sources[handle];
-        let occupant = OccupantHandle::Source(handle);
-        let (s, t) = (existing.map(|_| source.pos), event.pos);
-        Self::update_pos(&mut self.pos_index, occupant, s, Some(t));
-
-        source.eid = Some(eid);
-        source.loc = event.loc;
-        source.sound = event.sound();
-
-        clone.uid = Some(source.uid);
-        self.events.push(clone);
+        self.events.push(cloned);
 
         debug_assert!(self.check_invariants());
     }
@@ -342,11 +348,9 @@ impl Knowledge {
 
         if *x == Default::default() { self.eid_index.remove(&eid); }
 
-        let occupant = OccupantHandle::Entity(h);
-        let EntityKnowledge { eid, loc, .. } = self.entities.remove(h);
-        Self::update_pos(&mut self.pos_index, occupant, Some(loc.pos), None);
+        let pos = self.delete_entity(h);
 
-        self.forget_event(Some(eid), None, loc.pos);
+        self.forget_event(Some(eid), None, pos);
 
         debug_assert!(self.check_invariants());
     }
@@ -363,24 +367,20 @@ impl Knowledge {
         // Clear visibility flags. Visible cells come first in the list so we
         // can stop when we see the first one that's not visible.
         //
-        // Note that there may be cells with cell.last_seen == time that are
-        // not visible, because of sub-turn visibility updates.
+        // We can't apply the same optimization to entities, because we may
+        // sense them via off-turn event updates.
         for cell in &mut self.cells {
-            if !cell.visible { break; }
-            cell.see_entity_at = false;
-            cell.visible = false;
+            if !cell.visible() { break; }
+            cell.clear_visibility_flags();
         }
         for entity in &mut self.entities {
-            entity.sensed = false;
-            entity.visible = false;
+            entity.clear_visibility_flags();
         }
 
         // Entities know where their allies are, even if they can't see them.
         for &oid in me.leader.iter().chain(&me.summons) {
             let other = &board.entities[oid];
-            let handle = self.update_entity(me, other, Sense::Sound);
-            let cached = self.pos_index.entry(other.pos).or_default();
-            cached.occupant = Some(OccupantHandle::Entity(handle));
+            self.observe_entity(me, other, Sense::Sound);
         }
 
         // Entities have exact knowledge about anything they can see.
@@ -393,7 +393,7 @@ impl Knowledge {
         // over it in reverse order to get the ordering above.
         for &point in vision.get_points_seen().iter().rev() {
             let cell = board.get_cell(point);
-            let (eid, items, tile) = (cell.eid, &cell.items, cell.tile);
+            let Cell { eid, tile, .. } = *cell;
 
             let light = board.is_cell_lit(point);
             let nearby = (point - pos).len_l1() <= 1;
@@ -405,41 +405,33 @@ impl Knowledge {
             let see_big_entities = nearby || !is_shadow_cover;
             let see_all_entities = nearby || !(is_shadow_cover || tile.is_cover());
 
+            // Compute the cell's new flags.
+            let mut flags = CF::Empty;
+            if light { flags |= CF::Light; }
+            if shade { flags |= CF::Shade; }
+            if visible { flags |= CF::Visible; }
+            if see_all_entities { flags |= CF::SeeEntityAt; }
+
+            // Check if we can see the entity at the given cell.
             let entity = (|| {
                 if !see_big_entities { return None; }
                 let other = board.get_entity(eid?)?;
                 if !see_all_entities && !other.too_big_to_hide() { return None; }
-                Some(self.update_entity(me, other, Sense::Sight))
+                Some(self.observe_entity(me, other, Sense::Sight))
             })();
 
             // Update this point's cell, or create a new one.
             let entry = self.pos_index.entry(point).or_default();
-            let cell = entry.cell.unwrap_or_else(
-                || self.cells.push_front(Default::default()));
-            if entry.cell.is_some() { self.cells.move_to_front(cell); }
-            if entry.cell.is_none() { entry.cell = Some(cell); }
+            let handle = entry.cell.unwrap_or_else(
+                || self.cells.push_front(CellKnowledge::new(point)));
+            if entry.cell.is_some() { self.cells.move_to_front(handle); }
+            if entry.cell.is_none() { entry.cell = Some(handle); }
 
             // Update basic information about the given cell.
-            let cell = &mut self.cells[cell];
-            cell.last_seen = time;
-            cell.point = point;
-            cell.tile = tile;
-            cell.visibility = vision.get_visibility_at(point);
+            let memory = &mut self.cells[handle];
+            memory.update(cell, flags, time, vision);
 
-            // Update the cell's flags.
-            cell.light = light;
-            cell.shade = shade;
-            cell.visible = visible;
-            cell.see_entity_at = see_all_entities;
-
-            // Clone items, but reuse the existing allocation, if any.
-            cell.items.clear();
-            for &x in items { cell.items.push(x); }
-
-            // Clear the cell's entity and event if we have full vision there.
-            if see_all_entities {
-                cell.last_see_entity_at = time;
-            }
+            // Set the cell's entity. Clear it if it's definitely unoccupied.
             if see_all_entities || entity.is_some() {
                 entry.occupant = entity.map(|x| OccupantHandle::Entity(x));
             }
@@ -450,77 +442,13 @@ impl Knowledge {
         debug_assert!(self.check_invariants());
     }
 
-    // Private helpers:
+    // Miscellaneous update helpers:
 
-    fn forget(&mut self, player: bool) {
-        if player {
-            while let Some(x) = self.cells.back() && !x.visible {
-                self.forget_last_cell();
-            }
-            self.events.clear();
-            return;
-        }
-
-        // We don't need to check visible, here; we can only see a bounded
-        // number of cells per turn, much less than MAX_TILE_MEMORY.
-        while self.cells.len() > MAX_TILE_MEMORY {
-            self.forget_last_cell();
-        }
-
-        // We clean up entities up to the first one that we can still sense.
-        while self.entities.len() > MAX_ENTITY_MEMORY {
-            let entity = self.entities.back().unwrap();
-            if entity.sensed { break; }
-            self.remove_entity(entity.eid, self.timer.time);
-        }
-
-        // Clean up sources by count. On turn boundaries, we drop them by age.
-        while self.sources.len() > MAX_SOURCE_MEMORY {
-            self.forget_last_source();
-        }
-    }
-
-    fn forget_event(&mut self, eid: Option<EID>, uid: Option<UID>, pos: Point) {
-        let loc = Location { pos, time: self.timer.time };
-        let event = Event { eid, uid, loc, data: EventData::Forget, sense: Sense::Sight };
-        self.events.push(event);
-    }
-
-    fn forget_last_cell(&mut self) {
-        let Some(x) = self.cells.pop_back() else { return };
-        let Some(y) = self.pos_index.get_mut(&x.point) else { return };
-
-        y.cell = None;
-        if *y == Default::default() { self.pos_index.remove(&x.point); }
-    }
-
-    fn forget_last_source(&mut self) {
-        let Some(h) = self.sources.back_handle() else { return };
-        let Some(x) = self.sources.pop_back() else { return };
-
-        if let Some(e) = x.eid { self.unlink_source(e, h); }
-
-        let occupant = OccupantHandle::Source(h);
-        Self::update_pos(&mut self.pos_index, occupant, Some(x.pos), None);
-
-        self.forget_event(None, Some(x.uid), x.pos);
-    }
-
-    fn forget_old_scents(&mut self) {
-        let limit = self.time_at_turn(SCENT_TRACKING_LIMIT);
-
-        while let Some(x) = self.scents.last() && x.time <= limit {
-            self.scents.pop();
-        }
-    }
-
-    fn forget_old_sources(&mut self, player: bool) {
-        let turns = if player { SOURCE_LIMIT_PC_ } else { SOURCE_LIMIT_NPC };
-        let limit = self.time_at_turn(turns);
-
-        while let Some(x) = self.sources.back() && x.time <= limit {
-            self.forget_last_source();
-        }
+    fn observe_entity(&mut self, me: &Entity, other: &Entity, sense: Sense) -> EntityHandle {
+        let time = self.timer.time;
+        let entity = self.entity_for_sighting(other, sense);
+        self.update_entity(entity, |x| x.update(me, other, sense, time));
+        entity
     }
 
     fn populate_scents(&mut self, me: &Entity, board: &Board, rng: &mut RNG) {
@@ -552,103 +480,211 @@ impl Knowledge {
         self.scents.retain(|x| seen.insert(x.species as *const Species));
     }
 
-    fn update_entity(&mut self, me: &Entity, other: &Entity, sense: Sense) -> EntityHandle {
-        let time = self.timer.time;
-        let limit = self.time_at_turn(SOURCE_TRACKING_LIMIT);
-        let cached = self.eid_index.entry(other.eid).or_default();
+    // Entity identification:
 
-        // Seeing this entity may let us identify an unknown event source.
-        if let Some(x) = cached.source.take() && self.sources[x].time > limit {
-            let occupant = OccupantHandle::Source(x);
-            let SourceKnowledge { uid, loc, .. } = self.sources.remove(x);
-            Self::update_pos(&mut self.pos_index, occupant, Some(loc.pos), None);
+    fn entity_for_sighting(&mut self, other: &Entity, sense: Sense) -> EntityHandle {
+        let eid = other.eid;
+        let limit = self.timer.time_at_turn(SOURCE_TRACKING_LIMIT);
+        let entry = self.eid_index.entry(eid).or_default();
 
-            let loc = Location { pos: other.pos, time };
-            let (eid, uid) = (Some(other.eid), Some(uid));
+        let entity = entry.entity.unwrap_or_else(
+            || self.entities.push_front(EntityKnowledge::new(eid, other.species)));
+        entry.entity = Some(entity);
+
+        if let Some(x) = entry.source.take() &&
+           let Some(uid) = self.identify_source(x, limit) {
+            let (eid, uid) = (Some(eid), Some(uid));
+            let loc = Location { pos: other.pos, time: self.timer.time };
             let event = Event { eid, uid, loc, data: EventData::Spot, sense };
             self.events.push(event);
         }
 
-        // Create a new EntityKnowledge instance or mark an old one as fresh.
-        let handle = cached.entity.unwrap_or_else(
-            || self.entities.push_front(EntityKnowledge::new(other.eid, other.species)));
-        if cached.entity.is_some() {
-            self.entities.move_to_front(handle);
-            let occupant = OccupantHandle::Entity(handle);
-            let (s, t) = (self.entities[handle].pos, other.pos);
-            Self::update_pos(&mut self.pos_index, occupant, Some(s), Some(t));
-        } else {
-            cached.entity = Some(handle);
-        };
-        let entry = &mut self.entities[handle];
-
-        // Entities are friends iff they're both tame and in the same party.
-        let leader = |entity: &Entity| { entity.leader.unwrap_or(entity.eid) };
-
-        // Entities are rivals iff one is tame and one is wild, or they're
-        // both tame but as part of different parties.
-        let trainer = |entity: &Entity| {
-            if let Some(x) = entity.leader { return Some(x) };
-            if entity.species.human() { return Some(entity.eid); }
-            None
-        };
-
-        // Only a few species can lie about their identity. Update it anyway.
-        entry.species = other.species;
-
-        // Update our knowledge with the entity's latest state.
-        entry.loc = Location { pos: other.pos, time };
-        entry.dir = other.dir;
-        entry.name = other.name.clone();
-        entry.sense = sense;
-
-        entry.hp = other.hp_fraction();
-        entry.pp = 1. - clamp(other.move_timer as f64 / MOVE_TIMER as f64, 0., 1.);
-        entry.delta = trophic_level(other) - trophic_level(me);
-
-        // Clone the team, but reuse the existing allocation, if any.
-        entry.team.clear();
-        other.team.iter().for_each(|x| match x {
-            Teammate::Out(_) => entry.team.push(true),
-            Teammate::In(x) => entry.team.push(x.cur_hp > 0),
-        });
-
-        entry.asleep = other.asleep;
-        entry.friend = leader(me) == leader(other);
-        entry.rival = trainer(me) != trainer(other);
-        entry.sensed = true;
-        entry.sneaking = other.sneaking;
-        entry.visible = sense == Sense::Sight;
-
-        handle
+        entity
     }
 
-    // These methods would take &mut self, but hit lifetime issues:
+    fn source_for_event(&mut self, me: &Entity, event: &mut Event) -> OccupantHandle {
+        assert!(event.uid.is_none());
+        let eid = event.eid.take();
 
-    fn get_next_uid(last_uid: &mut u64) -> UID {
-        *last_uid += 1;
-        UID((*last_uid).try_into().unwrap())
+        let unknown = |event: &mut Event, last_uid: &mut u64, sources: &mut List<SourceKnowledge>| {
+            *last_uid += 1;
+            let uid = UID((*last_uid).try_into().unwrap());
+            let handle = sources.push_front(SourceKnowledge::new(uid, event));
+            event.uid = Some(uid);
+            handle
+        };
+
+        // Sounds from non-entities result in new, unknown sources.
+        let Some(eid) = eid else {
+            return OccupantHandle::Source(unknown(event, &mut self.last_uid, &mut self.sources))
+        };
+
+        let limit = self.timer.time_at_turn(SOURCE_TRACKING_LIMIT);
+        let entry = self.eid_index.entry(eid).or_default();
+        let sense = event.sense;
+
+        // Try to link this event to an entity we've seen.
+        let link = |x: &EntityKnowledge| match sense {
+            Sense::Sight => true,
+            Sense::Smell => false,
+            Sense::Sound => x.time > limit,
+        };
+        if !me.player && let Some(x) = entry.entity && link(&self.entities[x]) {
+            event.eid = Some(eid);
+            if let Some(y) = entry.source.take() {
+               event.uid = self.identify_source(y, limit);
+            }
+            return OccupantHandle::Entity(x);
+        }
+
+        // Try to link the event to an entity we've sensed indirectly.
+        if let Some(x) = entry.source && self.sources[x].time > limit {
+            event.uid = Some(self.sources[x].uid);
+            return OccupantHandle::Source(x);
+        };
+
+        // No existing source - create a new, unknown one.
+        let result = unknown(event, &mut self.last_uid, &mut self.sources);
+        entry.source = Some(result);
+        OccupantHandle::Source(result)
     }
 
-    fn unlink_source(&mut self, e: EID, h: SourceHandle) {
+    // Entity updates:
+
+    fn delete_entity(&mut self, h: EntityHandle) -> Point {
+        let pos = self.entities.remove(h).loc.pos;
+        self.update_pos(OccupantHandle::Entity(h), Some(pos), None);
+        pos
+    }
+
+    fn delete_source(&mut self, h: SourceHandle) -> Point {
+        let pos = self.sources.remove(h).loc.pos;
+        self.update_pos(OccupantHandle::Source(h), Some(pos), None);
+        pos
+    }
+
+    fn identify_source(&mut self, s: SourceHandle, limit: Timestamp) -> Option<UID> {
+        let source = &self.sources[s];
+        if source.time <= limit { return None; }
+
+        let uid = source.uid;
+        self.delete_source(s);
+        Some(uid)
+    }
+
+    fn update_pos(&mut self, h: OccupantHandle, prev: Option<Point>, next: Option<Point>) {
+        if prev != next && let Some(prev) = prev {
+            if let Some(x) = self.pos_index.get_mut(&prev) && x.occupant == Some(h) {
+                x.occupant = None;
+                if *x == Default::default() { self.pos_index.remove(&prev); }
+            }
+        }
+
+        if let Some(next) = next {
+            self.pos_index.entry(next).or_default().occupant = Some(h);
+        }
+    }
+
+    fn update_entity(&mut self, h: EntityHandle, f: impl FnOnce(&mut EntityKnowledge)) {
+        self.entities.move_to_front(h);
+
+        let entity = &mut self.entities[h];
+        let prev = entity.pos;
+        f(entity);
+        let next = entity.pos;
+
+        self.update_pos(OccupantHandle::Entity(h), Some(prev), Some(next));
+    }
+
+    fn update_source(&mut self, h: SourceHandle, f: impl FnOnce(&mut SourceKnowledge)) {
+        self.sources.move_to_front(h);
+
+        let source = &mut self.sources[h];
+        let prev = source.pos;
+        f(source);
+        let next = source.pos;
+
+        self.update_pos(OccupantHandle::Source(h), Some(prev), Some(next));
+    }
+
+    // Cleanup:
+
+    fn forget(&mut self, player: bool) {
+        if player {
+            while let Some(x) = self.cells.back() && !x.visible() {
+                self.forget_last_cell();
+            }
+            self.events.clear();
+            return;
+        }
+
+        // We don't need to check visible, here; we can only see a bounded
+        // number of cells per turn, much less than MAX_TILE_MEMORY.
+        while self.cells.len() > MAX_TILE_MEMORY {
+            self.forget_last_cell();
+        }
+
+        // We clean up entities up to the first visible one.
+        while self.entities.len() > MAX_ENTITY_MEMORY {
+            let entity = self.entities.back().unwrap();
+            if entity.friend() || entity.visible() { break; }
+            self.remove_entity(entity.eid, self.timer.time);
+        }
+
+        // Clean up sources by count. On turn boundaries, we drop them by age.
+        while self.sources.len() > MAX_SOURCE_MEMORY {
+            self.forget_last_source();
+        }
+    }
+
+    fn forget_event(&mut self, eid: Option<EID>, uid: Option<UID>, pos: Point) {
+        let loc = Location { pos, time: self.timer.time };
+        let event = Event { eid, uid, loc, data: EventData::Forget, sense: Sense::Sight };
+        self.events.push(event);
+    }
+
+    fn forget_last_cell(&mut self) {
+        let Some(x) = self.cells.pop_back() else { return };
+        let Some(y) = self.pos_index.get_mut(&x.point) else { return };
+
+        y.cell = None;
+        if *y == Default::default() { self.pos_index.remove(&x.point); }
+    }
+
+    fn forget_last_source(&mut self) {
+        let Some(h) = self.sources.back_handle() else { return };
+        let Some(x) = self.sources.pop_back() else { return };
+
+        if let Some(e) = x.eid { self.forget_source_link(e, h); }
+
+        self.update_pos(OccupantHandle::Source(h), Some(x.pos), None);
+
+        self.forget_event(None, Some(x.uid), x.pos);
+    }
+
+    fn forget_old_scents(&mut self) {
+        let limit = self.timer.time_at_turn(SCENT_TRACKING_LIMIT);
+
+        while let Some(x) = self.scents.last() && x.time <= limit {
+            self.scents.pop();
+        }
+    }
+
+    fn forget_old_sources(&mut self, player: bool) {
+        let turns = if player { SOURCE_LIMIT_PC_ } else { SOURCE_LIMIT_NPC };
+        let limit = self.timer.time_at_turn(turns);
+
+        while let Some(x) = self.sources.back() && x.time <= limit {
+            self.forget_last_source();
+        }
+    }
+
+    fn forget_source_link(&mut self, e: EID, h: SourceHandle) {
         let Some(x) = self.eid_index.get_mut(&e) else { return };
         if x.source != Some(h) { return };
 
         x.source = None;
         if *x == Default::default() { self.eid_index.remove(&e); }
-    }
-
-    fn update_pos(m: &mut PointIndex, h: OccupantHandle, from: Option<Point>, to: Option<Point>) {
-        if from == to { return; }
-
-        if let Some(p) = from && let Some(x) = m.get_mut(&p) && x.occupant == Some(h) {
-            x.occupant = None;
-            if *x == Default::default() { m.remove(&p); }
-        }
-
-        if let Some(p) = to {
-            m.entry(p).or_default().occupant = Some(h);
-        }
     }
 
     // Debug helpers:
@@ -678,16 +714,16 @@ impl Knowledge {
 
         // Check that the indices are consistent and minimal:
         type OH = OccupantHandle;
-        for (&pos, &PointState { cell, occupant }) in &self.pos_index {
+        for (&pos, &PointEntry { cell, occupant }) in &self.pos_index {
             assert!(cell.is_some() || occupant.is_some());
             if let Some(x) = cell { assert!(self.cells[x].point == pos); }
             if let Some(OH::Entity(x)) = occupant { assert!(self.entities[x].pos == pos); }
             if let Some(OH::Source(x)) = occupant { assert!(self.sources[x].pos == pos); }
         }
-        for (&eid, EIDState { entity, source }) in &self.eid_index {
+        for (&eid, &EIDEntry { entity, source }) in &self.eid_index {
             assert!(entity.is_some() || source.is_some());
-            if let Some(x) = *entity { assert!(self.entities[x].eid == eid); }
-            if let Some(x) = *source { assert!(self.sources[x].eid == Some(eid)); }
+            if let Some(x) = entity { assert!(self.entities[x].eid == eid); }
+            if let Some(x) = source { assert!(self.sources[x].eid == Some(eid)); }
         }
         true
     }
@@ -699,7 +735,7 @@ impl Knowledge {
 
 pub struct PointLookup<'a> {
     root: &'a Knowledge,
-    spot: Option<&'a PointState>,
+    spot: Option<&'a PointEntry>,
 }
 
 impl<'a> PointLookup<'a> {
@@ -720,11 +756,11 @@ impl<'a> PointLookup<'a> {
     }
 
     pub fn light(&self) -> bool {
-        self.cell().map(|x| x.light).unwrap_or(false)
+        self.cell().map(|x| x.light()).unwrap_or(false)
     }
 
     pub fn shade(&self) -> bool {
-        self.cell().map(|x| x.shade).unwrap_or(false)
+        self.cell().map(|x| x.shade()).unwrap_or(false)
     }
 
     pub fn tile(&self) -> Option<&'static Tile> {
@@ -779,14 +815,14 @@ impl<'a> PointLookup<'a> {
     }
 
     pub fn visible(&self) -> bool {
-        self.cell().map(|x| x.visible).unwrap_or(false)
+        self.cell().map(|x| x.visible()).unwrap_or(false)
     }
 
     pub fn can_see_entity_at(&self) -> bool {
-        self.cell().map(|x| x.see_entity_at).unwrap_or(false)
+        self.cell().map(|x| x.see_entity_at()).unwrap_or(false)
     }
 
     pub fn is_shadow_cover(&self) -> bool {
-        self.cell().map(|x| x.shade && !x.light).unwrap_or(false)
+        self.cell().map(|x| x.shade() && !x.light()).unwrap_or(false)
     }
 }

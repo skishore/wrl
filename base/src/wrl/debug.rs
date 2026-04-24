@@ -210,7 +210,7 @@ impl DebugFile {
             sightings.push((other.pos, glyph));
         }
         for other in &me.known.entities {
-            let color = if other.visible { 0x00ff00 } else {
+            let color = if other.visible() { 0x00ff00 } else {
                 let current = me.known.get(other.pos).entity();
                 let moved = current.map(|x| x.eid) != Some(other.eid);
                 if moved { 0xff0000 } else { 0xffff00 }
@@ -283,7 +283,7 @@ impl DebugFile {
     }
 
     fn knowledge_glyph(entity: &EntityKnowledge) -> Glyph {
-        let sneaking = entity.species.human() && entity.sneaking;
+        let sneaking = entity.species.human() && entity.sneaking();
         if sneaking { Glyph::wide('e') } else { entity.species.glyph }
     }
 

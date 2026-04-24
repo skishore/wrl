@@ -549,7 +549,7 @@ fn ForceThreatState(ctx: &mut Ctx, state: FightOrFlight) {
 
 fn UpdateLastSeen<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> Result {
     for cell in &ctx.known.known.cells {
-        if !cell.visible { break; }
+        if !cell.visible() { break; }
         if !valid(ctx, cell.point) { continue; }
 
         ctx.blackboard.last_seen.insert(kind, cell.point);
@@ -1466,8 +1466,8 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
 pub fn dangers(me: &Entity) -> Vec<Point> {
     let mut result = HashSet::default();
     for other in &me.known.entities {
-        if !other.visible { break; }
-        if !other.friend { result.insert(other.pos); }
+        if !other.visible() { break; }
+        if !other.friend() { result.insert(other.pos); }
     }
     for sound in &me.known.sources {
         result.insert(sound.pos);
@@ -1515,7 +1515,7 @@ fn ChooseDefenseSquareImpl(
     let defended = |p: Point| {
         if p == source || p == leader.pos { return false; }
         let cell = known.get(p);
-        cell.blocked() || cell.entity().map(|x| x.friend).unwrap_or(false)
+        cell.blocked() || cell.entity().map(|x| x.friend()).unwrap_or(false)
     };
 
     // Score each point in a 5x5 cell centered on the leader based on how many
@@ -1650,7 +1650,7 @@ fn FollowSimpleCommand(ctx: &mut Ctx) -> Option<Action> {
 
 fn AttackRivals(ctx: &mut Ctx) -> Option<Action> {
     for entity in &ctx.known.known.entities {
-        if entity.rival && entity.visible {
+        if entity.rival() && entity.visible() {
             let action = AttackTarget(ctx, entity.pos);
             if let Some(x) = action { return Some(x); }
         }

@@ -230,16 +230,16 @@ impl Threat {
         self.hp = other.hp;
         self.delta = other.delta;
 
-        self.asleep = other.asleep;
-        self.rival = other.rival;
+        self.asleep = other.asleep();
+        self.rival = other.rival();
         self.seen = true;
 
         let (confidence, valence) =
-        if other.friend {
+        if other.friend() {
             (Confidence::High, Valence::Friendly)
         } else if other.species.human() {
             (Confidence::Low, Valence::Neutral)
-        } else if other.rival {
+        } else if other.rival() {
             (Confidence::High, Valence::Hostile)
         } else if other.delta > 0 {
             let combat = self.combat > me.known.time_at_turn(ACTIVE_THREAT_TURNS);
@@ -328,7 +328,7 @@ impl ThreatState {
             }
         }
         for other in &me.known.entities {
-            if !other.sensed { break; }
+            if !other.sensed() { break; }
             let Some(threat) = self.get_by_entity(me, other.eid) else { continue };
             threat.update_for_sighting(me, other);
             if threat.certain() && threat.hostile() { self.forget_tid(TID::CID); }
@@ -476,7 +476,7 @@ impl ThreatState {
 
     fn known_good(&self, me: &Entity, tid: TID) -> bool {
         let TID::EID(x) = tid else { return false };
-        x == me.eid || me.known.entity(x).map(|x| x.friend).unwrap_or(false)
+        x == me.eid || me.known.entity(x).map(|x| x.friend()).unwrap_or(false)
     }
 
     fn friendly_call(me: &Entity, x: &CallEvent) -> bool {

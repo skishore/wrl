@@ -89,8 +89,8 @@ fn describe_sound(sound: Sound) -> &'static str {
 fn rivals(me: &Entity) -> Vec<&EntityKnowledge> {
     let mut result = vec![];
     for other in &me.known.entities {
-        if !other.visible { break; }
-        if !other.friend { result.push(other); }
+        if !other.visible() { break; }
+        if !other.friend() { result.push(other); }
     }
     let pos = me.pos;
     result.sort_by_cached_key(
@@ -223,7 +223,7 @@ pub struct Target {
 }
 
 fn can_target(view: &EntityKnowledge) -> bool {
-    view.visible && !view.friend
+    view.visible() && !view.friend()
 }
 
 fn init_target(data: TargetData, source: Point, target: Point) -> Box<Target> {
@@ -291,7 +291,7 @@ fn update_target(known: &Knowledge, target: &mut Target, update: Point) {
             let cell = known.get(update);
             if !cell.visible() {
                 target.error = "You can't see a clear path there.".into();
-            } else if let Some(x) = cell.entity() && x.friend {
+            } else if let Some(x) = cell.entity() && x.friend() {
                 target.error = "That target is friendly.".into();
             }
             let okay = target.error.is_empty();
@@ -673,7 +673,7 @@ impl Focused {
         let (pos, dir) = (target.pos, target.dir);
         self.tile = known.get(pos).tile();
 
-        if target.asleep {
+        if target.asleep() {
             self.vision.clear(target.pos);
         } else {
             let floor = Tile::get('.');
@@ -998,13 +998,13 @@ impl UI {
         let sleep_length = 2;
         let mut arrows = vec![];
         for other in &known.entities {
-            if !other.visible { continue; }
-            if !other.asleep && !can_target(other) { continue; }
+            if !other.visible() { continue; }
+            if !other.asleep() && !can_target(other) { continue; }
 
             let (pos, dir) = (other.pos, other.dir);
             let mut ch = Glyph::ray(dir);
             let mut diff = dir.normalize(arrow_length as f64);
-            if other.asleep { (ch, diff) = ('Z', Point(0, -sleep_length)); }
+            if other.asleep() { (ch, diff) = ('Z', Point(0, -sleep_length)); }
             arrows.push((ch, LOS(pos, pos + diff)));
         }
 
@@ -1195,7 +1195,7 @@ impl UI {
             None => {
                 let tile = self.focused.tile;
                 let view = self.focus.and_then(|x| known.entity(x));
-                let seen = view.map(|x| x.visible).unwrap_or(false);
+                let seen = view.map(|x| x.visible()).unwrap_or(false);
                 let source = None;
                 let header = if seen {
                     "Last target:"
@@ -1425,7 +1425,7 @@ impl UI {
     // Static helpers
 
     fn entity_glyph(entity: &EntityKnowledge) -> Glyph {
-        let sneaking = entity.species.human() && entity.sneaking;
+        let sneaking = entity.species.human() && entity.sneaking();
         if sneaking { Glyph::wide('e') } else { entity.species.glyph }
     }
 
@@ -1485,21 +1485,21 @@ impl UI {
         let source = if is_source { None } else { source };
 
         let entity = cell.entity();
-        let entity = if let Some(x) = entity && x.sensed { entity } else { None };
+        let entity = if let Some(x) = entity && x.sensed() { entity } else { None };
         let entity = if is_source { None } else { entity };
 
         let freshness = source.map(|x| x.freshness(&*me.known));
         let freshness = freshness.unwrap_or(if is_target { 1. } else { -1. });
 
         // Special cases for non-sight-based entity knowledge:
-        if let Some(x) = entity && !x.visible  { return Self::teammate_glyph(x); }
+        if let Some(x) = entity && !x.visible() { return Self::teammate_glyph(x); }
         if entity.is_none() && freshness >= 0. { return Self::noise_glyph(freshness); }
 
         // Unseen cells are shown as a blank space:
         let Some(tile) = cell.tile() else { return Glyph::wide(' ') };
 
         // Default case: a visible cell.
-        let glyph = if let Some(x) = entity && x.visible {
+        let glyph = if let Some(x) = entity && x.visible() {
             Self::knowledge_glyph(x, tile)
         } else if let Some(x) = cell.items().last() {
             show_item(x)
