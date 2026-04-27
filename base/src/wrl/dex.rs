@@ -94,14 +94,14 @@ impl PartialEq for &'static Species {
 
 static SPECIES: LazyLock<HashMap<&'static str, Species>> = LazyLock::new(|| {
     let items = vec![
-        ("Human",      0xffffff, 0, 0, 0.0,  0.9, 3,   vec![]),
-        ("Pidgey",     0xd0a070, 0, 0, 0.25, 1.0, 200, vec!["Tackle"]),
-        ("Rattata",    0xa060ff, 1, 0, 1.0,  1.0, 200, vec!["Tackle", "Headbutt"]),
-        ("Bulbasaur",  0x408020, 0, 0, 0.5,  1.0, 300, vec!["Tackle"]),
-        ("Charmander", 0xea8b24, 1, 4, 1.0,  1.0, 200, vec!["Tackle", "Ember"]),
-        ("Squirtle",   0x80c0ff, 0, 0, 0.5,  1.0, 200, vec!["Tackle", "Ice Beam"]),
-        ("Pikachu",    0xffff00, 0, 4, 1.0,  1.1, 200, vec!["Tackle"]),
-        ("Eevee",      0xd0a070, 0, 0, 1.0,  1.0, 200, vec!["Tackle", "Headbutt"]),
+        ("Human",      0xffffff, 0, 0, 0.00, 0.9, 3,   vec![]),
+        ("Pidgey",     0xd0a070, 0, 0, 0.12, 1.0, 200, vec!["Tackle"]),
+        ("Rattata",    0xa060ff, 1, 0, 1.00, 1.0, 200, vec!["Tackle", "Headbutt"]),
+        ("Bulbasaur",  0x408020, 0, 0, 0.25, 1.0, 300, vec!["Tackle"]),
+        ("Charmander", 0xea8b24, 1, 4, 0.50, 1.0, 200, vec!["Tackle", "Ember"]),
+        ("Squirtle",   0x80c0ff, 0, 0, 0.25, 1.0, 200, vec!["Tackle", "Ice Beam"]),
+        ("Pikachu",    0xffff00, 0, 4, 0.50, 1.1, 200, vec!["Tackle"]),
+        ("Eevee",      0xd0a070, 0, 0, 1.00, 1.0, 200, vec!["Tackle", "Headbutt"]),
     ];
     let mut result = HashMap::default();
     for (name, color, predator, light, scent, speed, hp, attacks) in items {
