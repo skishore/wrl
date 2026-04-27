@@ -355,6 +355,13 @@ impl Knowledge {
         debug_assert!(self.check_invariants());
     }
 
+    pub fn update_items(&mut self, pos: Point, item: &Item) {
+        let Some(x) = self.pos_index.get(&pos) else { return };
+        let Some(h) = x.cell else { return };
+
+        self.cells[h].items.push(item.clone());
+    }
+
     pub fn update(&mut self, me: &Entity, board: &Board, vision: &Vision, rng: &mut RNG) {
         self.timer.update(board.time);
 

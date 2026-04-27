@@ -72,7 +72,8 @@ impl Species {
         SPECIES.get(name).unwrap_or_else(|| panic!("Unknown species: {}", name))
     }
 
-    // Raw flags-based predicates.
+    // Raw flags-based predicates:
+
     pub fn human(&self) -> bool { self.flags.any(SF::Human) }
     pub fn predator(&self) -> bool { self.flags.any(SF::Predator) }
 }

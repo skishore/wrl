@@ -98,7 +98,8 @@ impl Tile {
     pub fn get(ch: char) -> &'static Tile { TILES.get(&ch).unwrap() }
     pub fn try_get(ch: char) -> Option<&'static Tile> { TILES.get(&ch) }
 
-    // Raw flags-based predicates.
+    // Raw flags-based predicates:
+
     pub fn can_eat(&self) -> bool { self.flags.any(TF::CanEat) }
     pub fn can_drink(&self) -> bool { self.flags.any(TF::CanDrink) }
     pub fn blocks_vision(&self) -> bool { self.flags.any(TF::BlocksVision) }
@@ -106,7 +107,8 @@ impl Tile {
     pub fn blocks_movement(&self) -> bool { self.flags.any(TF::BlocksMovement) }
     pub fn drops_berries(&self) -> bool { self.flags.any(TF::DropsBerries) }
 
-    // Derived predicates.
+    // Derived predicates:
+
     pub fn casts_shadow(&self) -> bool { self.blocks_vision() }
 
     pub fn is_cover(&self) -> bool { self.limits_vision() && !self.blocks_movement() }
@@ -304,7 +306,7 @@ impl Board {
         result
     }
 
-    // Animation
+    // Animation:
 
     fn add_effect(&mut self, effect: Effect, env: &mut UpdateEnv) {
         let mut existing = Effect::default();
@@ -446,7 +448,7 @@ impl Board {
         });
     }
 
-    // Getters
+    // Getters:
 
     pub fn get_cell(&self, p: Point) -> &Cell { self.map.entry_ref(p) }
 
@@ -468,21 +470,28 @@ impl Board {
 
     pub fn is_cell_lit(&self, p: Point) -> bool { self.lighting.get_light(p) > 0 }
 
-    // Item setters
+    // Item setters:
 
-    fn add_item(&mut self, pos: Point, item: Item) {
+    fn add_item(&mut self, eid: Option<EID>, pos: Point, item: Item) {
         let Some(cell) = self.map.entry_mut(pos) else { return };
+
         cell.items.push(item);
+
+        let Some(eid) = eid else { return };
+        let Some(entity) = self.entities.get_mut(eid) else { return };
+
+        entity.known.update_items(pos, &item);
     }
 
     fn remove_item(&mut self, pos: Point, item: Item) -> bool {
-        let Some(cell) = self.map.entry_mut(pos) else { return false };
-        let Some(index) = cell.items.iter().position(|&x| x == item) else { return false };
-        cell.items.remove(index);
+        let Some(c) = self.map.entry_mut(pos) else { return false };
+        let Some(i) = c.items.iter().position(|&x| x == item) else { return false };
+
+        c.items.remove(i);
         true
     }
 
-    // Entity setters
+    // Entity setters:
 
     fn add_entity(&mut self, args: &EntityArgs, env: &mut UpdateEnv) -> EID {
         let pos = args.pos;
@@ -588,7 +597,7 @@ impl Board {
         self.lighting.set_opacity(point, tile.opacity());
     }
 
-    // Knowledge
+    // Knowledge:
 
     fn create_event(&self, eid: EID, data: EventData, pos: Point) -> Event {
         let (eid, uid) = (Some(eid), None);
@@ -616,8 +625,10 @@ impl Board {
 
         entity.known.remove_entity(oid, self.time);
 
-        let cmd = &entity.command;
-        if let Some(Command::Attack(_, x)) = cmd.get() && x.eid == Some(oid) { cmd.take(); }
+        let command = &entity.command;
+        if let Some(Command::Attack(_, x)) = command.get() && x.eid == Some(oid) {
+            command.take();
+        }
     }
 
     fn update_known(&mut self, eid: EID, env: &mut UpdateEnv) {
@@ -633,7 +644,7 @@ impl Board {
         swap(known, &mut self.entities[eid].known);
     }
 
-    // Lighting
+    // Lighting:
 
     fn update_shadow(&mut self, point: Point, delta: i32) {
         if delta == 0 { return; }
@@ -786,7 +797,7 @@ fn shout(state: &mut State, eid: EID, shout: &str) {
     }
 }
 
-fn hit_tile(board: &mut Board, env: &mut UpdateEnv, target: Point) {
+fn hit_tile(board: &mut Board, env: &mut UpdateEnv, eid: EID, target: Point) {
     if !board.get_tile(target).drops_berries() { return; }
 
     let options: Vec<_> = dirs::ALL.clone().into_iter().filter(
@@ -795,10 +806,14 @@ fn hit_tile(board: &mut Board, env: &mut UpdateEnv, target: Point) {
 
     let rng = &mut env.rng;
     let n = *weighted(&[(1, 0), (2, 1), (1, 2)], rng);
-    for _ in 0..n { board.add_item(target + *sample(&options, rng), Item::Berry); }
+    for _ in 0..n {
+        let pos = target + *sample(&options, rng);
+        board.add_item(Some(eid), pos, Item::Berry);
+    }
 }
 
-fn hit_entity(board: &mut Board, env: &mut UpdateEnv, attack: &Attack, logged: bool, tid: EID) {
+fn hit_entity(board: &mut Board, env: &mut UpdateEnv, eid: EID,
+              attack: &Attack, logged: bool, tid: EID) {
     let Some(target) = board.entities.get_mut(tid) else { return; };
 
     let (pos, lower, upper) = (target.pos, target.lower(), target.upper());
@@ -816,7 +831,7 @@ fn hit_entity(board: &mut Board, env: &mut UpdateEnv, attack: &Attack, logged: b
 
     if fainted {
         board.remove_entity(tid);
-        board.add_item(pos, Item::Corpse);
+        board.add_item(Some(eid), pos, Item::Corpse);
     }
 
     for s in &sightings {
@@ -1196,12 +1211,12 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             }
 
             let cb = move |board: &mut Board, env: &mut UpdateEnv| {
-                hit_tile(board, env, target);
+                hit_tile(board, env, eid, target);
 
                 let Some(tid) = tid else { return; };
 
                 let cb = move |board: &mut Board, env: &mut UpdateEnv| {
-                    hit_entity(board, env, attack, logged, tid);
+                    hit_entity(board, env, eid, attack, logged, tid);
                 };
                 board.add_effect(apply_damage(target, Box::new(cb)), env);
             };
