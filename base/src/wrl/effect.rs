@@ -8,7 +8,7 @@ use crate::base::glyph::{Color, Glyph};
 use crate::base::point::{Bound, LOS, Point, dirs};
 use crate::base::util::{HashSet, RNG, sample};
 
-use super::game::{Board, UpdateEnv};
+use super::game::{Board, Env};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -17,7 +17,7 @@ use super::game::{Board, UpdateEnv};
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub enum FT { Fire, Ice, Hit, Summon, Withdraw }
 
-pub type CB = Box<dyn Fn(&mut Board, &mut UpdateEnv)>;
+pub type CB = Box<dyn Fn(&mut Board, &mut Env)>;
 
 pub enum Event {
     Callback { frame: i32, callback: CB },

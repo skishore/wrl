@@ -308,7 +308,7 @@ impl Board {
 
     // Animation:
 
-    fn add_effect(&mut self, effect: Effect, env: &mut UpdateEnv) {
+    fn add_effect(&mut self, effect: Effect, env: &mut Env) {
         let mut existing = Effect::default();
         swap(&mut self._effect, &mut existing);
         self._effect = existing.and(effect);
@@ -317,7 +317,7 @@ impl Board {
         self._execute_effect_callbacks(env);
     }
 
-    fn advance_effect(&mut self, pov: EID, env: &mut UpdateEnv) -> bool {
+    fn advance_effect(&mut self, pov: EID, env: &mut Env) -> bool {
         let Some(entity) = self.entities.get(pov) else { return false };
 
         env.fov.compute(self, entity);
@@ -339,7 +339,7 @@ impl Board {
         self._enter_effect_frame(false);
     }
 
-    fn start_effect(&mut self, pov: EID, env: &mut UpdateEnv) {
+    fn start_effect(&mut self, pov: EID, env: &mut Env) {
         if self.get_frame().is_none() { return; }
         let Some(entity) = self.entities.get(pov) else { return };
 
@@ -348,7 +348,7 @@ impl Board {
         if !self._pov_sees_effect(pov, env) { self.advance_effect(pov, env); }
     }
 
-    fn _advance_one_frame(&mut self, pov: EID, env: &mut UpdateEnv) -> bool {
+    fn _advance_one_frame(&mut self, pov: EID, env: &mut Env) -> bool {
         if self._effect.frames.is_empty() {
             assert!(self._effect.events.is_empty());
             return false;
@@ -367,13 +367,13 @@ impl Board {
         true
     }
 
-    fn _execute_effect_callbacks(&mut self, env: &mut UpdateEnv) -> bool {
+    fn _execute_effect_callbacks(&mut self, env: &mut Env) -> bool {
         let mut result = false;
         while self._execute_one_effect_callback(env) { result = true; }
         result
     }
 
-    fn _execute_one_effect_callback(&mut self, env: &mut UpdateEnv) -> bool {
+    fn _execute_one_effect_callback(&mut self, env: &mut Env) -> bool {
         if self._effect.events.is_empty() { return false; }
 
         let event = &self._effect.events[0];
@@ -386,7 +386,7 @@ impl Board {
         true
     }
 
-    fn _fill_frame_mask(&mut self, pov: EID, env: &mut UpdateEnv) {
+    fn _fill_frame_mask(&mut self, pov: EID, env: &mut Env) {
         if !self._frame_mask.is_empty() { return; }
         let Some(me) = self.entities.get(pov) else { return };
         let Some(frame) = self._effect.frames.get(0) else { return };
@@ -400,7 +400,7 @@ impl Board {
         }).collect();
     }
 
-    fn _pov_sees_effect(&mut self, pov: EID, env: &mut UpdateEnv) -> bool {
+    fn _pov_sees_effect(&mut self, pov: EID, env: &mut Env) -> bool {
         self._fill_frame_mask(pov, env);
         if self._frame_mask.iter().any(|&x| x) { return true; }
 
@@ -493,7 +493,7 @@ impl Board {
 
     // Entity setters:
 
-    fn add_entity(&mut self, args: &EntityArgs, env: &mut UpdateEnv) -> EID {
+    fn add_entity(&mut self, args: &EntityArgs, env: &mut Env) -> EID {
         let pos = args.pos;
         let eid = self.entities.add(args, &mut env.rng);
         let cell = self.map.entry_mut(pos).unwrap();
@@ -605,7 +605,7 @@ impl Board {
         Event { eid, uid, loc, data, sense: Sense::Sight }
     }
 
-    fn observe_event(&mut self, eid: EID, s: &Senses, e: &mut Event, env: &mut UpdateEnv) {
+    fn observe_event(&mut self, eid: EID, s: &Senses, e: &mut Event, env: &mut Env) {
         let Some(entity) = self.entities.get_mut(eid) else { return };
 
         let (heard, seen) = (s.heard(), s.seen() && !entity.player);
@@ -631,10 +631,10 @@ impl Board {
         }
     }
 
-    fn update_known(&mut self, eid: EID, env: &mut UpdateEnv) {
+    fn update_known(&mut self, eid: EID, env: &mut Env) {
         let Some(entity) = self.entities.get_mut(eid) else { return };
 
-        let UpdateEnv { known, fov, rng, .. } = env;
+        let Env { known, fov, rng, .. } = env;
         swap(known, &mut entity.known);
 
         let me = &self.entities[eid];
@@ -723,7 +723,7 @@ impl Noise {
     }
 }
 
-fn detect(board: &Board, noise: &Noise, env: &mut UpdateEnv) -> SenseMap {
+fn detect(board: &Board, noise: &Noise, env: &mut Env) -> SenseMap {
     let Noise { cause, check, point, volume } = *noise;
     let mut result = SenseMap::default();
 
@@ -763,7 +763,7 @@ fn merge_views(board: &Board, saw_source: &SenseMap, saw_target: &SenseMap) -> V
     result
 }
 
-fn get_sightings(board: &Board, noise: &Noise, env: &mut UpdateEnv) -> Vec<Sighting> {
+fn get_sightings(board: &Board, noise: &Noise, env: &mut Env) -> Vec<Sighting> {
     let seen = detect(board, noise, env);
     merge_views(board, &seen, &Default::default())
 }
@@ -797,7 +797,7 @@ fn shout(state: &mut State, eid: EID, shout: &str) {
     }
 }
 
-fn hit_tile(board: &mut Board, env: &mut UpdateEnv, eid: EID, target: Point) {
+fn hit_tile(board: &mut Board, env: &mut Env, eid: EID, target: Point) {
     if !board.get_tile(target).drops_berries() { return; }
 
     let options: Vec<_> = dirs::ALL.clone().into_iter().filter(
@@ -812,8 +812,7 @@ fn hit_tile(board: &mut Board, env: &mut UpdateEnv, eid: EID, target: Point) {
     }
 }
 
-fn hit_entity(board: &mut Board, env: &mut UpdateEnv, eid: EID,
-              attack: &Attack, logged: bool, tid: EID) {
+fn hit_entity(board: &mut Board, env: &mut Env, eid: EID, attack: &Attack, logged: bool, tid: EID) {
     let Some(target) = board.entities.get_mut(tid) else { return; };
 
     let (pos, lower, upper) = (target.pos, target.lower(), target.upper());
@@ -1048,7 +1047,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
             let board = &mut state.board;
             let color = if item == Some(Item::Corpse) { 0xff0000 } else { 0xffff00 };
-            let cb = Box::new(move |board: &mut Board, _: &mut UpdateEnv| {
+            let cb = Box::new(move |board: &mut Board, _: &mut Env| {
                 let Some(item) = item else { return };
                 board.remove_item(target, item);
             });
@@ -1084,7 +1083,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
             // For some call types, we look before calling; when calling for
             // help, we shout in the direction of our allies, then look.
-            let cb = move |board: &mut Board, _: &mut UpdateEnv| {
+            let cb = move |board: &mut Board, _: &mut Env| {
                 let Some(entity) = board.entities.get_mut(eid) else { return };
                 entity.face_direction(look);
             };
@@ -1210,12 +1209,12 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 state.env.ui.log.log(line);
             }
 
-            let cb = move |board: &mut Board, env: &mut UpdateEnv| {
+            let cb = move |board: &mut Board, env: &mut Env| {
                 hit_tile(board, env, eid, target);
 
                 let Some(tid) = tid else { return; };
 
-                let cb = move |board: &mut Board, env: &mut UpdateEnv| {
+                let cb = move |board: &mut Board, env: &mut Env| {
                     hit_entity(board, env, eid, attack, logged, tid);
                 };
                 board.add_effect(apply_damage(target, Box::new(cb)), env);
@@ -1246,7 +1245,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
             shout(state, eid, &format!("Go! {}!", summon.name));
 
-            let cb = Box::new(move | board: &mut Board, env: &mut UpdateEnv| {
+            let cb = Box::new(move | board: &mut Board, env: &mut Env| {
                 let entity = &board.entities[eid];
                 let Some(Teammate::In(ind)) = entity.team.get(team) else { return };
 
@@ -1474,7 +1473,7 @@ fn update_state(state: &mut State) {
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub enum GameMode { Debug, Gym, Play, Sim, Test }
 
-pub struct UpdateEnv {
+pub struct Env {
     debug: Option<Box<DebugFile>>,
     known: Box<Knowledge>,
     fov: FOV,
@@ -1483,12 +1482,12 @@ pub struct UpdateEnv {
 }
 
 pub struct State {
+    ai: Box<AIState>,
     board: Board,
     input: Action,
     inputs: Vec<Input>,
     player: EID,
-    env: UpdateEnv,
-    ai: Box<AIState>,
+    env: Env,
 }
 
 impl Default for State {
@@ -1503,7 +1502,7 @@ impl State {
         let rng = seed.map(|x| RNG::seed_from_u64(x));
         let rng = rng.unwrap_or_else(|| RNG::from_os_rng());
         let debug = matches!(mode, GameMode::Debug | GameMode::Sim);
-        let mut env = UpdateEnv {
+        let mut env = Env {
             debug: if debug { Some(Default::default()) } else { None },
             known: Default::default(),
             fov: Default::default(),
@@ -1588,7 +1587,7 @@ impl State {
         }
         ui.log.log("Welcome to WildsRL! Use vikeys (h/j/k/l/y/u/b/n) to move.");
 
-        Self { board, input, inputs, player, env, ai }
+        Self { ai, board, input, inputs, player, env }
     }
 
     pub fn add_effect(&mut self, x: Effect) { self.board.add_effect(x, &mut self.env) }
