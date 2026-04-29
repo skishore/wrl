@@ -1587,6 +1587,17 @@ fn ChooseDefenseSquareImpl(
 // TODO: Horrible bug: We always face away from the player right now. If we
 // are facing away from a rival, and the player commands us to attack them,
 // but it's been too long since we've seen them, we ignore the command...
+//
+// TODO: Similar bug; if all cells near the player are defended from a given
+// rival, we'll just hover near them with FollowLeader, but FollowLeader's
+// move doesn't look in the direction of a rival. This prevents us from
+// attacking an enemy even if it's attacking us. If there are rivals, we
+// should always look towards them (and not just "in our last movement dir"
+// or "away from the leader" - both conditions are wrong).
+//
+// TODO: Perhaps an alternate claim: MaybeAttackRivals only attacks rivals
+// that are currently visible; perhaps we should path to and attack any other
+// rivals the player knows about instead.
 fn SelectAttackTarget(ctx: &mut Ctx) -> bool {
     let Some(command) = ctx.entity.command.get() else { return false };
     let Command::Attack(attack, target) = command else { return false };
@@ -1744,6 +1755,10 @@ fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
 //    The reason is that a) AttackTarget fails because it requires the target
 //    to be visible, but then b) FollowPath fails because we constructed a
 //    path, then ignored it in favor of running AttackTarget...
+//
+//  - If we glimpse a threat because it moved just out of our view, we'll scan
+//    its last location, then take a normal step, and then warn it when we're
+//    in view range again.
 
 fn AttackOrFollowPath(kind: PathKind) -> impl Bhv {
     pri![
