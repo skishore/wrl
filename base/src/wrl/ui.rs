@@ -310,6 +310,8 @@ fn update_target(known: &Knowledge, target: &mut Target, update: Point) {
                     target.error = "You can't throw that far.".into();
                 } else if !cell.visible() {
                     target.error = "You can't see a clear path there.".into();
+                } else if i == target.path.len() - 1 && !cell.can_see_entity_at() {
+                    target.error = "That cell might be occupied.".into();
                 }
                 if !target.error.is_empty() { break; }
                 target.okay_until = i + 1;
