@@ -968,10 +968,12 @@ fn plan(state: &mut State, eid: EID, leader: Option<EID>) -> Action {
     let player = eid == state.player;
     if player { return replace(&mut state.input, Action::WaitForInput); }
 
-    let State { ai, board, env, .. } = state;
+    let State { board, env, .. } = state;
     let debug = env.debug.as_deref_mut();
     let vision = &mut env.fov.npc_vision;
     let entity = &mut board.entities[eid];
+    let ai = &mut env.ai;
+
     swap(ai, &mut entity.ai);
 
     let entity = &board.entities[eid];
@@ -1474,15 +1476,18 @@ fn update_state(state: &mut State) {
 pub enum GameMode { Debug, Gym, Play, Sim, Test }
 
 pub struct Env {
+    // Used for in-place Entity state updates:
+    ai: Box<AIState>,
     debug: Option<Box<DebugFile>>,
     known: Box<Knowledge>,
+
+    // Other update helpers:
     fov: FOV,
     rng: RNG,
     ui: UI,
 }
 
 pub struct State {
-    ai: Box<AIState>,
     board: Board,
     input: Action,
     inputs: Vec<Input>,
@@ -1502,18 +1507,13 @@ impl State {
         let rng = seed.map(|x| RNG::seed_from_u64(x));
         let rng = rng.unwrap_or_else(|| RNG::from_os_rng());
         let debug = matches!(mode, GameMode::Debug | GameMode::Sim);
-        let mut env = Env {
-            debug: if debug { Some(Default::default()) } else { None },
-            known: Default::default(),
-            fov: Default::default(),
-            ui: Default::default(),
-            rng,
-        };
-        let mut pos = Point(size.0 / 2, size.1 / 2);
+
         let mut board = Board::new(size, LIGHT);
+        let mut pos = Point(size.0 / 2, size.1 / 2);
+        let mut rng = rng;
 
         loop {
-            let map = mapgen(size, &mut env.rng);
+            let map = mapgen(size, &mut rng);
             for x in 0..size.0 {
                 for y in 0..size.1 {
                     let p = Point(x, y);
@@ -1526,6 +1526,15 @@ impl State {
             }
             if !board.get_tile(pos).blocks_movement() { break; }
         }
+
+        let mut env = Env {
+            ai: Box::new(AIState::new(&mut rng)),
+            debug: if debug { Some(Default::default()) } else { None },
+            known: Default::default(),
+            fov: Default::default(),
+            ui: Default::default(),
+            rng,
+        };
 
         let input = Action::WaitForInput;
         let species = Species::get("Human");
@@ -1576,10 +1585,8 @@ impl State {
         board.entities[player].team.push(teammate("Eevee"));
         board.update_known(player, &mut env);
 
-        let inputs = Default::default();
-        let ai = Box::new(AIState::new(&mut env.rng));
-
         let ui = &mut env.ui;
+        let inputs = Default::default();
         std::mem::drop(Weather::Rain(Point(0, 64), 32));
         match WEATHER {
             Weather::Rain(angle, count) => ui.start_rain(angle, count),
@@ -1587,7 +1594,7 @@ impl State {
         }
         ui.log.log("Welcome to WildsRL! Use vikeys (h/j/k/l/y/u/b/n) to move.");
 
-        Self { ai, board, input, inputs, player, env }
+        Self { board, input, inputs, player, env }
     }
 
     pub fn add_effect(&mut self, x: Effect) { self.board.add_effect(x, &mut self.env) }
