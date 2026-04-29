@@ -1540,7 +1540,8 @@ fn ChooseDefenseSquareImpl(
         let shifts: [Point; 3] = [Point::default(), shift, Point::default() - shift];
 
         for shift in shifts {
-            if los.iter().any(|&x| defended(x + shift)) { continue; }
+            let defended = los.iter().any(|&x| defended(x + shift));
+            let penalty = if defended { 0.25 } else { 1.0 };
 
             for &point in los {
                 let delta = point + shift - leader.pos;
@@ -1559,7 +1560,7 @@ fn ChooseDefenseSquareImpl(
                         if (a < b) == (shift.1 < 0) { 8. } else { 6. }
                     }
                 })();
-                *scores.entry(delta).or_insert(0.) += score;
+                *scores.entry(delta).or_insert(0.) += score * penalty;
             }
         }
     }
@@ -1594,6 +1595,12 @@ fn ChooseDefenseSquareImpl(
 // attacking an enemy even if it's attacking us. If there are rivals, we
 // should always look towards them (and not just "in our last movement dir"
 // or "away from the leader" - both conditions are wrong).
+//
+// TODO: Another reason "DefendLeader" may fail is because the player is in
+// tall grass or shadow (so the only valid follower squares are 1 cell away)
+// and all of those squares are blocked or occupied. We should instead have
+// a dead-simple version that considers any cell within a 5x5 centered on
+// the player and picks one if more sophisticated checks fail.
 //
 // TODO: Perhaps an alternate claim: MaybeAttackRivals only attacks rivals
 // that are currently visible; perhaps we should path to and attack any other
@@ -1667,6 +1674,12 @@ fn AttackRivals(ctx: &mut Ctx) -> Option<Action> {
         }
     }
     None
+}
+
+fn LeaderHasRivals(ctx: &mut Ctx) -> bool {
+    let Some(leader) = ctx.env.leader else { return false };
+    let rivals = dangers(leader);
+    !rivals.is_empty()
 }
 
 fn DefendLeader(ctx: &mut Ctx) -> Option<Action> {
@@ -2007,7 +2020,11 @@ fn SummonRoot() -> impl Bhv {
                 cond!("MoveReady", |x| move_ready(x.entity)),
                 act!("AttackRivals", AttackRivals),
             ],
-            act!("DefendLeader", DefendLeader),
+            seq![
+                "MaybeDefendLeader",
+                cond!("LeaderHasRivals", LeaderHasRivals),
+                act!("DefendLeader", DefendLeader),
+            ],
             act!("FollowLeader", FollowLeader),
             ReturnToLeader(),
             act!("Idle", |_| Some(Action::Idle)),
