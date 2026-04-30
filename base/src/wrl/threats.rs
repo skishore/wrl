@@ -49,6 +49,10 @@ pub struct Threat {
     pub rival: bool,
     pub seen: bool,
 
+    // Danger penalty:
+    penalty_score: f64,
+    penalty_start: Timestamp,
+
     // Warnings:
     warnings: i32,
 
@@ -78,6 +82,10 @@ impl Threat {
             asleep: false,
             rival: false,
             seen: false,
+
+            // Danger penalty:
+            penalty_score: Default::default(),
+            penalty_start: Default::default(),
 
             // Warnings:
             warnings: 0,
@@ -136,14 +144,18 @@ impl Threat {
     }
 
     pub fn mark_warned(&mut self, me: &Entity, rng: &mut RNG) {
+        if !self.uncertain() { return; }
+
         let warnings = self.warnings;
         let sample = rng.random::<f32>() * 2f32.powi(warnings);
 
-        if sample < 0.25 {
-            let valence = if timid(me) { Valence::Menacing } else { Valence::Hostile };
-            self.merge_status(Confidence::Mid, valence);
-        } else if sample >= 0.75 {
+        if sample > 0.5 {
             self.merge_status(Confidence::Mid, Valence::Hostile);
+
+            if timid(me) {
+                self.penalty_score = rng.random_range(2.0..4.0);
+                self.penalty_start = me.known.time();
+            }
         }
         self.warnings += 1;
     }
@@ -383,10 +395,22 @@ impl ThreatState {
         }
         self.unknown.retain(|x| x.unknown());
 
-        let strength = |x: &Threat| {
+        // Compute a strength. For some entities that start by responding to
+        // threats by fleeing from them, we'll add an additive penalty.
+        let base_strength = |x: &Threat| {
             if let Some(x) = x.species && x.human() { return 0.; }
             let factor = if x.rival { 0.25 } else { 1. };
             factor * 1.75f64.powi(x.delta.signum()) * x.hp
+        };
+        let strength = |x: &Threat| {
+            let base = base_strength(x);
+            if x.penalty_score <= 0. || x.penalty_start < limit { return base; }
+
+            let denom = time - limit;
+            let delay = time - x.penalty_start;
+            let ratio = delay.nsec() as f64 / max(denom.nsec(), 1) as f64;
+            let bonus = x.penalty_score - 0.1 * ratio * ACTIVE_THREAT_TURNS as f64;
+            base + if bonus > 0. { bonus } else { 0. }
         };
         let mut hidden_count = max(hidden_hostile - seen_hostile, 0);
         let mut team_strength = me.hp_fraction();
