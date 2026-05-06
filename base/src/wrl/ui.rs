@@ -676,7 +676,8 @@ impl Focused {
         self.tile = known.get(pos).tile();
 
         if target.asleep() {
-            self.vision.clear(target.pos);
+            self.vision.clear();
+            self.vision.set_center(pos);
         } else {
             let floor = Tile::get('.');
             let opacity_lookup = |x| known.get(x).tile().unwrap_or(floor).opacity();

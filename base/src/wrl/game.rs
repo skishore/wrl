@@ -235,7 +235,7 @@ impl FOV {
         let vision = self.select_vision(me);
         let Entity { pos, dir, asleep, player, .. } = *me;
         if asleep {
-            vision.clear(pos);
+            vision.clear();
         } else {
             let map = &board.map;
             let dir = if player { Point::default() } else { dir };

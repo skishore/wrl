@@ -163,7 +163,7 @@ impl Vision {
         self.visibility.get(p + self.offset)
     }
 
-    pub fn clear(&mut self, pos: Point) {
+    pub fn clear(&mut self) {
         // Sparse clear optimization. The dense clear has much better constant
         // factors so we only switch over when it's sufficiently sparse.
         if self.visibility.raw_data().len() < 16 * self.points_seen.len() {
@@ -176,20 +176,12 @@ impl Vision {
             debug_assert!(self.visibility.raw_data().iter().all(|&x| x == -1));
         }
 
-        let radius = self.range.radius;
-        let center = Point(radius, radius);
-        let visibility = self.initial_visibility;
-
-        self.offset = center - pos;
-        self.points_seen.clear();
-
-        self.visibility.set(center, visibility);
-        self.points_seen.push(pos);
-
+        self.offset = Point::default();
         self.prev.depth = 1;
         self.next.depth = 2;
         self.prev.items.clear();
         self.next.items.clear();
+        self.points_seen.clear();
     }
 
     pub fn check_point<F: Fn(Point) -> i32>(
@@ -202,16 +194,28 @@ impl Vision {
         let Point(x, y) = delta;
         let limit = std::cmp::max(x.abs(), y.abs());
 
-        self.clear(args.pos);
+        self.clear();
+        self.set_center(args.pos);
         self.seed_ranges(args.dir, Some(target - args.pos));
         self.execute(args.pos, limit, &args.opacity_lookup);
         self.can_see(target)
     }
 
     pub fn compute<F: Fn(Point) -> i32>(&mut self, args: &VisionArgs<F>) {
-        self.clear(args.pos);
+        self.clear();
+        self.set_center(args.pos);
         self.seed_ranges(args.dir, None);
         self.execute(args.pos, self.range.radius, &args.opacity_lookup);
+    }
+
+    pub fn set_center(&mut self, pos: Point) {
+        let radius = self.range.radius;
+        let center = Point(radius, radius);
+        let visibility = self.initial_visibility;
+
+        self.offset = center - pos;
+        self.visibility.set(center, visibility);
+        self.points_seen.push(pos);
     }
 
     pub fn sort_points_seen(&mut self, pos: Point) {

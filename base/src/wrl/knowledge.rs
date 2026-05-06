@@ -390,6 +390,12 @@ impl Knowledge {
             self.observe_entity(me, other, Sense::Sound);
         }
 
+        // If we're asleep, just update knowledge about ourself.
+        if me.asleep {
+            assert!(vision.get_points_seen().is_empty());
+            self.observe_entity(me, me, Sense::Sight);
+        }
+
         // Entities have exact knowledge about anything they can see.
         //
         // We want self.cells to be sorted by recency, and if there are ties,
@@ -438,10 +444,8 @@ impl Knowledge {
             let memory = &mut self.cells[handle];
             memory.update(cell, flags, time, vision);
 
-            // Set the cell's entity. Clear it if it's definitely unoccupied.
-            if see_all_entities || entity.is_some() {
-                entry.occupant = entity.map(|x| OccupantHandle::Entity(x));
-            }
+            // Clear the cell's entity if it's definitely unoccupied.
+            if see_all_entities && entity.is_none() { entry.occupant = None; }
         }
 
         self.forget(me.player);
