@@ -1227,28 +1227,24 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             ActionResult::success_moves(1.)
         }
         Action::Recall { summon } => {
-            let fail = ActionResult::failure();
-            let Some(&oid) = entity.summons.get(summon) else { return fail };
-
-            let okay = try_recall_entity(state, eid, oid);
-            if okay { ActionResult::success() } else { fail }
+            let summon = entity.summons.get(summon);
+            let Some(&oid) = summon else { return ActionResult::failure() };
+            if !try_recall_entity(state, eid, oid) { return ActionResult::failure(); }
+            ActionResult::success()
         }
         Action::Summon { team, target } => {
-            let fail = ActionResult::failure();
-            let Some(Teammate::In(ind)) = entity.team.get(team) else { return fail };
-            if ind.cur_hp == 0 { return fail; }
+            let teammate = entity.team.get(team);
+            let Some(Teammate::In(x)) = teammate else { return ActionResult::failure() };
 
-            let summon = ind.species;
+            let Individual { species, cur_hp } = *x;
+            if cur_hp == 0 { return ActionResult::failure(); }
+
             let entity = &state.board.entities[eid];
-            if !can_summon(&state.board, entity, target) { return fail; }
+            if !can_summon(&state.board, entity, target) { return ActionResult::failure(); }
 
-            shout(state, eid, &format!("Go! {}!", summon.name));
+            shout(state, eid, &format!("Go! {}!", species.name));
 
             let cb = Box::new(move | board: &mut Board, env: &mut Env| {
-                let entity = &board.entities[eid];
-                let Some(Teammate::In(ind)) = entity.team.get(team) else { return };
-
-                let Individual { species, cur_hp } = *ind;
                 let (name, leader, player) = (None, Some(eid), false);
                 let args = EntityArgs { name, pos: target, player, leader, species };
                 let oid = board.add_entity(&args, env);
@@ -1266,12 +1262,11 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             ActionResult::success()
         }
         Action::Shout { summon, command } => {
-            let fail = ActionResult::failure();
-            let Some(&oid) = entity.summons.get(summon) else { return fail };
+            let summon = entity.summons.get(summon);
+            let Some(&oid) = summon else { return ActionResult::failure() };
 
-            if matches!(command, Command::Return) && try_recall_entity(state, eid, oid) {
-                return ActionResult::success();
-            }
+            let done = matches!(command, Command::Return) && try_recall_entity(state, eid, oid);
+            if done { return ActionResult::success(); }
 
             let summon = &mut state.board.entities[oid];
             let name = summon.species.name;

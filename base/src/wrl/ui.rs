@@ -815,7 +815,7 @@ impl UI {
         true
     }
 
-    // Update helpers
+    // Update helpers:
 
     fn update_weather(&mut self, pos: Point, rng: &mut RNG) {
         let Some(r) = &mut self.rainfall else { return; };
@@ -1096,7 +1096,7 @@ impl UI {
         }
     }
 
-    // Rendering each section of the UI
+    // Rendering each section of the UI:
 
     fn render_log(&self, buffer: &mut Buffer) {
         let slice = &mut Slice::new(buffer, self.layout.log);
