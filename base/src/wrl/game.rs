@@ -308,90 +308,12 @@ impl Board {
 
     // Animation:
 
-    fn add_effect(&mut self, effect: Effect, env: &mut Env) {
-        let mut existing = Effect::default();
-        swap(&mut self._effect, &mut existing);
-        self._effect = existing.and(effect);
-        self._effect.events.retain(|x| matches!(x, effect::Event::Callback { .. }));
-        self._frame_mask.clear();
-        self._execute_effect_callbacks(env);
-    }
-
-    fn advance_effect(&mut self, pov: EID, env: &mut Env) -> bool {
-        let Some(entity) = self.entities.get(pov) else { return false };
-
-        env.fov.compute(self, entity);
-        let mut visible = self._pov_sees_effect(pov, env);
-
-        while self._advance_one_frame(pov, env) {
-            self._fill_frame_mask(pov, env);
-            visible = visible || self._pov_sees_effect(pov, env);
-            if visible { return true; }
-        }
-        false
-    }
-
-    fn redo_effect_updates(&mut self) {
-        self._enter_effect_frame(true);
-    }
-
-    fn undo_effect_updates(&mut self) {
-        self._enter_effect_frame(false);
-    }
-
-    fn start_effect(&mut self, pov: EID, env: &mut Env) {
-        if self.get_frame().is_none() { return; }
-        let Some(entity) = self.entities.get(pov) else { return };
-
-        env.fov.compute(self, entity);
-
-        if !self._pov_sees_effect(pov, env) { self.advance_effect(pov, env); }
-    }
-
-    fn _advance_one_frame(&mut self, pov: EID, env: &mut Env) -> bool {
-        if self._effect.frames.is_empty() {
-            assert!(self._effect.events.is_empty());
-            return false;
-        }
-
-        self.time = self.time.bump();
-        let frame = self._effect.frames.remove(0);
-        env.debug.as_mut().map(|x| x.record_frame(self, &frame));
-        self._effect.events.iter_mut().for_each(|x| x.update_frame(|y| y - 1));
-        self._frame_mask.clear();
-
-        // Need to re-arm the vision context after any effect callback.
-        let update = self._execute_effect_callbacks(env);
-        if update && let Some(x) = self.entities.get(pov) { env.fov.compute(self, x); }
-
-        true
-    }
-
-    fn _execute_effect_callbacks(&mut self, env: &mut Env) -> bool {
-        let mut result = false;
-        while self._execute_one_effect_callback(env) { result = true; }
-        result
-    }
-
-    fn _execute_one_effect_callback(&mut self, env: &mut Env) -> bool {
-        if self._effect.events.is_empty() { return false; }
-
-        let event = &self._effect.events[0];
-        if !self._effect.frames.is_empty() && event.frame() > 0 { return false; }
-
-        match self._effect.events.remove(0) {
-            effect::Event::Callback { callback, .. } => callback(self, env),
-            effect::Event::Other { .. } => (),
-        }
-        true
-    }
-
-    fn _fill_frame_mask(&mut self, pov: EID, env: &mut Env) {
+    fn fill_frame_mask(&mut self, pov: EID, fov: &mut FOV) {
         if !self._frame_mask.is_empty() { return; }
         let Some(me) = self.entities.get(pov) else { return };
         let Some(frame) = self._effect.frames.get(0) else { return };
 
-        let vision = &env.fov.select_vision(me);
+        let vision = fov.select_vision(me);
         self._frame_mask = frame.iter().map(|x| match &x.data {
             ParticleData::Light(..) => false,
             ParticleData::Shift(..) => vision.can_see(x.point),
@@ -400,12 +322,12 @@ impl Board {
         }).collect();
     }
 
-    fn _pov_sees_effect(&mut self, pov: EID, env: &mut Env) -> bool {
-        self._fill_frame_mask(pov, env);
+    fn pov_sees_effect(&mut self, pov: EID, fov: &mut FOV) -> bool {
+        self.fill_frame_mask(pov, fov);
         if self._frame_mask.iter().any(|&x| x) { return true; }
 
         let Some(me) = self.entities.get(pov) else { return false };
-        let vision = &env.fov.select_vision(me);
+        let vision = fov.select_vision(me);
 
         let prev: Vec<_> = vision.get_points_seen().iter().map(
             |&x| self.is_cell_lit(x)).collect();
@@ -415,6 +337,14 @@ impl Board {
         self.undo_effect_updates();
 
         prev != next
+    }
+
+    fn redo_effect_updates(&mut self) {
+        self._enter_effect_frame(true);
+    }
+
+    fn undo_effect_updates(&mut self) {
+        self._enter_effect_frame(false);
     }
 
     fn _enter_effect_frame(&mut self, active: bool) {
@@ -797,7 +727,8 @@ fn shout(state: &mut State, eid: EID, shout: &str) {
     }
 }
 
-fn hit_tile(board: &mut Board, env: &mut Env, eid: EID, target: Point) {
+fn hit_tile(state: &mut State, eid: EID, target: Point) {
+    let State { board, env, .. } = state;
     if !board.get_tile(target).drops_berries() { return; }
 
     let options: Vec<_> = dirs::ALL.clone().into_iter().filter(
@@ -812,7 +743,8 @@ fn hit_tile(board: &mut Board, env: &mut Env, eid: EID, target: Point) {
     }
 }
 
-fn hit_entity(board: &mut Board, env: &mut Env, eid: EID, attack: &Attack, logged: bool, tid: EID) {
+fn hit_entity(state: &mut State, eid: EID, attack: &Attack, logged: bool, tid: EID) {
+    let State { board, env, .. } = state;
     let Some(target) = board.entities.get_mut(tid) else { return; };
 
     let (pos, lower, upper) = (target.pos, target.lower(), target.upper());
@@ -853,7 +785,7 @@ fn try_recall_entity(state: &mut State, eid: EID, oid: EID) -> bool {
     let (source, target) = (entity.pos, summon.pos);
     if !can_summon(&state.board, entity, target) { return false; }
 
-    let cb: CB = Box::new(move |board, _| board.remove_entity(oid));
+    let cb: CB = Box::new(move |x| x.board.remove_entity(oid));
     let effect = effect::WithdrawEffect(source, target);
     state.add_effect(apply_effect(effect, FT::Withdraw, cb));
     true
@@ -1011,7 +943,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             }
 
             let effect = apply_noise(source, 0xffff00, "*sniff*", noise.volume);
-            board.add_effect(effect, &mut state.env);
+            state.add_effect(effect);
             ActionResult::success()
         }
         Action::Look { look } => {
@@ -1027,12 +959,11 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             if !okay { return ActionResult::failure(); }
 
             let color = 0x0080ff;
-            let board = &mut state.board;
             let effect = Effect::serial(vec![
                 flash_tile(target, color, None),
                 flash_entity(source, color).delay(UI_FLASH / 2),
             ]);
-            board.add_effect(effect, &mut state.env);
+            state.add_effect(effect);
             ActionResult::success()
         }
         Action::Eat { target, item } => {
@@ -1047,17 +978,16 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             };
             if !okay { return ActionResult::failure(); }
 
-            let board = &mut state.board;
             let color = if item == Some(Item::Corpse) { 0xff0000 } else { 0xffff00 };
-            let cb = Box::new(move |board: &mut Board, _: &mut Env| {
+            let cb: CB = Box::new(move |state| {
                 let Some(item) = item else { return };
-                board.remove_item(target, item);
+                state.board.remove_item(target, item);
             });
             let effect = Effect::serial(vec![
                 flash_tile(target, color, Some(cb)),
                 flash_entity(source, color).delay(UI_FLASH / 2),
             ]);
-            board.add_effect(effect, &mut state.env);
+            state.add_effect(effect);
             ActionResult::success()
         }
         Action::Call { call, look } => {
@@ -1080,22 +1010,21 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 Call::Help    => ("*chirp*", true),
                 Call::Warning => ("*grrr*",  false),
             };
-            let board = &mut state.board;
-            let mut effect = apply_noise(source, color, text, CALL_VOLUME);
 
             // For some call types, we look before calling; when calling for
             // help, we shout in the direction of our allies, then look.
-            let cb = move |board: &mut Board, _: &mut Env| {
-                let Some(entity) = board.entities.get_mut(eid) else { return };
+            let cb = move |state: &mut State| {
+                let Some(entity) = state.board.entities.get_mut(eid) else { return };
                 entity.face_direction(look);
             };
+
+            let mut effect = apply_noise(source, color, text, CALL_VOLUME);
             if wait {
                 effect.sub_on_finished(Box::new(cb));
             } else {
-                cb(board, &mut state.env);
+                cb(state);
             }
-
-            board.add_effect(effect, &mut state.env);
+            state.add_effect(effect);
             ActionResult::success()
         }
         Action::Move { look, step, turns } => {
@@ -1208,22 +1137,19 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 state.env.ui.log.log(line);
             }
 
-            let cb = move |board: &mut Board, env: &mut Env| {
-                hit_tile(board, env, eid, target);
-
+            let cb: CB = Box::new(move |state| {
+                hit_tile(state, eid, target);
                 let Some(tid) = tid else { return; };
 
-                let cb = move |board: &mut Board, env: &mut Env| {
-                    hit_entity(board, env, eid, attack, logged, tid);
-                };
-                board.add_effect(apply_damage(target, Box::new(cb)), env);
-            };
+                let cb: CB = Box::new(move |x| { hit_entity(x, eid, attack, logged, tid); });
+                state.add_effect(apply_damage(target, cb));
+            });
 
             let rng = &mut state.env.rng;
             let shift = Particle::shift(source, source);
             let effect = (attack.effect)(rng, source, target);
             let effect = Effect::constant(shift, effect.frames.len() as i32).and(effect);
-            state.add_effect(apply_effect(effect, FT::Hit, Box::new(cb)));
+            state.add_effect(apply_effect(effect, FT::Hit, cb));
             ActionResult::success_moves(1.)
         }
         Action::Recall { summon } => {
@@ -1244,7 +1170,8 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
             shout(state, eid, &format!("Go! {}!", species.name));
 
-            let cb = Box::new(move | board: &mut Board, env: &mut Env| {
+            let cb: CB = Box::new(move |state| {
+                let State { board, env, .. } = state;
                 let (name, leader, player) = (None, Some(eid), false);
                 let args = EntityArgs { name, pos: target, player, leader, species };
                 let oid = board.add_entity(&args, env);
@@ -1387,8 +1314,7 @@ fn update_state(state: &mut State) {
     state.env.ui.update(pos, &mut state.env.rng);
 
     // If an Effect is active, run it, skipping frames the player can't see.
-    let pov = state.player;
-    if state.board.advance_effect(pov, &mut state.env) {
+    if state.advance_effect() {
         update_player_knowledge(state);
         return;
     }
@@ -1402,7 +1328,7 @@ fn update_state(state: &mut State) {
         if !matches!(state.input, Action::WaitForInput) { return true; }
 
         // Automatically stage the recall action.
-        let player = &state.board.entities[state.player];
+        let player = state.get_player();
         for (i, &summon) in player.summons.iter().enumerate() {
             let summon = &state.board.entities[summon];
             if !matches!(summon.command.get(), Some(Command::Return)) { continue; }
@@ -1454,8 +1380,7 @@ fn update_state(state: &mut State) {
         board.active_entity = None;
         drain(entity, &result);
 
-        let pov = state.player;
-        board.start_effect(pov, &mut state.env);
+        state.start_effect();
     }
     if update { update_player_knowledge(state); }
 }
@@ -1589,8 +1514,6 @@ impl State {
         Self { board, input, inputs, player, env }
     }
 
-    pub fn add_effect(&mut self, x: Effect) { self.board.add_effect(x, &mut self.env) }
-
     pub fn add_input(&mut self, input: Input) { self.inputs.push(input) }
 
     pub fn update(&mut self) { update_state(self); }
@@ -1628,6 +1551,79 @@ impl State {
         let board = &self.board;
         let entity = &board.entities[eid];
         debug.record(action, board, entity);
+    }
+
+    // Animation:
+
+    fn add_effect(&mut self, effect: Effect) {
+        let board = &mut self.board;
+        board._effect = std::mem::take(&mut board._effect).and(effect);
+        board._effect.events.retain(|x| matches!(x, effect::Event::Callback { .. }));
+        board._frame_mask.clear();
+        self._execute_effect_callbacks();
+    }
+
+    fn advance_effect(&mut self) -> bool {
+        let (pov, board) = (self.player, &self.board);
+        let Some(me) = board.entities.get(pov) else { return false };
+
+        self.env.fov.compute(board, me);
+        let mut visible = self.board.pov_sees_effect(pov, &mut self.env.fov);
+
+        while self._advance_one_frame() {
+            self.board.fill_frame_mask(pov, &mut self.env.fov);
+            visible = visible || self.board.pov_sees_effect(pov, &mut self.env.fov);
+            if visible { return true; }
+        }
+        false
+    }
+
+    fn start_effect(&mut self) {
+        if self.board.get_frame().is_none() { return; }
+
+        let (pov, board) = (self.player, &mut self.board);
+        let Some(me) = board.entities.get(pov) else { return };
+
+        self.env.fov.compute(board, me);
+        if !board.pov_sees_effect(pov, &mut self.env.fov) { self.advance_effect(); }
+    }
+
+    fn _advance_one_frame(&mut self) -> bool {
+        let board = &mut self.board;
+        if board.get_frame().is_none() { return false; }
+
+        board.time = board.time.bump();
+
+        let frame = board._effect.frames.remove(0);
+        self.env.debug.as_mut().map(|x| x.record_frame(board, &frame));
+
+        board._effect.events.iter_mut().for_each(|x| x.update_frame(|y| y - 1));
+        board._frame_mask.clear();
+
+        if !self._execute_effect_callbacks() { return true; }
+
+        // Need to re-arm the vision context after any effect callback.
+        let (pov, board) = (self.player, &self.board);
+        if let Some(x) = board.entities.get(pov) { self.env.fov.compute(board, x); }
+        true
+    }
+
+    fn _execute_effect_callbacks(&mut self) -> bool {
+        let mut result = false;
+        while self._execute_one_effect_callback() { result = true; }
+        result
+    }
+
+    fn _execute_one_effect_callback(&mut self) -> bool {
+        let effect = &mut self.board._effect;
+        let Some(event) = effect.events.get(0) else { return false };
+        if !effect.frames.is_empty() && event.frame() > 0 { return false; }
+
+        match effect.events.remove(0) {
+            effect::Event::Callback { callback, .. } => callback(self),
+            effect::Event::Other { .. } => (),
+        }
+        true
     }
 }
 
