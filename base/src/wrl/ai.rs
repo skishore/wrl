@@ -664,7 +664,11 @@ fn Explore(ctx: &mut Ctx) -> Option<Action> {
 
 fn HeardUnknownNoise(ctx: &mut Ctx) -> bool {
     let bb = &mut ctx.blackboard;
-    if bb.threats.unknown.is_empty() { return false; }
+    let (pos, threats) = (ctx.pos, &bb.threats);
+
+    let result = threats.unknown.iter().any(
+        |x| x.pos != pos && CALL_VOLUME.contains(x.pos - pos));
+    if !result { return false; }
 
     if bb.dirs.kind == DirsKind::Noises && bb.dirs.dirs.len() == 1 {
         for threat in &mut bb.threats.threats { threat.mark_scanned(); }
@@ -686,8 +690,10 @@ fn LookForNoises(ctx: &mut Ctx) -> Option<Action> {
     let threats = &ctx.blackboard.threats;
     let (pos, rng) = (ctx.pos, &mut ctx.env.rng);
 
-    let dirs: Vec<_> = threats.unknown.iter().filter_map(
-        |x| if x.pos != pos { Some(x.pos - pos) } else { None }).collect();
+    let dirs: Vec<_> = threats.unknown.iter().filter_map(|x| {
+        let okay = x.pos != pos && CALL_VOLUME.contains(x.pos - pos);
+        if okay { Some(x.pos - pos) } else { None }
+    }).collect();
     let dirs = if dirs.is_empty() { &[ctx.dir] } else { dirs.as_slice() };
 
     let kind = DirsKind::Noises;
@@ -1768,10 +1774,6 @@ fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
 //    The reason is that a) AttackTarget fails because it requires the target
 //    to be visible, but then b) FollowPath fails because we constructed a
 //    path, then ignored it in favor of running AttackTarget...
-//
-//  - If we glimpse a threat because it moved just out of our view, we'll scan
-//    its last location, then take a normal step, and then warn it when we're
-//    in view range again.
 
 fn AttackOrFollowPath(kind: PathKind) -> impl Bhv {
     pri![
