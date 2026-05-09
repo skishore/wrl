@@ -1115,20 +1115,17 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
             let (board, log) = (&mut state.board, &mut state.env.ui.log);
             let cell = board.get_cell(target);
-            let mut swap = false;
+            let swap = cell.eid.is_some();
 
             if cell.tile.blocks_movement() {
                 board.entities[eid].face_direction(step);
                 return ActionResult::failure();
-            } else if let Some(other) = cell.eid {
-                let other = &board.entities[other];
-                if other.leader != Some(eid) {
-                    board.entities[eid].face_direction(step);
-                    if player { log.log_failure("There's something in the way!"); }
-                    return ActionResult::failure();
-                }
-                if player { log.log(format!("You swap places with {}.", other.lower())); }
-                swap = true;
+            }
+
+            if let Some(x) = cell.eid && board.entities[x].leader != Some(eid) {
+                board.entities[eid].face_direction(step);
+                if player { log.log_failure("There's something in the way!"); }
+                return ActionResult::failure();
             }
 
             board.time = board.time.bump();
