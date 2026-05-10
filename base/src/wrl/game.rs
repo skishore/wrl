@@ -308,27 +308,46 @@ impl Board {
 
     // Animation:
 
-    fn fill_frame_mask(&mut self, pov: EID, fov: &mut FOV) {
-        if !self._frame_mask.is_empty() { return; }
-        let Some(me) = self.entities.get(pov) else { return };
-        let Some(frame) = self._effect.frames.get(0) else { return };
+    fn add_effect(&mut self, effect: Effect) {
+        self._effect = std::mem::take(&mut self._effect).and(effect);
+        self._effect.events.retain(|x| matches!(x, effect::Event::Callback { .. }));
+        self._frame_mask.clear();
+    }
 
-        let vision = fov.select_vision(me);
-        self._frame_mask = frame.iter().map(|x| match &x.data {
-            ParticleData::Light(..) => false,
-            ParticleData::Shift(..) => vision.can_see(x.point),
-            ParticleData::Sight(..) => vision.can_see(x.point),
-            ParticleData::Sound(volume, ..) => volume.contains(x.point - me.pos),
-        }).collect();
+    fn pop_callback(&mut self) -> Option<CB> {
+        let event = self._effect.events.first()?;
+        if !self._effect.frames.is_empty() && event.frame() > 0 { return None };
+
+        match self._effect.events.remove(0) {
+            effect::Event::Callback { callback, .. } => Some(callback),
+            effect::Event::Other { .. } => None
+        }
+    }
+
+    fn pop_frame(&mut self) -> Option<Frame> {
+        if self._effect.frames.is_empty() { return None; }
+
+        let result = self._effect.frames.remove(0);
+        for x in &mut self._effect.events { x.update_frame(|x| x - 1); }
+        self._frame_mask.clear();
+        Some(result)
     }
 
     fn pov_sees_effect(&mut self, pov: EID, fov: &mut FOV) -> bool {
-        self.fill_frame_mask(pov, fov);
+        let Some(frame) = self.get_frame() else { return false };
+        let Some(me) = self.entities.get(pov) else { return false };
+        let count = frame.len();
+
+        if self._frame_mask.is_empty() {
+            self._frame_mask = self._compute_frame_mask(me, frame, fov);
+        }
+        assert!(self._frame_mask.len() == count);
+
+        // Cheap check: are any of the particles directly visible?
         if self._frame_mask.iter().any(|&x| x) { return true; }
 
-        let Some(me) = self.entities.get(pov) else { return false };
+        // Expensive check: does lighting for any visible cell change?
         let vision = fov.select_vision(me);
-
         let prev: Vec<_> = vision.get_points_seen().iter().map(
             |&x| self.is_cell_lit(x)).collect();
         self.redo_effect_updates();
@@ -347,8 +366,21 @@ impl Board {
         self._enter_effect_frame(false);
     }
 
+    fn _compute_frame_mask(&self, me: &Entity, frame: &Frame, fov: &mut FOV) -> Vec<bool> {
+        assert!(self._frame_mask.is_empty());
+
+        let vision = fov.select_vision(me);
+
+        frame.iter().map(|x| match &x.data {
+            ParticleData::Light(..) => false,
+            ParticleData::Shift(..) => vision.can_see(x.point),
+            ParticleData::Sight(..) => vision.can_see(x.point),
+            ParticleData::Sound(volume, ..) => volume.contains(x.point - me.pos),
+        }).collect()
+    }
+
     fn _enter_effect_frame(&mut self, active: bool) {
-        let Some(mut frame) = self._effect.frames.get(0).cloned() else { return };
+        let Some(mut frame) = self.get_frame().cloned() else { return };
 
         if !active { frame.reverse(); }
 
@@ -379,6 +411,8 @@ impl Board {
     }
 
     // Getters:
+
+    pub fn animation_running(&self) -> bool { self.get_frame().is_some() }
 
     pub fn get_cell(&self, p: Point) -> &Cell { self.map.entry_ref(p) }
 
@@ -1321,7 +1355,7 @@ fn update_state(state: &mut State) {
 
     // The game loop is interrupted by animations, and if the player dies.
     let game_loop_active = |state: &State| {
-        state.get_player().cur_hp > 0 && state.board.get_frame().is_none()
+        !state.board.animation_running() && state.get_player().cur_hp > 0
     };
     let stage_input = |state: &mut State| {
         if !game_loop_active(state) { return true; }
@@ -1556,56 +1590,42 @@ impl State {
     // Animation:
 
     fn add_effect(&mut self, effect: Effect) {
-        let board = &mut self.board;
-        board._effect = std::mem::take(&mut board._effect).and(effect);
-        board._effect.events.retain(|x| matches!(x, effect::Event::Callback { .. }));
-        board._frame_mask.clear();
+        self.board.add_effect(effect);
         self._execute_effect_callbacks();
     }
 
     fn advance_effect(&mut self) -> bool {
-        let (pov, board) = (self.player, &self.board);
-        let Some(me) = board.entities.get(pov) else { return false };
+        if !self.board.animation_running() { return false; }
 
-        self.env.fov.compute(board, me);
-        let mut visible = self.board.pov_sees_effect(pov, &mut self.env.fov);
+        self._advance_one_frame();
+        self.start_effect()
+    }
 
-        while self._advance_one_frame() {
-            self.board.fill_frame_mask(pov, &mut self.env.fov);
-            visible = visible || self.board.pov_sees_effect(pov, &mut self.env.fov);
-            if visible { return true; }
+    fn start_effect(&mut self) -> bool {
+        if !self.board.animation_running() { return false; }
+
+        let pov = self.player;
+        self._arm_animation_fov(pov);
+
+        while self.board.animation_running() {
+            if self.board.pov_sees_effect(pov, &mut self.env.fov) { return true; }
+            if self._advance_one_frame() { self._arm_animation_fov(pov); }
         }
         false
     }
 
-    fn start_effect(&mut self) {
-        if self.board.get_frame().is_none() { return; }
-
-        let (pov, board) = (self.player, &mut self.board);
-        let Some(me) = board.entities.get(pov) else { return };
-
-        self.env.fov.compute(board, me);
-        if !board.pov_sees_effect(pov, &mut self.env.fov) { self.advance_effect(); }
-    }
-
     fn _advance_one_frame(&mut self) -> bool {
         let board = &mut self.board;
-        if board.get_frame().is_none() { return false; }
+        let frame = board.pop_frame().unwrap();
 
         board.time = board.time.bump();
-
-        let frame = board._effect.frames.remove(0);
         self.env.debug.as_mut().map(|x| x.record_frame(board, &frame));
+        self._execute_effect_callbacks()
+    }
 
-        board._effect.events.iter_mut().for_each(|x| x.update_frame(|y| y - 1));
-        board._frame_mask.clear();
-
-        if !self._execute_effect_callbacks() { return true; }
-
-        // Need to re-arm the vision context after any effect callback.
-        let (pov, board) = (self.player, &self.board);
-        if let Some(x) = board.entities.get(pov) { self.env.fov.compute(board, x); }
-        true
+    fn _arm_animation_fov(&mut self, pov: EID) {
+        let Some(me) = self.board.get_entity(pov) else { return };
+        self.env.fov.compute(&self.board, me);
     }
 
     fn _execute_effect_callbacks(&mut self) -> bool {
@@ -1615,15 +1635,7 @@ impl State {
     }
 
     fn _execute_one_effect_callback(&mut self) -> bool {
-        let effect = &mut self.board._effect;
-        let Some(event) = effect.events.get(0) else { return false };
-        if !effect.frames.is_empty() && event.frame() > 0 { return false; }
-
-        match effect.events.remove(0) {
-            effect::Event::Callback { callback, .. } => callback(self),
-            effect::Event::Other { .. } => (),
-        }
-        true
+        self.board.pop_callback().map(|x| { x(self); true }).unwrap_or(false)
     }
 }
 
