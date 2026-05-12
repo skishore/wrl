@@ -552,7 +552,7 @@ fn ClearLastSeen(ctx: &mut Ctx, kind: PathKind) -> Result {
     Result::Failed
 }
 
-fn UpdateLastSeen<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> Result {
+fn UpdateLastSeen(ctx: &mut Ctx, kind: PathKind, valid: CellPredicate) -> Result {
     for cell in &ctx.known.cells {
         if !cell.visible() { break; }
         if !valid(ctx, cell.point) { continue; }
@@ -742,6 +742,8 @@ fn WarnOffThreats(ctx: &mut Ctx) -> Option<Action> {
 
 // Pathfinding:
 
+type CellPredicate = fn(&Ctx, Point) -> bool;
+
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 enum PathKind {
     // High-priority actions:
@@ -911,6 +913,88 @@ fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
     ctx.blackboard.path = path;
     ctx.blackboard.path.step += 1;
     Some(Action::Move { look, step, turns })
+}
+
+fn CheckPathKind(ctx: &Ctx, kind: PathKind) -> bool {
+    ctx.blackboard.path.kind == kind
+}
+
+fn CheckPathTarget(ctx: &mut Ctx, kind: PathKind, valid: CellPredicate) -> bool {
+    if ctx.blackboard.path.kind != kind { return false; }
+
+    let okay = ctx.blackboard.path.path.last().map_or(false, |&x| valid(ctx, x));
+    if !okay { ctx.blackboard.path.clear(); }
+    okay
+}
+
+fn CheckStepsAreFree(ctx: &Ctx) -> bool {
+    // Check if every cell on the path is free. Other than the cell that we'll
+    // move to next, we allow entities to temporarily move onto the path.
+    let path = &ctx.blackboard.path;
+    let steps = path.path.iter().skip(path.step + 1).rev().skip(path.skip).rev();
+    let known = ctx.known;
+
+    steps.enumerate().all(|(i, &x)| match known.get(x).status() {
+        Status::Free | Status::Unknown => true,
+        Status::Occupied => i != 0,
+        Status::Blocked => false,
+    })
+}
+
+fn CheckStepsAreHidingSpots(ctx: &Ctx) -> bool {
+    // If we're sneaking, check that all cells are valid hiding places.
+    let path = &ctx.blackboard.path;
+    if path.kind != PathKind::Hide { return true; }
+    path.path.iter().skip(path.step).all(|&x| is_hiding_place(ctx, x))
+}
+
+fn MoveAlongPath(ctx: &mut Ctx) -> Result {
+    let Ctx { pos, known, .. } = *ctx;
+    let path = &ctx.blackboard.path;
+    let kind = path.kind;
+
+    let n = path.path.len();
+    let (i, j) = (path.step, path.step + 1);
+    let Some(&prev) = path.path.get(i) else { return Result::Success };
+    let Some(&next) = path.path.get(j) else { return Result::Success };
+
+    // To move adjacent to a cell, look instead of taking the last step.
+    if j + path.skip >= n {
+        if known.get(next).visible() { return Result::Success; }
+        return ctx.choose_action(Action::Look { look: next - prev });
+    }
+
+    // Else, follow the path, look as far ahead as posisble without seeing
+    // any obstructions, and update our current step.
+    //
+    // Special case: don't let an enemy kite you around a one-tile obstacle.
+    let mut target = next;
+    for &point in path.path.iter().skip(j).take(8) {
+        let free = pos != point && {
+            let los = LOS(pos, point);
+            los[1..los.len() - 1].iter().all(|&x| known.get(x).unblocked())
+        };
+        if free { target = point; }
+    }
+    if IsChasePathKind(kind) && path.path.len() == j + 2 {
+        target = path.path[j + 1];
+    }
+    let (look, step) = (target - pos, next - pos);
+
+    // Determine how fast to move on the path. Only move quickly (and noisily)
+    // when fleeing from an enemy, chasing one down, or returning to a leader.
+    let mut turns = WANDER_TURNS;
+    if IsChasePathKind(kind) && let Some(x) = &ctx.blackboard.chase {
+        let limit = ctx.known.time_at_turn(MIN_SEARCH_TURNS);
+        if x.target.time > limit && !x.target.slow { turns = 1. };
+    } else if kind == PathKind::Flee && any_threat_awake(ctx) {
+        turns = 1.;
+    } else if kind == PathKind::Leader {
+        turns = FOLLOW_TURNS;
+    }
+
+    ctx.blackboard.path.step += 1;
+    ctx.choose_action(Action::Move { look, step, turns })
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -1096,11 +1180,12 @@ fn CanRestAt(ctx: &Ctx, point: Point) -> bool {
     point == ctx.pos || ctx.known.get(point).status() == Status::Free
 }
 
-trait CellPredicate = Fn(&Ctx, Point) -> bool;
+fn FindNeed(ctx: &mut Ctx, kind: PathKind, valid: CellPredicate) -> bool {
+    if let Some(point) = ChooseNeighbor(ctx, kind, valid) {
+        return FindPath(ctx, point, kind);
+    }
 
-fn FindNeed<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> bool {
     ensure_reachable(ctx);
-
     let n = &ctx.reachable.neighborhood;
     for &(point, _) in n.blocked.iter().chain(&n.visited) {
         if valid(ctx, point) { return FindPath(ctx, point, kind); }
@@ -1112,15 +1197,7 @@ fn FindNeed<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> bool {
     false
 }
 
-fn CheckPathTarget<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> bool {
-    if ctx.blackboard.path.kind != kind { return false; }
-
-    let okay = ctx.blackboard.path.path.last().map_or(false, |&x| valid(ctx, x));
-    if !okay { ctx.blackboard.path.clear(); }
-    okay
-}
-
-fn ChooseNeighbor<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> Option<Point> {
+fn ChooseNeighbor(ctx: &mut Ctx, kind: PathKind, valid: CellPredicate) -> Option<Point> {
     let Ctx { pos, dir, .. } = *ctx;
     if valid(ctx, pos) { return Some(pos); }
 
@@ -1144,9 +1221,7 @@ fn ChooseNeighbor<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> 
 }
 
 fn EatMeatNearby(ctx: &mut Ctx) -> Option<Action> {
-    let Ctx { known, pos, .. } = *ctx;
-    let target = ChooseNeighbor(ctx, PathKind::Meat, HasMeat)?;
-    if !known.get(target).visible() { return Some(Action::Look { look: target - pos }); }
+    let target = *ctx.blackboard.path.path.last()?;
 
     ctx.blackboard.hunger.update(MAX_HUNGER);
 
@@ -1154,9 +1229,7 @@ fn EatMeatNearby(ctx: &mut Ctx) -> Option<Action> {
 }
 
 fn EatBerryNearby(ctx: &mut Ctx) -> Option<Action> {
-    let Ctx { known, pos, .. } = *ctx;
-    let target = ChooseNeighbor(ctx, PathKind::Berry, HasBerry)?;
-    if !known.get(target).visible() { return Some(Action::Look { look: target - pos }); }
+    let target = *ctx.blackboard.path.path.last()?;
 
     let prev = ctx.blackboard.hunger.cur;
     let gain = ctx.env.rng.random_range(HUNGER_GAIN);
@@ -1171,9 +1244,7 @@ fn EatBerryNearby(ctx: &mut Ctx) -> Option<Action> {
 }
 
 fn DrinkWaterNearby(ctx: &mut Ctx) -> Option<Action> {
-    let Ctx { known, pos, .. } = *ctx;
-    let target = ChooseNeighbor(ctx, PathKind::Water, HasWater)?;
-    if !known.get(target).visible() { return Some(Action::Look { look: target - pos }); }
+    let target = *ctx.blackboard.path.path.last()?;
 
     let gain = ctx.env.rng.random_range(THIRST_GAIN);
     ctx.blackboard.thirst.update(gain);
@@ -1195,11 +1266,7 @@ fn FindNearbyBerryTree(ctx: &mut Ctx) -> Option<Action> {
     None
 }
 
-fn RestHere(ctx: &mut Ctx) -> Option<Action> {
-    if !CanRestAt(ctx, ctx.pos) { return None; }
-
-    ctx.blackboard.path.clear();
-
+fn GetRestHere(ctx: &mut Ctx) -> Option<Action> {
     let gain = ctx.env.rng.random_range(RESTED_GAIN);
     ctx.blackboard.weariness.update(gain);
 
@@ -1896,6 +1963,33 @@ macro_rules! path {
     };
 }
 
+macro_rules! pathfind {
+    ($n:expr, $k:expr, $v:expr, $f:expr) => {
+        seq![
+            $n,
+            cond!("CheckLastSeen", |x| CheckLastSeen(x, $k)),
+            pri![
+                "ComputePath",
+                CheckCurrentPath($k, $v),
+                cond!("FindNewPath", |x| FindNeed(x, $k, $v)),
+                cb!("ClearLastSeen", |x| ClearLastSeen(x, $k)),
+            ],
+            cb!("MoveAlongPath", MoveAlongPath),
+            $f,
+        ]
+    };
+}
+
+fn CheckCurrentPath(kind: PathKind, predicate: CellPredicate) -> impl Bhv {
+    seq![
+        "CheckCurrentPath",
+        cond!("CheckPathKind", move |x| CheckPathKind(x, kind)),
+        cond!("CheckPathTarget", move |x| CheckPathTarget(x, kind, predicate)),
+        cond!("CheckStepsAreFree", |x| CheckStepsAreFree(x)),
+        cond!("CheckStepsAreHidingSpots", |x| CheckStepsAreHidingSpots(x)),
+    ]
+}
+
 fn ForageForBerries() -> impl Bhv {
     const KIND: PathKind = PathKind::BerryTree;
     pri![
@@ -1907,11 +2001,7 @@ fn ForageForBerries() -> impl Bhv {
 
 fn EatBerries() -> impl Bhv {
     const KIND: PathKind = PathKind::Berry;
-    pri![
-        "EatBerries",
-        act!("EatBerryNearby", EatBerryNearby),
-        path!("Berry", KIND, HasBerry, act!("FollowPath", |x| FollowPath(x, KIND))),
-    ]
+    pathfind!("EatBerries", KIND, HasBerry, act!("EatBerryNearby", EatBerryNearby))
 }
 
 fn EatFood() -> impl Bhv {
@@ -1922,22 +2012,14 @@ fn EatFood() -> impl Bhv {
 
 fn DrinkWater() -> impl Bhv {
     const KIND: PathKind = PathKind::Water;
-    pri![
-        "DrinkWater",
-        act!("DrinkWaterNearby", DrinkWaterNearby),
-        path!("Water", KIND, HasWater, act!("FollowPath", |x| FollowPath(x, KIND))),
-    ]
+    pathfind!("DrinkWater", KIND, HasWater, act!("DrinkWaterNearby", DrinkWaterNearby))
     .on_tick(|x| x.blackboard.finding_water = true)
     .on_exit(|x| x.blackboard.finding_water = false)
 }
 
 fn GetRest() -> impl Bhv {
     const KIND: PathKind = PathKind::Rest;
-    pri![
-        "GetRest",
-        act!("RestHere", RestHere),
-        path!("RestArea", KIND, CanRestAt, act!("FollowPath", |x| FollowPath(x, KIND))),
-    ]
+    pathfind!("GetRest", KIND, CanRestAt, act!("GetRestHere", GetRestHere))
     .on_tick(|x| x.blackboard.getting_rest_ = true)
     .on_exit(|x| x.blackboard.getting_rest_ = false)
 }
@@ -2024,11 +2106,7 @@ fn HuntForMeat() -> impl Bhv {
         cond!("HungryForMeat", |x| HungryForMeat(x)),
         pri![
             "HuntForMeat",
-            pri![
-                "EatMeat",
-                act!("EatMeatNearby", EatMeatNearby),
-                path!("Meat", KIND, HasMeat, act!("FollowPath", |x| FollowPath(x, KIND))),
-            ],
+            pathfind!("EatMeat", KIND, HasMeat, act!("EatMeatNearby", EatMeatNearby)),
             seq![
                 "HuntForPrey",
                 run![
