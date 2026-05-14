@@ -466,7 +466,8 @@ fn select_chase_target(ctx: &mut Ctx) -> Option<Point> {
 
     ensure_neighborhood(ctx);
 
-    let scores: Vec<_> = ctx.neighborhood.visited.iter().filter_map(
+    let n = &ctx.neighborhood;
+    let scores: Vec<_> = n.blocked.iter().chain(&n.visited).filter_map(
         |&(p, distance)| Some((p, score(p, distance)?))).collect();
     select_target_softmax(&scores, ctx.env, 4.)
 }
