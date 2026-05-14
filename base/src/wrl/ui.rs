@@ -1341,6 +1341,7 @@ impl UI {
                 slice.set_fg(if ready { None } else { Some(UI_GRAY_OPTION.into()) });
                 slice.write_str("* ");
             }
+            slice.newline();
         }
         slice.newline();
     }
