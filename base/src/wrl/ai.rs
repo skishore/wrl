@@ -549,6 +549,17 @@ fn ForceThreatState(ctx: &mut Ctx, state: FightOrFlight) {
 
 // Last-seen cache:
 
+fn CheckLastSeen(ctx: &mut Ctx, kind: PathKind) -> bool {
+    if kind == PathKind::Leader { return true; }
+    ctx.blackboard.last_seen.contains_key(&kind)
+}
+
+fn ClearLastSeen(ctx: &mut Ctx, kind: PathKind) -> Result {
+    if kind == PathKind::Leader { return Result::Failed; }
+    ctx.blackboard.last_seen.remove(&kind);
+    Result::Failed
+}
+
 fn UpdateLastSeen<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> Result {
     for cell in &ctx.known.known.cells {
         if !cell.visible() { break; }
@@ -573,17 +584,6 @@ fn UpdateLastSeen<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> 
 
     if valid(ctx, last) { return Result::Running; }
 
-    ctx.blackboard.last_seen.remove(&kind);
-    Result::Failed
-}
-
-fn CheckLastSeen(ctx: &mut Ctx, kind: PathKind) -> bool {
-    if kind == PathKind::Leader { return true; }
-    ctx.blackboard.last_seen.contains_key(&kind)
-}
-
-fn ClearLastSeen(ctx: &mut Ctx, kind: PathKind) -> Result {
-    if kind == PathKind::Leader { return Result::Failed; }
     ctx.blackboard.last_seen.remove(&kind);
     Result::Failed
 }
@@ -628,9 +628,15 @@ struct CachedDirs {
     used: bool,
 }
 
+impl CachedDirs {
+    fn clear(&mut self) {
+        *self = Default::default();
+    }
+}
+
 fn CleanupDirs(ctx: &mut Ctx) {
     let dirs = &mut ctx.blackboard.dirs;
-    if !dirs.used { *dirs = Default::default(); }
+    if !dirs.used { dirs.clear(); }
     dirs.used = false;
 }
 
@@ -761,6 +767,18 @@ struct CachedPath {
     step: usize,
 }
 
+impl CachedPath {
+    fn clear(&mut self) {
+        *self = Default::default();
+    }
+}
+
+fn CleanupPath(ctx: &mut Ctx) {
+    let path = &mut ctx.blackboard.path;
+    let okay = path.path.get(path.step).cloned() == Some(ctx.pos);
+    if !okay { path.clear(); }
+}
+
 fn AStarHelper(ctx: &mut Ctx, target: Point, kind: PathKind) -> Option<Vec<Point>> {
     // Try using A* to find the best path:
     let source = ctx.pos;
@@ -822,7 +840,7 @@ fn FindPath(ctx: &mut Ctx, target: Point, kind: PathKind) -> bool {
 fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
     if ctx.blackboard.path.kind != kind { return None; }
 
-    let (known, pos) = (ctx.known, ctx.pos);
+    let Ctx { known, pos, .. } = *ctx;
     let path = std::mem::take(&mut ctx.blackboard.path);
     if path.path.is_empty() { return None; }
 
@@ -832,7 +850,7 @@ fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
     let valid = (||{
         let Some(&prev) = path.path.get(i) else { return false };
         let Some(&next) = path.path.get(j) else { return false };
-        if prev != ctx.pos { return false };
+        if prev != pos { return false };
 
         let valid = |p: Point| match known.get(p).status() {
             Status::Free | Status::Unknown => true,
@@ -874,11 +892,9 @@ fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
         turns = FOLLOW_TURNS;
     }
 
-    // Clear the path if this move takes us to the end.
-    if path.step + 2 < path.path.len() {
-        ctx.blackboard.path = path;
-        ctx.blackboard.path.step += 1;
-    }
+    // We're following the path; restore it.
+    ctx.blackboard.path = path;
+    ctx.blackboard.path.step += 1;
     Some(Action::Move { look, step, turns })
 }
 
@@ -1063,7 +1079,7 @@ fn CheckPathTarget<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) ->
     if ctx.blackboard.path.kind != kind { return false; }
 
     let okay = ctx.blackboard.path.path.last().map(|&x| valid(ctx, x)).unwrap_or(false);
-    if !okay { ctx.blackboard.path = Default::default(); }
+    if !okay { ctx.blackboard.path.clear(); }
     okay
 }
 
@@ -1143,6 +1159,8 @@ fn FindNearbyBerryTree(ctx: &mut Ctx) -> Option<Action> {
 fn RestHere(ctx: &mut Ctx) -> Option<Action> {
     if !CanRestAt(ctx, ctx.pos) { return None; }
 
+    ctx.blackboard.path.clear();
+
     let gain = ctx.env.rng.random_range(RESTED_GAIN);
     ctx.blackboard.weariness.update(gain);
 
@@ -1177,7 +1195,7 @@ fn CleanupChaseState(ctx: &mut Ctx) {
     if std::mem::take(&mut bb.chasing_enemy) { return; }
 
     let chasing = bb.path.kind == PathKind::Enemy;
-    if chasing { bb.path = Default::default(); }
+    if chasing { bb.path.clear(); }
     bb.target = None;
 }
 
@@ -1297,9 +1315,8 @@ fn UpdateChaseTarget(ctx: &mut Ctx, target: Target) {
     let fresh = change || (recent && target.sense != Sense::Smell);
     let reset = change || recent;
 
-    if reset && ctx.blackboard.path.kind == PathKind::Enemy {
-        ctx.blackboard.path = Default::default()
-    }
+    let path = &mut ctx.blackboard.path;
+    if reset && path.kind == PathKind::Enemy { path.clear(); }
 
     let (bias, steps) = if !reset && let Some(x) = prev {
         (x.bias, x.steps + 1)
@@ -1363,8 +1380,8 @@ fn ClearFlightState(ctx: &mut Ctx) {
     let fleeing = bb.path.kind == PathKind::Hide || bb.path.kind == PathKind::Flee;
     let looking = bb.dirs.kind == DirsKind::Flight;
 
-    if fleeing { bb.path = Default::default() };
-    if looking { bb.dirs = Default::default() };
+    if fleeing { bb.path.clear(); }
+    if looking { bb.dirs.clear(); }
     bb.flight = None;
 }
 
@@ -1391,13 +1408,13 @@ fn UpdateFlightState(ctx: &mut Ctx) -> bool {
     };
 
     if fleeing && flight.needs_path && turn > FLIGHT_PATH_TURNS {
-        bb.path = Default::default();
         flight.needs_path = false;
+        bb.path.clear();
     }
 
     if looking && reset {
-        bb.dirs = Default::default();
         flight.turn_limit = min(2 * flight.turn_limit, MAX_FLIGHT_TURNS);
+        bb.dirs.clear();
     }
 
     if looking && !reset && bb.dirs.dirs.len() == 1 {
@@ -2069,6 +2086,7 @@ fn Root() -> impl Bhv {
         InvestigateScents(),
         Wander(),
     ]
+    .on_tick(CleanupPath)
     .post_tick(CleanupChaseState)
     .post_tick(CleanupTarget)
     .post_tick(CleanupDirs)
