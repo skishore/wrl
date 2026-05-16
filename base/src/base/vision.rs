@@ -218,10 +218,6 @@ impl Vision {
         self.points_seen.push(pos);
     }
 
-    pub fn sort_points_seen(&mut self, pos: Point) {
-        self.points_seen.sort_by_key(|&x| (x - pos).len_l2_squared());
-    }
-
     fn seed_ranges(&mut self, dir: Point, target: Option<Point>) {
         let visibility = self.initial_visibility;
 

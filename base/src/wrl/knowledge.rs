@@ -74,10 +74,10 @@ impl CellKnowledge {
         self.flags &= !(CF::Visible | CF::SeeEntityAt);
     }
 
-    fn update(&mut self, cell: &Cell, flags: CellFlags, time: Timestamp, vision: &Vision) {
+    fn update(&mut self, cell: &Cell, flags: CellFlags, time: Timestamp, visibility: i32) {
         self.flags = flags;
         self.tile = cell.tile;
-        self.visibility = vision.get_visibility_at(self.point);
+        self.visibility = visibility;
         self.last_seen = time;
 
         if self.see_entity_at() {
@@ -400,15 +400,22 @@ impl Knowledge {
             self.observe_entity(me, me, Sense::Sight);
         }
 
+        // Compute a sorted list of points we've seen and their visibility.
+        let mut seen: Vec<_> = vision.get_points_seen().iter().map(
+            |&x| (x, vision.get_visibility_at(x))).collect();
+        if !me.player {
+            seen.sort_by_key(|&(x, _)| (x - pos).len_l2_squared());
+        }
+
         // Entities have exact knowledge about anything they can see.
         //
         // We want self.cells to be sorted by recency, and if there are ties,
         // by distance. Closer and more recently seen points come first.
         //
         // Within the loop here, we repeatedly move cells to the front of
-        // self.cells. Because points_seen is sorted by distance, we iterate
-        // over it in reverse order to get the ordering above.
-        for &point in vision.get_points_seen().iter().rev() {
+        // self.cells. Because `seen` is sorted by distance, we iterate over
+        // it in reverse order to get the desired ordering.
+        for &(point, visibility) in seen.iter().rev() {
             let cell = board.get_cell(point);
             let Cell { eid, tile, .. } = *cell;
 
@@ -446,7 +453,7 @@ impl Knowledge {
 
             // Update basic information about the given cell.
             let memory = &mut self.cells[handle];
-            memory.update(cell, flags, time, vision);
+            memory.update(cell, flags, time, visibility);
 
             // Clear the cell's entity if it's definitely unoccupied.
             if see_all_entities && entity.is_none() { entry.occupant = None; }
