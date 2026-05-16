@@ -922,13 +922,16 @@ fn CanAttackFrom(source: Point, target: Point, known: MergedKnowledge, range: Bo
 }
 
 fn PathToTarget(ctx: &mut Ctx, target: Point, range: Bound) -> Option<Action> {
-    let Ctx { known, pos: source, .. } = *ctx;
+    let Ctx { known, pos, .. } = *ctx;
     let rng = &mut ctx.env.rng;
     let step = |dir| {
-        let look = target - source - dir;
+        let look = target - pos - dir;
         Action::Move { step: dir, look, turns: 1. }
     };
-    let check = |p| known.get(p).status();
+    let check = |p| match known.get(p).status() {
+        Status::Occupied if (p - pos).len_l1() == 1 => Status::Blocked,
+        x => x
+    };
     let valid = |p| CanAttackFrom(p, target, known, range);
 
     // Given a non-empty list of "good" directions (each of which brings us
@@ -947,29 +950,29 @@ fn PathToTarget(ctx: &mut Ctx, target: Point, range: Bound) -> Option<Action> {
 
         assert!(!dirs.is_empty());
         let scores: Vec<_> = dirs.iter().map(
-            |&x| ((x + source - target).bound_radius() - radius).abs()).collect();
+            |&x| ((x + pos - target).bound_radius() - radius).abs()).collect();
         let best = *scores.iter().reduce(|acc, x| min(acc, x)).unwrap();
         let opts: Vec<_> = (0..dirs.len()).filter(|&i| scores[i] == best).collect();
         step(dirs[*sample(&opts, rng)])
     };
 
     // If we could already attack the target, don't move out of view.
-    if valid(source) {
+    if valid(pos) {
         let mut dirs = vec![Point::default()];
         for &x in &dirs::ALL {
-            if check(source + x) != Status::Free { continue; }
-            if valid(source + x) { dirs.push(x); }
+            if check(pos + x) != Status::Free { continue; }
+            if valid(pos + x) { dirs.push(x); }
         }
         return Some(pick(&dirs, rng));
     }
 
     // Else, pick a direction which brings us in view.
-    let result = BFS(source, &valid, BFS_LIMIT_ATTACK, check);
+    let result = BFS(pos, &valid, BFS_LIMIT_ATTACK, check);
     if let Some(x) = result && !x.dirs.is_empty() { return Some(pick(&x.dirs, rng)); }
 
     // Else, move towards the target.
-    let path = AStar(source, target, ASTAR_LIMIT_ATTACK, check)?;
-    Some(step(*path.first()? - source))
+    let path = AStar(pos, target, ASTAR_LIMIT_ATTACK, check)?;
+    Some(step(*path.first()? - pos))
 }
 
 //////////////////////////////////////////////////////////////////////////////
