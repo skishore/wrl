@@ -893,9 +893,7 @@ fn AttackPathTarget(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
 }
 
 fn AttackTarget(ctx: &mut Ctx, target: Point) -> Option<Action> {
-    let Ctx { known, pos: source, .. } = *ctx;
-    if !known.get(target).visible() { return None; }
-    if source == target { return None; }
+    if !ctx.known.get(target).visible() { return None; }
 
     let attacks = &ctx.entity.species.attacks;
     if attacks.is_empty() { return None; }
@@ -905,16 +903,17 @@ fn AttackTarget(ctx: &mut Ctx, target: Point) -> Option<Action> {
 }
 
 fn AttackWith(ctx: &mut Ctx, target: Point, attack: &'static Attack) -> Option<Action> {
-    let Ctx { entity, known, pos: source, .. } = *ctx;
-    let valid = |x| CanAttackTarget(x, target, known, attack.range);
-    if move_ready(entity) && valid(source) {
-        return Some(Action::Attack { target, attack });
+    let Ctx { entity, known, pos, .. } = *ctx;
+    let range = attack.range;
+
+    if move_ready(entity) && CanAttackFrom(pos, target, known, range) {
+        Some(Action::Attack { target, attack })
+    } else {
+        PathToTarget(ctx, target, range)
     }
-    PathToTarget(ctx, target, attack.range, valid)
 }
 
-fn CanAttackTarget(source: Point, target: Point,
-                   known: MergedKnowledge, range: Bound) -> bool {
+fn CanAttackFrom(source: Point, target: Point, known: MergedKnowledge, range: Bound) -> bool {
     if !range.contains(source - target) { return false; }
     if source == target { return false; }
 
@@ -922,15 +921,15 @@ fn CanAttackTarget(source: Point, target: Point,
     los.iter().skip(1).rev().skip(1).all(|&p| known.get(p).status() == Status::Free)
 }
 
-fn PathToTarget<F: Fn(Point) -> bool>(
-        ctx: &mut Ctx, target: Point, range: Bound, valid: F) -> Option<Action> {
+fn PathToTarget(ctx: &mut Ctx, target: Point, range: Bound) -> Option<Action> {
     let Ctx { known, pos: source, .. } = *ctx;
     let rng = &mut ctx.env.rng;
-    let check = |p: Point| known.get(p).status();
-    let step = |dir: Point| {
+    let step = |dir| {
         let look = target - source - dir;
         Action::Move { step: dir, look, turns: 1. }
     };
+    let check = |p| known.get(p).status();
+    let valid = |p| CanAttackFrom(p, target, known, range);
 
     // Given a non-empty list of "good" directions (each of which brings us
     // close to attacking the target), choose one closest to our attack range.
@@ -1664,21 +1663,15 @@ fn FollowSimpleCommand(ctx: &mut Ctx) -> Option<Action> {
             if matches!(action, Action::Attack { .. }) { ctx.entity.command.take(); }
             Some(action)
         },
-        Command::Return => {
-            let known = ctx.known;
-            let range = SUMMON_RANGE;
-            let target = ctx.env.leader?.pos;
-            let valid = |p| CanAttackTarget(target, p, known, range);
-            PathToTarget(ctx, target, SUMMON_RANGE, valid)
-        },
+        Command::Return => PathToTarget(ctx, ctx.env.leader?.pos, SUMMON_RANGE)
     }
 }
 
 fn AttackRivals(ctx: &mut Ctx) -> Option<Action> {
     for entity in &ctx.known.known.entities {
         if entity.rival() && entity.visible() {
-            let action = AttackTarget(ctx, entity.pos);
-            if let Some(x) = action { return Some(x); }
+            let result = AttackTarget(ctx, entity.pos);
+            if result.is_some() { return result; }
         }
     }
     None
