@@ -66,7 +66,8 @@ const FLIGHT_PATH_TURNS: i32 = 8;
 const MIN_FLIGHT_TURNS: i32 = 16;
 const MAX_FLIGHT_TURNS: i32 = 64;
 
-const WANDER_TURNS: f64 = 2.;
+const FOLLOW_TURNS: f64 = 0.5;
+const WANDER_TURNS: f64 = 2.0;
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -862,13 +863,15 @@ fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
     let (look, step) = (target - pos, next - pos);
 
     // Determine how fast to move on the path. Only move quickly (and noisily)
-    // when fleeing from an enemy or chasing one down.
+    // when fleeing from an enemy, chasing one down, or returning to a leader.
     let mut turns = WANDER_TURNS;
     if kind == PathKind::Enemy && let Some(x) = &ctx.blackboard.target {
         let limit = ctx.known.time_at_turn(MIN_SEARCH_TURNS);
         if x.target.time > limit && x.target.sense != Sense::Smell { turns = 1. };
     } else if kind == PathKind::Flee && any_threat_awake(ctx) {
         turns = 1.;
+    } else if kind == PathKind::Leader {
+        turns = FOLLOW_TURNS;
     }
 
     // Clear the path if this move takes us to the end.
@@ -1700,7 +1703,7 @@ fn DefendLeader(ctx: &mut Ctx) -> Option<Action> {
     };
 
     let (look, step) = (next - leader.pos, next - source);
-    Some(Action::Move { step, look, turns: 0.5 })
+    Some(Action::Move { step, look, turns: FOLLOW_TURNS })
 }
 
 fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
