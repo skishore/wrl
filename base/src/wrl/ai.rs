@@ -1592,10 +1592,6 @@ fn ChooseDefenseSquareImpl(
     best.1
 }
 
-// TODO: Horrible bug: We always face away from the player right now. If we
-// are facing away from a rival, and the player commands us to attack them,
-// but it's been too long since we've seen them, we ignore the command...
-//
 // TODO: Similar bug; if all cells near the player are defended from a given
 // rival, we'll just hover near them with FollowLeader, but FollowLeader's
 // move doesn't look in the direction of a rival. This prevents us from
@@ -1618,10 +1614,7 @@ fn SelectAttackTarget(ctx: &mut Ctx) -> bool {
     let Some(eid) = target.eid else { return false };
 
     let other = ctx.known.known.entity(eid);
-    if other.is_none() && target.seen {
-        ctx.entity.command.take();
-        return false;
-    }
+    let other = other.and_then(|x| if x.time < target.loc.time { None } else { Some(x) });
 
     let loc = other.map(|x| x.loc).unwrap_or(target.loc);
     let sense = other.map(|x| x.sense).unwrap_or(Sense::Sound);
@@ -1631,7 +1624,12 @@ fn SelectAttackTarget(ctx: &mut Ctx) -> bool {
         return false;
     }
 
-    if other.is_some() && !target.seen {
+    if target.seen && other.is_none() {
+        ctx.entity.command.take();
+        return false;
+    }
+
+    if !target.seen && other.is_some() {
         let target = AttackTarget { seen: true, ..target };
         ctx.entity.command.set(Some(Command::Attack(attack, target)));
     }
