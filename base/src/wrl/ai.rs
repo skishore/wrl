@@ -10,7 +10,7 @@ use rand_distr::num_traits::Pow;
 
 use crate::base::point::{Bound, LOS, Point, dirs};
 use crate::base::pathing::{AStar, AStarHeuristic, Status};
-use crate::base::pathing::{BFS, DijkstraLength, DijkstraMap, Neighborhood};
+use crate::base::pathing::{Dijkstra, DijkstraLength, DijkstraMap, Neighborhood};
 use crate::base::util::{HashMap, HashSet, RNG, clamp, sample, sortable, weighted};
 use crate::base::vision::{INITIAL_VISIBILITY, Vision, VisionArgs};
 
@@ -932,7 +932,10 @@ fn PathToTarget(ctx: &mut Ctx, target: Point, range: Bound) -> Option<Action> {
         Status::Occupied if (p - pos).len_l1() == 1 => Status::Blocked,
         x => x
     };
-    let valid = |p| CanAttackFrom(p, target, known, range);
+    let valid = |p| {
+        if p != pos && known.get(p).status() != Status::Free { return false; }
+        CanAttackFrom(p, target, known, range)
+    };
 
     // Given a non-empty list of "good" directions (each of which brings us
     // close to attacking the target), choose one closest to our attack range.
@@ -953,8 +956,11 @@ fn PathToTarget(ctx: &mut Ctx, target: Point, range: Bound) -> Option<Action> {
             |&x| ((x + pos - target).bound_radius() - radius).abs()).collect();
         let best = *scores.iter().reduce(|acc, x| min(acc, x)).unwrap();
         let opts: Vec<_> = (0..dirs.len()).filter(|&i| scores[i] == best).collect();
-        step(dirs[*sample(&opts, rng)])
+        dirs[*sample(&opts, rng)]
     };
+
+    let cached = &mut ctx.blackboard.path;
+    let update = cached.path.last().cloned() == Some(target);
 
     // If we could already attack the target, don't move out of view.
     if valid(pos) {
@@ -963,16 +969,31 @@ fn PathToTarget(ctx: &mut Ctx, target: Point, range: Bound) -> Option<Action> {
             if check(pos + x) != Status::Free { continue; }
             if valid(pos + x) { dirs.push(x); }
         }
-        return Some(pick(&dirs, rng));
+
+        let dir = pick(&dirs, rng);
+        if update {
+            cached.path = LOS(pos + dir, target);
+            cached.step = 0;
+        }
+        return Some(step(dir))
     }
 
-    // Else, pick a direction which brings us in view.
-    let result = BFS(pos, &valid, BFS_LIMIT_ATTACK, check);
-    if let Some(x) = result && !x.dirs.is_empty() { return Some(pick(&x.dirs, rng)); }
+    // Find the closest `source` cell from which we could attack the target.
+    let source = Dijkstra(pos, valid, BFS_LIMIT_ATTACK, check, |_| 0);
+    let source = source.and_then(|x| x.last().cloned()).unwrap_or(target);
 
-    // Else, move towards the target.
-    let path = AStar(pos, target, ASTAR_LIMIT_ATTACK, check)?;
-    Some(step(*path.first()? - pos))
+    // Then, use A* to find a path to that cell.
+    let mut path = AStar(pos, source, ASTAR_LIMIT_ATTACK, check)?;
+    let dir = *path.first()? - pos;
+
+    if update {
+        if source != target {
+            path.extend(LOS(source, target).into_iter().skip(1));
+        }
+        cached.path = path;
+        cached.step = 0;
+    }
+    Some(step(dir))
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -1765,13 +1786,6 @@ fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
 //    makes sense. There's another similar one: if we can see the entity but
 //    cannot find a path to it (to get there or to attack), we'd have similar
 //    pathological behavior.
-//
-//  - If, on pathing to a valid target (e.g. a berry tree), we take a step
-//    such that the tree is no longer visible, we unnecessarily re-plan...
-//
-//    The reason is that a) AttackTarget fails because it requires the target
-//    to be visible, but then b) FollowPath fails because we constructed a
-//    path, then ignored it in favor of running AttackTarget...
 
 fn AttackOrFollowPath(kind: PathKind) -> impl Bhv {
     pri![
