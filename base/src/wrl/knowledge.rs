@@ -78,14 +78,18 @@ impl CellKnowledge {
         self.flags = flags;
         self.tile = cell.tile;
         self.visibility = vision.get_visibility_at(self.point);
-
-        // Update the cell's time fields.
         self.last_seen = time;
-        if self.see_entity_at() { self.last_see_entity_at = time; }
 
-        // Clone items, but reuse the existing allocation, if any.
-        self.items.clear();
-        for &x in &cell.items { self.items.push(x); }
+        if self.see_entity_at() {
+            // Used in hunting: we know the cell was unoccupied at this time.
+            self.last_see_entity_at = time;
+
+            // Items have visibility of a small entity.
+            //
+            // Clone the items list, but reuse the existing allocation, if any.
+            self.items.clear();
+            for &x in &cell.items { self.items.push(x); }
+        }
     }
 }
 
