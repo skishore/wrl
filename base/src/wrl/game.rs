@@ -347,12 +347,10 @@ impl Board {
         if self._frame_mask.iter().any(|&x| x) { return true; }
 
         // Expensive check: does lighting for any visible cell change?
-        let vision = fov.select_vision(me);
-        let prev: Vec<_> = vision.get_points_seen().iter().map(
-            |&x| self.is_cell_lit(x)).collect();
+        let seen = fov.select_vision(me).get_points_seen();
+        let prev: Vec<_> = seen.iter().map(|&x| self.is_cell_lit(x)).collect();
         self.redo_effect_updates();
-        let next: Vec<_> = vision.get_points_seen().iter().map(
-            |&x| self.is_cell_lit(x)).collect();
+        let next: Vec<_> = seen.iter().map(|&x| self.is_cell_lit(x)).collect();
         self.undo_effect_updates();
 
         prev != next
