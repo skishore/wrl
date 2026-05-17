@@ -1650,6 +1650,13 @@ fn ChooseDefenseSquareImpl(
 // TODO: Perhaps an alternate claim: MaybeAttackRivals only attacks rivals
 // that are currently visible; perhaps we should path to and attack any other
 // rivals the player knows about instead.
+//
+// TODO: FollowSimpleCommand is weak. If we can't find a short-term path to
+// the target within ASTAR_LIMIT_ATTACK, we need to switch to CachedPath-based
+// long-range pathing even for relatively nearby targets.
+//
+// Arguably, we only need the pathing for attack-point; attack-enemy already
+// works this way, and return is backed by PathToLeader.
 fn SelectAttackTarget(ctx: &mut Ctx) -> bool {
     let Some(command) = ctx.entity.command.get() else { return false };
     let Command::Attack(attack, target) = command else { return false };
