@@ -903,13 +903,12 @@ fn can_attack(board: &Board, me: &Entity, target: Point, range: Bound) -> bool {
     let (known, source) = (&me.known, me.pos);
 
     if source == target { return false; }
-    if !range.contains(source - target) { return false; }
     if !known.get(target).visible() { return false; }
+    if !range.contains(source - target) { return false; }
 
     let los = LOS(source, target);
-    los[1..los.len() - 1].iter().all(|&p| {
-        known.get(p).status() == Status::Free && board.get_status(p) == Status::Free
-    })
+    los.iter().skip(1).rev().skip(1).all(
+        |&p| known.get(p).status() == Status::Free && board.get_status(p) == Status::Free)
 }
 
 fn can_summon(board: &Board, me: &Entity, target: Point) -> bool {

@@ -922,10 +922,16 @@ fn AttackTarget(ctx: &mut Ctx, target: Point) -> Option<Action> {
 }
 
 fn AttackWith(ctx: &mut Ctx, target: Point, attack: &'static Attack) -> Option<Action> {
-    let Ctx { entity, known, pos, .. } = *ctx;
+    let Ctx { entity, pos, .. } = *ctx;
+    let known = MergedKnowledge { known: &*entity.known, extra: None };
     let range = attack.range;
 
-    if move_ready(entity) && CanAttackFrom(pos, target, known, range) {
+    // Have to do this check with our knowledge alone; that's a requirement
+    // for the attack action to succeed if we choose it.
+    let ready = move_ready(entity) && known.get(target).visible() &&
+                CanAttackFrom(known, pos, target, range);
+
+    if ready {
         Some(Action::Attack { target, attack })
     } else {
         PathToTarget(ctx, target, range)
@@ -936,9 +942,10 @@ fn PathIsFree(known: MergedKnowledge, path: &[Point]) -> bool {
     path.iter().skip(1).rev().skip(1).all(|&p| known.get(p).status() == Status::Free)
 }
 
-fn CanAttackFrom(source: Point, target: Point, known: MergedKnowledge, range: Bound) -> bool {
+fn CanAttackFrom(known: MergedKnowledge, source: Point, target: Point, range: Bound) -> bool {
+    if source == target { return false; }
     if !range.contains(source - target) { return false; }
-    source != target && PathIsFree(known, &LOS(source, target))
+    PathIsFree(known, &LOS(source, target))
 }
 
 fn PathToTarget(ctx: &mut Ctx, target: Point, range: Bound) -> Option<Action> {
@@ -952,9 +959,13 @@ fn PathToTarget(ctx: &mut Ctx, target: Point, range: Bound) -> Option<Action> {
         Status::Occupied if (p - pos).len_l1() == 1 => Status::Blocked,
         x => x
     };
+    let ready = |p| {
+        let known = MergedKnowledge { known: known.known, extra: None };
+        CanAttackFrom(known, p, target, range)
+    };
     let valid = |p| {
         if p != pos && known.get(p).status() != Status::Free { return false; }
-        CanAttackFrom(p, target, known, range)
+        CanAttackFrom(known, p, target, range)
     };
 
     // Given a non-empty list of "good" directions (each of which brings us
@@ -983,11 +994,11 @@ fn PathToTarget(ctx: &mut Ctx, target: Point, range: Bound) -> Option<Action> {
     let update = cached.path.last().cloned() == Some(target);
 
     // If we could already attack the target, don't move out of view.
-    if valid(pos) {
+    if ready(pos) {
         let mut dirs = vec![Point::default()];
         for &x in &dirs::ALL {
             if check(pos + x) != Status::Free { continue; }
-            if valid(pos + x) { dirs.push(x); }
+            if ready(pos + x) { dirs.push(x); }
         }
 
         let dir = pick(&dirs, rng);
