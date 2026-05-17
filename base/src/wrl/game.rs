@@ -733,14 +733,18 @@ fn get_sightings(board: &Board, noise: &Noise, env: &mut Env) -> Vec<Sighting> {
 
 // Attack effects
 
-fn shout(state: &mut State, eid: EID, shout: &str) {
+fn shout(state: &mut State, eid: EID, shout: &str, suffix: &str) {
     let board = &mut state.board;
     let Entity { pos: source, player, species, .. } = board.entities[eid];
     let noise = Noise::from_eid(eid, source, SHOUT_VOLUME);
     let sightings = get_sightings(board, &noise, &mut state.env);
 
     let log = &mut state.env.ui.log;
-    if player { log.log_success(format!("You shout: \"{}\"", shout)); }
+    if player && suffix.is_empty() {
+        log.log_success(format!("You shout: \"{}\"", shout));
+    } else if player {
+        log.log_failure(format!("You shout: \"{}\"{}", shout, suffix));
+    }
 
     // Create a call event that carries species info.
     let data = EventData::Call(CallEvent { call: Call::Command, species });
@@ -1200,7 +1204,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let me = &state.board.entities[eid];
             if !can_summon(&state.board, me, target) { return ActionResult::failure(); }
 
-            shout(state, eid, &format!("Go! {}!", species.name));
+            shout(state, eid, &format!("Go! {}!", species.name), "");
 
             let cb: CB = Box::new(move |state| {
                 let State { board, env, .. } = state;
@@ -1224,28 +1228,37 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let summon = me.summons.get(summon);
             let Some(&oid) = summon else { return ActionResult::failure() };
 
+            let summon = &state.board.entities[oid];
+            let name = summon.species.name;
+
+            let succeed = |state: &mut State, suffix: &str| {
+                let command = match command {
+                    Command::Attack(attack, target) => {
+                        let foe = target.eid.and_then(|x| state.board.entities.get(x));
+                        if let Some(foe) = foe.map(|x| x.species.name) {
+                            format!("{}, attack {} with {}!", name, foe, attack.name)
+                        } else {
+                            format!("{}, use {}!", name, attack.name)
+                        }
+                    },
+                    Command::Return => format!("{}, return!", name),
+                };
+                shout(state, eid, &command, suffix);
+                ActionResult::success()
+            };
+
+            if !SHOUT_VOLUME.contains(summon.pos - source) {
+                let suffix = format!(", but {} is too far away to hear.", name);
+                return succeed(state, &suffix);
+            }
+
             let done = matches!(command, Command::Return) && try_recall_entity(state, eid, oid);
             if done { return ActionResult::success(); }
 
             let summon = &mut state.board.entities[oid];
-            let name = summon.species.name;
-
             summon.command.set(Some(command));
 
-            let command = match command {
-                Command::Attack(attack, target) => {
-                    let foe = target.eid.and_then(|x| state.board.entities.get(x));
-                    if let Some(foe) = foe.map(|x| x.species.name) {
-                        format!("{}, attack {} with {}!", name, foe, attack.name)
-                    } else {
-                        format!("{}, use {}!", name, attack.name)
-                    }
-                },
-                Command::Return => format!("{}, return!", name),
-            };
-            shout(state, eid, &command);
-
-            ActionResult::success()
+            succeed(state, "")
         }
     }
 }
