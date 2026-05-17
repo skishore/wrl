@@ -573,9 +573,7 @@ fn UpdateLastSeen<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> 
         if path.kind == kind && let Some(&target) = path.path.last() &&
            (cell.point - pos).len_l2_squared() < (target - pos).len_l2_squared() {
             let los = LOS(ctx.pos, cell.point);
-            let free = los.len() <= 2 || los[1..los.len() - 1].iter().all(
-                |&x| known.get(x).status() == Status::Free);
-            if free { *path = CachedPath { kind, path: los, skip: path.skip, step: 0 }; }
+            if PathIsFree(known, &los) { path.replace(los); }
         }
         return Result::Success;
     }
@@ -771,6 +769,11 @@ impl CachedPath {
     fn clear(&mut self) {
         *self = Default::default();
     }
+
+    fn replace(&mut self, path: Vec<Point>) {
+        self.path = path;
+        self.skip = 0;
+    }
 }
 
 fn CleanupPath(ctx: &mut Ctx) {
@@ -857,7 +860,7 @@ fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
             Status::Occupied => p != next,
             Status::Blocked => false,
         };
-        path.path.iter().skip(j).rev().skip(path.skip).rev().all(|&x| valid(x))
+        path.path.iter().skip(j).rev().skip(path.skip).all(|&x| valid(x))
     })();
     if !valid { return None; }
 
@@ -929,12 +932,13 @@ fn AttackWith(ctx: &mut Ctx, target: Point, attack: &'static Attack) -> Option<A
     }
 }
 
+fn PathIsFree(known: MergedKnowledge, path: &[Point]) -> bool {
+    path.iter().skip(1).rev().skip(1).all(|&p| known.get(p).status() == Status::Free)
+}
+
 fn CanAttackFrom(source: Point, target: Point, known: MergedKnowledge, range: Bound) -> bool {
     if !range.contains(source - target) { return false; }
-    if source == target { return false; }
-
-    let los = LOS(source, target);
-    los.iter().skip(1).rev().skip(1).all(|&p| known.get(p).status() == Status::Free)
+    source != target && PathIsFree(known, &LOS(source, target))
 }
 
 fn PathToTarget(ctx: &mut Ctx, target: Point, range: Bound) -> Option<Action> {
@@ -987,10 +991,7 @@ fn PathToTarget(ctx: &mut Ctx, target: Point, range: Bound) -> Option<Action> {
         }
 
         let dir = pick(&dirs, rng);
-        if update {
-            cached.path = LOS(pos + dir, target);
-            cached.step = 0;
-        }
+        if update { cached.replace(LOS(pos + dir, target)); }
         return Some(step(dir))
     }
 
@@ -1003,11 +1004,9 @@ fn PathToTarget(ctx: &mut Ctx, target: Point, range: Bound) -> Option<Action> {
     let dir = *path.first()? - pos;
 
     if update {
-        if source != target {
-            path.extend(LOS(source, target).into_iter().skip(1));
-        }
-        cached.path = path;
-        cached.step = 0;
+        let (s, t) = (source, target);
+        if s != t { path.extend(LOS(s, t).into_iter().skip(1)); }
+        cached.replace(path);
     }
     Some(step(dir))
 }
