@@ -675,12 +675,12 @@ impl Noise {
         Self { cause: Some(eid), check: Some(eid), point, volume }
     }
 
-    fn from_entity(entity: &Entity, volume: Bound) -> Self {
-        Self::from_eid(entity.eid, entity.pos, volume)
+    fn from_entity(me: &Entity, volume: Bound) -> Self {
+        Self::from_eid(me.eid, me.pos, volume)
     }
 
-    fn for_target(entity: &Entity, point: Point, volume: Bound, target: Option<EID>) -> Self {
-        Self { cause: Some(entity.eid), check: target, point, volume }
+    fn for_target(me: &Entity, point: Point, volume: Bound, target: Option<EID>) -> Self {
+        Self { cause: Some(me.eid), check: target, point, volume }
     }
 }
 
@@ -826,13 +826,13 @@ fn try_recall_entity(state: &mut State, eid: EID, oid: EID) -> bool {
 
 // Turn-taking
 
-pub fn move_ready(entity: &Entity) -> bool { entity.move_timer <= 0 }
+pub fn move_ready(me: &Entity) -> bool { me.move_timer <= 0 }
 
-pub fn turn_ready(entity: &Entity) -> bool { entity.turn_timer <= 0 }
+pub fn turn_ready(me: &Entity) -> bool { me.turn_timer <= 0 }
 
-fn drain(entity: &mut Entity, result: &ActionResult) {
-    entity.move_timer += (MOVE_TIMER as f64 * result.moves).round() as i32;
-    entity.turn_timer += (TURN_TIMER as f64 * result.turns).round() as i32;
+fn drain(me: &mut Entity, result: &ActionResult) {
+    me.move_timer += (MOVE_TIMER as f64 * result.moves).round() as i32;
+    me.turn_timer += (TURN_TIMER as f64 * result.turns).round() as i32;
 }
 
 fn advance_turn(board: &mut Board) -> Option<EID> {
@@ -953,16 +953,16 @@ fn plan(state: &mut State, eid: EID, leader: Option<EID>) -> Action {
 }
 
 fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
-    let entity = &mut state.board.entities[eid];
-    entity.asleep = matches!(action, Action::Rest);
-    let source = entity.pos;
+    let me = &mut state.board.entities[eid];
+    me.asleep = matches!(action, Action::Rest);
+    let source = me.pos;
 
     match action {
         Action::Idle => ActionResult::success(),
         Action::Rest => ActionResult::success(),
         Action::WaitForInput => ActionResult::failure(),
         Action::SniffAround => {
-            let noise = Noise::from_entity(entity, SNIFF_VOLUME);
+            let noise = Noise::from_entity(me, SNIFF_VOLUME);
             let board = &mut state.board;
             let sightings = get_sightings(board, &noise, &mut state.env);
 
@@ -978,14 +978,14 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             ActionResult::success()
         }
         Action::Look { look } => {
-            entity.face_direction(look);
+            me.face_direction(look);
             ActionResult::success()
         }
         Action::Drink { target } => {
-            let (source, dir) = (entity.pos, target - entity.pos);
+            let (source, dir) = (me.pos, target - me.pos);
             if dir.len_l1() > 1 { return ActionResult::failure(); }
 
-            entity.face_direction(dir);
+            me.face_direction(dir);
             let okay = state.board.get_cell(target).tile.can_drink();
             if !okay { return ActionResult::failure(); }
 
@@ -1001,7 +1001,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let dir = target - source;
             if dir.len_l1() > 1 { return ActionResult::failure(); }
 
-            entity.face_direction(dir);
+            me.face_direction(dir);
             let cell = state.board.get_cell(target);
             let okay = match item {
                 Some(x) => cell.items.iter().find(|&&y| y == x).is_some(),
@@ -1022,8 +1022,8 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             ActionResult::success()
         }
         Action::Call { call, look } => {
-            let species = entity.species;
-            let noise = Noise::from_entity(entity, CALL_VOLUME);
+            let species = me.species;
+            let noise = Noise::from_entity(me, CALL_VOLUME);
             let board = &mut state.board;
             let sightings = get_sightings(board, &noise, &mut state.env);
 
@@ -1045,8 +1045,8 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             // For some call types, we look before calling; when calling for
             // help, we shout in the direction of our allies, then look.
             let cb = move |state: &mut State| {
-                let Some(entity) = state.board.entities.get_mut(eid) else { return };
-                entity.face_direction(look);
+                let Some(me) = state.board.entities.get_mut(eid) else { return };
+                me.face_direction(look);
             };
 
             let mut effect = apply_noise(source, color, text, CALL_VOLUME);
@@ -1059,8 +1059,8 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             ActionResult::success()
         }
         Action::Move { look, step, turns } => {
-            entity.face_direction(look);
-            let slowed = turns < SLOWED_TURNS && !move_ready(entity);
+            me.face_direction(look);
+            let slowed = turns < SLOWED_TURNS && !move_ready(me);
             let turns = if slowed { SLOWED_TURNS } else { turns };
             if step == dirs::NONE { return ActionResult::success_turns(turns); }
             if step.len_l1() > 1 { return ActionResult::failure(); }
@@ -1068,10 +1068,10 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             // Moving diagonally is slower. Moving quickly is noisier.
             let noisy = turns <= 1.;
             let turns = step.len_l2() * turns;
-            let color = entity.species.glyph.fg();
-            let player = entity.player;
+            let color = me.species.glyph.fg();
+            let player = me.player;
             let target = source + step;
-            let allied = player || entity.leader == Some(state.player);
+            let allied = player || me.leader == Some(state.player);
 
             let (board, log) = (&mut state.board, &mut state.env.ui.log);
             let cell = board.get_cell(target);
@@ -1119,8 +1119,8 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
         }
         Action::Attack { attack, target } => {
             let board = &mut state.board;
-            let entity = &board.entities[eid];
-            if !can_attack(board, entity, target, attack.range) {
+            let me = &board.entities[eid];
+            if !can_attack(board, me, target, attack.range) {
                 board.entities[eid].face_direction(target - source);
                 return ActionResult::failure();
             }
@@ -1128,14 +1128,15 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             board.time = board.time.bump();
 
             let volume = ATTACK_VOLUME;
-            let noise = Noise::from_entity(entity, volume);
+            let noise = Noise::from_entity(me, volume);
             let saw_source = detect(board, &noise, &mut state.env);
 
+            let dir = target - source;
             let tid = board.get_cell(target).eid;
-            let entity = &mut board.entities[eid];
-            entity.face_direction(target - source);
+            let me = &mut board.entities[eid];
+            me.face_direction(dir);
 
-            let noise = Noise::for_target(entity, target, volume, tid);
+            let noise = Noise::for_target(me, target, volume, tid);
             let saw_target = detect(board, &noise, &mut state.env);
             let sightings = merge_views(board, &saw_source, &saw_target);
 
@@ -1184,20 +1185,20 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             ActionResult::success_moves(1.)
         }
         Action::Recall { summon } => {
-            let summon = entity.summons.get(summon);
+            let summon = me.summons.get(summon);
             let Some(&oid) = summon else { return ActionResult::failure() };
             if !try_recall_entity(state, eid, oid) { return ActionResult::failure(); }
             ActionResult::success()
         }
         Action::Summon { team, target } => {
-            let teammate = entity.team.get(team);
+            let teammate = me.team.get(team);
             let Some(Teammate::In(x)) = teammate else { return ActionResult::failure() };
 
             let Individual { species, cur_hp } = *x;
             if cur_hp == 0 { return ActionResult::failure(); }
 
-            let entity = &state.board.entities[eid];
-            if !can_summon(&state.board, entity, target) { return ActionResult::failure(); }
+            let me = &state.board.entities[eid];
+            if !can_summon(&state.board, me, target) { return ActionResult::failure(); }
 
             shout(state, eid, &format!("Go! {}!", species.name));
 
@@ -1220,7 +1221,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             ActionResult::success()
         }
         Action::Shout { summon, command } => {
-            let summon = entity.summons.get(summon);
+            let summon = me.summons.get(summon);
             let Some(&oid) = summon else { return ActionResult::failure() };
 
             let done = matches!(command, Command::Return) && try_recall_entity(state, eid, oid);
@@ -1492,11 +1493,11 @@ impl State {
 
         if matches!(mode, GameMode::Gym | GameMode::Sim | GameMode::Test) {
             board.map.entry_mut(pos).unwrap().eid = None;
-            let entity = &mut board.entities[player];
-            let Entity { player, speed, .. } = *entity;
-            entity.known = Default::default();
-            entity.known.mark_turn_boundary(player, speed, board.time);
-            entity.pos = Point(-9999, -9999);
+            let me = &mut board.entities[player];
+            let Entity { player, speed, .. } = *me;
+            me.known = Default::default();
+            me.known.mark_turn_boundary(player, speed, board.time);
+            me.pos = Point(-9999, -9999);
         }
 
         let pos = |board: &Board, rng: &mut RNG| {
@@ -1521,16 +1522,18 @@ impl State {
                 board.add_entity(&args, &mut env);
             }
         }
+
         let teammate = |name: &str| {
             let species = Species::get(name);
             Teammate::In(Individual { species, cur_hp: species.hp })
         };
-        board.entities[player].dir = dirs::S;
-        board.entities[player].team.push(teammate("Bulbasaur"));
-        board.entities[player].team.push(teammate("Charmander"));
-        board.entities[player].team.push(teammate("Squirtle"));
-        board.entities[player].team.push(teammate("Pikachu"));
-        board.entities[player].team.push(teammate("Eevee"));
+        let me = &mut board.entities[player];
+        me.dir = dirs::S;
+        me.team.push(teammate("Bulbasaur"));
+        me.team.push(teammate("Charmander"));
+        me.team.push(teammate("Squirtle"));
+        me.team.push(teammate("Pikachu"));
+        me.team.push(teammate("Eevee"));
         board.update_known(player, &mut env);
 
         let ui = &mut env.ui;
