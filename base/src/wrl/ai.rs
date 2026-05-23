@@ -238,20 +238,21 @@ impl<'a> MergedKnowledge<'a> {
 // Ctx
 
 pub struct Ctx<'a> {
-    // Derived from the entity.
-    entity: &'a Entity,
+    // Derived from the entity:
+    me: &'a Entity,
     known: MergedKnowledge<'a>,
     pos: Point,
     dir: Point,
-    // Computed by the executor during this turn.
-    blackboard: &'a mut Blackboard,
+
+    // Computed during the turn:
     neighborhood: Neighborhood,
     sneakable: Neighborhood,
     ran_vision: bool,
-    // Mutable access to the RNG.
-    env: &'a mut AIEnv<'a>,
-    // The tree's output; written by Act.
+
+    // Mutable outputs:
     action: Option<Action>,
+    blackboard: &'a mut Blackboard,
+    env: &'a mut AIEnv<'a>,
 }
 
 impl<'a> Ctx<'a> {
@@ -277,7 +278,7 @@ fn is_hiding_place(ctx: &Ctx, point: Point) -> bool {
     let cell = ctx.known.get(point);
     if matches!(cell.tile(), Some(x) if x.is_cover()) { return true; }
 
-    cell.is_shadow_cover() && ctx.entity.species.light.is_empty()
+    cell.is_shadow_cover() && ctx.me.species.light.is_empty()
 }
 
 fn get_basic_check<'a>(ctx: &'a Ctx) -> impl Fn(Point) -> Status + use<'a> {
@@ -521,11 +522,11 @@ fn select_flight_target(ctx: &mut Ctx, hiding: bool) -> Option<Point> {
 // Basic state updates
 
 fn TickBasicNeeds(ctx: &mut Ctx) -> Result {
-    let (bb, entity) = (&mut *ctx.blackboard, ctx.entity);
+    let (bb, me) = (&mut *ctx.blackboard, ctx.me);
     bb.prev_time = bb.turn_time;
-    bb.turn_time = ctx.entity.known.time();
+    bb.turn_time = me.known.time();
 
-    let delta = if entity.asleep { 0 } else { -1 };
+    let delta = if me.asleep { 0 } else { -1 };
     bb.assess.update(delta);
     bb.hunger.update(delta);
     bb.thirst.update(delta);
@@ -535,8 +536,8 @@ fn TickBasicNeeds(ctx: &mut Ctx) -> Result {
 }
 
 fn RunCombatAnalysis(ctx: &mut Ctx) -> Result {
-    let (bb, entity) = (&mut *ctx.blackboard, ctx.entity);
-    bb.threats.update(entity);
+    let (bb, me) = (&mut *ctx.blackboard, ctx.me);
+    bb.threats.update(me);
     Result::Failed
 }
 
@@ -723,7 +724,7 @@ fn WarnOffThreats(ctx: &mut Ctx) -> Option<Action> {
         if !CALL_VOLUME.contains(threat.pos - pos) { continue; }
 
         let warn = !stare && threat.time > bb.last_warning;
-        if warn { threat.mark_warned(ctx.entity, rng); }
+        if warn { threat.mark_warned(ctx.me, rng); }
 
         if result.is_some() { continue; }
 
@@ -914,7 +915,7 @@ fn AttackPathTarget(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
 fn AttackTarget(ctx: &mut Ctx, target: Point) -> Option<Action> {
     if !ctx.known.get(target).visible() { return None; }
 
-    let attacks = &ctx.entity.species.attacks;
+    let attacks = &ctx.me.species.attacks;
     if attacks.is_empty() { return None; }
 
     let attack = *sample(attacks, ctx.env.rng);
@@ -922,13 +923,13 @@ fn AttackTarget(ctx: &mut Ctx, target: Point) -> Option<Action> {
 }
 
 fn AttackWith(ctx: &mut Ctx, target: Point, attack: &'static Attack) -> Option<Action> {
-    let Ctx { entity, pos, .. } = *ctx;
-    let known = MergedKnowledge { known: &*entity.known, extra: None };
+    let Ctx { me, pos, .. } = *ctx;
+    let known = MergedKnowledge { known: &*me.known, extra: None };
     let range = attack.range;
 
     // Have to do this check with our knowledge alone; that's a requirement
     // for the attack action to succeed if we choose it.
-    let ready = move_ready(entity) && known.get(target).visible() &&
+    let ready = move_ready(me) && known.get(target).visible() &&
                 CanAttackFrom(known, pos, target, range);
 
     if ready {
@@ -970,10 +971,10 @@ fn PathToTarget(ctx: &mut Ctx, target: Point, range: Bound) -> Option<Action> {
 
     // Given a non-empty list of "good" directions (each of which brings us
     // close to attacking the target), choose one closest to our attack range.
-    let pick = |dirs: &Vec<Point>, rng: &mut RNG| {
+    let pick = |dirs: &[Point], rng: &mut RNG| {
         let cell = known.get(target);
         let (shade, tile) = (cell.shade(), cell.tile());
-        let light = ctx.entity.species.light.radius;
+        let light = ctx.me.species.light.radius;
         let cover = matches!(tile, Some(x) if x.is_cover());
 
         // Check for any of several reasons to stay close to a target.
@@ -1027,7 +1028,7 @@ fn PathToTarget(ctx: &mut Ctx, target: Point, range: Bound) -> Option<Action> {
 // Basic needs:
 
 fn HungryForMeat(ctx: &Ctx) -> bool {
-    ctx.entity.species.predator() && ctx.blackboard.hunger.cur < HUNGRY_FOR_MEAT
+    ctx.me.species.predator() && ctx.blackboard.hunger.cur < HUNGRY_FOR_MEAT
 }
 
 fn Hunger(ctx: &mut Ctx) -> i64 {
@@ -1133,7 +1134,7 @@ fn EatBerryNearby(ctx: &mut Ctx) -> Option<Action> {
     let gain = ctx.env.rng.random_range(HUNGER_GAIN);
     ctx.blackboard.hunger.update(gain);
 
-    if ctx.entity.species.predator() && ctx.blackboard.hunger.cur > HUNGRY_FOR_MEAT {
+    if ctx.me.species.predator() && ctx.blackboard.hunger.cur > HUNGRY_FOR_MEAT {
         ctx.blackboard.hunger.cur = max(prev, HUNGRY_FOR_MEAT);
         ctx.blackboard.hunger.active = false;
     }
@@ -1669,7 +1670,8 @@ fn ChooseDefenseSquareImpl(
 // Arguably, we only need the pathing for attack-point; attack-enemy already
 // works this way, and return is backed by PathToLeader.
 fn SelectAttackTarget(ctx: &mut Ctx) -> bool {
-    let Some(command) = ctx.entity.command.get() else { return false };
+    let me = ctx.me;
+    let Some(command) = me.command.get() else { return false };
     let Command::Attack(attack, target) = command else { return false };
     let Some(eid) = target.eid else { return false };
 
@@ -1680,18 +1682,18 @@ fn SelectAttackTarget(ctx: &mut Ctx) -> bool {
     let sense = other.map(|x| x.sense).unwrap_or(Sense::Sound);
 
     if !check_time!(ctx, loc.time, MIN_SEARCH_TURNS) {
-        ctx.entity.command.take();
+        me.command.take();
         return false;
     }
 
     if target.seen && other.is_none() {
-        ctx.entity.command.take();
+        me.command.take();
         return false;
     }
 
     if !target.seen && other.is_some() {
         let target = AttackTarget { seen: true, ..target };
-        ctx.entity.command.set(Some(Command::Attack(attack, target)));
+        me.command.set(Some(Command::Attack(attack, target)));
     }
 
     let target = Target { loc, sense, sure: other.is_some() };
@@ -1700,7 +1702,8 @@ fn SelectAttackTarget(ctx: &mut Ctx) -> bool {
 }
 
 fn UseSelectedAttack(ctx: &mut Ctx) -> Option<Action> {
-    let command = ctx.entity.command.get()?;
+    let me = ctx.me;
+    let command = me.command.get()?;
     let Command::Attack(attack, _) = command else { return None };
 
     let state = ctx.blackboard.target.as_ref()?;
@@ -1708,17 +1711,18 @@ fn UseSelectedAttack(ctx: &mut Ctx) -> Option<Action> {
     if state.target.time != ctx.known.time() { return None; }
 
     let action = AttackWith(ctx, state.target.pos, attack)?;
-    if matches!(action, Action::Attack { .. }) { ctx.entity.command.take(); }
+    if matches!(action, Action::Attack { .. }) { me.command.take(); }
     Some(action)
 }
 
 fn FollowSimpleCommand(ctx: &mut Ctx) -> Option<Action> {
-    let command = ctx.entity.command.get()?;
+    let me = ctx.me;
+    let command = me.command.get()?;
     match command {
         Command::Attack(attack, target) => {
             if target.eid.is_some() { return None; }
             let action = AttackWith(ctx, target.loc.pos, attack)?;
-            if matches!(action, Action::Attack { .. }) { ctx.entity.command.take(); }
+            if matches!(action, Action::Attack { .. }) { me.command.take(); }
             Some(action)
         },
         Command::Return => PathToTarget(ctx, ctx.env.leader?.pos, SUMMON_RANGE)
@@ -2065,7 +2069,7 @@ fn SummonRoot() -> impl Bhv {
             FollowAttackCommand(),
             seq![
                 "MaybeAttackRivals",
-                cond!("MoveReady", |x| move_ready(x.entity)),
+                cond!("MoveReady", |x| move_ready(x.me)),
                 act!("AttackRivals", AttackRivals),
             ],
             seq![
@@ -2142,22 +2146,27 @@ impl AIState {
         debug.lines
     }
 
-    pub fn plan(&mut self, entity: &Entity, env: AIEnv) -> Action {
+    pub fn plan(&mut self, me: &Entity, env: AIEnv) -> Action {
         let extra = env.leader.map(|x| &*x.known);
-        let known = MergedKnowledge { known: &*entity.known, extra };
+        let known = MergedKnowledge { known: &*me.known, extra };
         let blackboard = &mut self.blackboard;
         let mut env = AIEnv { ..env };
 
         let mut ctx = Ctx {
-            entity,
+            // Derived from the entity:
+            me,
             known,
-            pos: entity.pos,
-            dir: entity.dir,
-            action: None,
-            blackboard,
+            pos: me.pos,
+            dir: me.dir,
+
+            // Computed during the turn:
             neighborhood: Default::default(),
             sneakable: Default::default(),
             ran_vision: false,
+
+            // Mutable outputs:
+            action: None,
+            blackboard,
             env: &mut env,
         };
         self.tree.tick(&mut ctx);
