@@ -646,10 +646,10 @@ impl Knowledge {
             self.forget_last_cell();
         }
 
-        // We clean up entities up to the first visible one.
+        // Clean up entities, but not any that we can currently sense.
         while self.entities.len() > MAX_ENTITY_MEMORY {
             let entity = self.entities.back().unwrap();
-            if entity.friend() || entity.visible() { break; }
+            if entity.sensed() { break; }
             self.remove_entity(entity.eid, self.timer.time);
         }
 
