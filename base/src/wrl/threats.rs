@@ -177,6 +177,10 @@ impl Threat {
     //
     //   - We currently count friendlies that we haven't seen for, say, 18
     //     turns as an ally with weight 0.75 - that's too high.
+    //
+    //   - When an entity is in combat it should prioritize threats that can
+    //     hurt it (right now a predator may attack us even when it's under
+    //     attack by prey, or vice-versa).
 
     // State updates:
 
@@ -379,8 +383,12 @@ impl ThreatState {
         }
 
         // Start fight-or-flight if we have an active known enemy. Stop when
-        // we no longer have any known enemies. We also stop it with known
-        // enemies if we escape from them (see: UpdateFlightState).
+        // we no longer have any known enemies.
+        //
+        // We also end fight-for-flight with known enemies if we lose sight
+        // of them for long enough, where "long enough" is defined one way
+        // when we're chasing them and another when we're fleeing from them.
+        // See: callers of mark_safe().
         let was_active = self.state != FightOrFlight::Safe;
         let active = !self.menacing.is_empty();
 
