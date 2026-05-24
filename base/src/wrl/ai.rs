@@ -750,6 +750,7 @@ enum PathKind {
     Hide,
     Flee,
     Chase,
+    ChaseFallback,
     // Low-priority needs:
     Meat,
     Rest,
@@ -836,8 +837,14 @@ fn FindPath(ctx: &mut Ctx, target: Point, kind: PathKind) -> bool {
 
     type K = PathKind;
     let skip = match kind {
+        // Move adjacent to the cell but not onto it.
         K::Leader | K::Meat | K::Water | K::Berry | K::BerryTree => 1,
-        K::Chase | K::Hide | K::Flee | K::Rest | K::Explore | K::None => 0,
+
+        // High-priority search/flee pathing; move to the cell.
+        K::Hide | K::Flee | K::Chase | K::ChaseFallback => 0,
+
+        // Low-priority needs pathing; move to the cell.
+        K::Rest | K::Explore | K::None => 0,
     };
     ctx.blackboard.path = CachedPath { kind, path, skip, step: 0 };
     true
@@ -881,7 +888,7 @@ fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
         let los = LOS(pos, point);
         if los.iter().all(|&x| known.get(x).unblocked()) { target = point; }
     }
-    if kind == PathKind::Chase && path.path.len() == j + 2 {
+    if IsChasePathKind(kind) && path.path.len() == j + 2 {
         target = path.path[j + 1];
     }
     let (look, step) = (target - pos, next - pos);
@@ -889,7 +896,7 @@ fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
     // Determine how fast to move on the path. Only move quickly (and noisily)
     // when fleeing from an enemy, chasing one down, or returning to a leader.
     let mut turns = WANDER_TURNS;
-    if kind == PathKind::Chase && let Some(x) = &ctx.blackboard.chase {
+    if IsChasePathKind(kind) && let Some(x) = &ctx.blackboard.chase {
         let limit = ctx.known.time_at_turn(MIN_SEARCH_TURNS);
         if x.target.time > limit && x.target.sense != Sense::Smell { turns = 1. };
     } else if kind == PathKind::Flee && any_threat_awake(ctx) {
@@ -1194,6 +1201,7 @@ struct Target {
 struct ChaseState {
     bias: Point,
     fresh: bool,
+    reset: bool,
     steps: i32,
     target: Target,
 }
@@ -1207,8 +1215,7 @@ fn CleanupChaseState(ctx: &mut Ctx) {
     let bb = &mut ctx.blackboard;
     if std::mem::take(&mut bb.chasing_enemy) { return; }
 
-    let chasing = bb.path.kind == PathKind::Chase;
-    if chasing { bb.path.clear(); }
+    if IsChasePathKind(bb.path.kind) { bb.path.clear(); }
     bb.chase = None;
 }
 
@@ -1218,6 +1225,14 @@ fn CleanupTarget(ctx: &mut Ctx) {
 
 fn ClearTargets(ctx: &mut Ctx) {
     ctx.blackboard.targets.clear();
+}
+
+fn ChaseTargetUnchanged(ctx: &Ctx) -> bool {
+    ctx.blackboard.chase.as_ref().map(|x| !x.reset).unwrap_or(false)
+}
+
+fn IsChasePathKind(kind: PathKind) -> bool {
+    kind == PathKind::Chase || kind == PathKind::ChaseFallback
 }
 
 fn MarkSafeIfLostView(ctx: &mut Ctx) -> bool {
@@ -1336,7 +1351,7 @@ fn UpdateChaseTarget(ctx: &mut Ctx, target: Target) {
     } else {
         (target.pos - pos, 0)
     };
-    ctx.blackboard.chase = Some(ChaseState { bias, fresh, steps, target });
+    ctx.blackboard.chase = Some(ChaseState { bias, fresh, reset, steps, target });
 }
 
 fn AttackEnemy(ctx: &mut Ctx) -> Option<Action> {
@@ -1363,6 +1378,12 @@ fn SearchForEnemy(ctx: &mut Ctx) -> Option<Action> {
     }
 
     let kind = PathKind::Chase;
+    if FindPath(ctx, target, kind) { FollowPath(ctx, kind) } else { None }
+}
+
+fn SearchForEnemyFallback(ctx: &mut Ctx) -> Option<Action> {
+    let kind = PathKind::ChaseFallback;
+    let target = select_explore_target(ctx)?;
     if FindPath(ctx, target, kind) { FollowPath(ctx, kind) } else { None }
 }
 
@@ -1813,19 +1834,6 @@ fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
 //
 //  - Only warn seen-but-unknown-valence sources. As is, we can have long
 //    chains of warnings over nothing. Investigate unseen sources instead.
-//
-//  - If we detect an enemy by scent but can't path to it, we repeatedly sniff.
-//
-//  - If we can't path to a valid target, we repeatedly run the "scan last
-//    target direction" logic. We have an instance of this failure mode right
-//    now saved to wasm/debug-saved - follow the fourth predator about 20% in.
-//
-//    In this failing trace, the target cell of the entity is a search
-//    candidate (because we detected a hidden entity by scent), so we select
-//    that cell as the search target but cannot path to it. This failure mode
-//    makes sense. There's another similar one: if we can see the entity but
-//    cannot find a path to it (to get there or to attack), we'd have similar
-//    pathological behavior.
 
 fn AttackOrFollowPath(kind: PathKind) -> impl Bhv {
     pri![
@@ -1950,8 +1958,15 @@ fn HuntSelectedTarget() -> impl Bhv {
         "HuntSelectedTarget",
         act!("AttackEnemy", AttackEnemy),
         act!("TrackPreyByScent", TrackEnemyByScent),
-        act!("Follow(Enemy)", |x| FollowPath(x, PathKind::Chase)),
-        act!("Search(Enemy)", SearchForEnemy),
+        seq![
+            "SkipRedundantSearch",
+            cond!("ChaseTargetUnchanged", |x| ChaseTargetUnchanged(x)),
+            act!("Follow(ChaseFallback)", |x| FollowPath(x, PathKind::ChaseFallback)),
+        ],
+        act!("Follow(Chase)", |x| FollowPath(x, PathKind::Chase)),
+        act!("Search(Chase)", SearchForEnemy),
+        act!("Follow(ChaseFallback)", |x| FollowPath(x, PathKind::ChaseFallback)),
+        act!("Search(ChaseFallback)", SearchForEnemyFallback),
     ]
     .on_running(|x| x.blackboard.chasing_enemy = true)
 }
