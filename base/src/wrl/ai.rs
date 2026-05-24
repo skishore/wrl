@@ -1953,11 +1953,9 @@ fn LookForTarget() -> impl Bhv {
     ]
 }
 
-fn HuntSelectedTarget() -> impl Bhv {
+fn ChaseDownTarget() -> impl Bhv {
     pri![
-        "HuntSelectedTarget",
-        act!("AttackEnemy", AttackEnemy),
-        act!("TrackPreyByScent", TrackEnemyByScent),
+        "ChaseDownTarget",
         seq![
             "SkipRedundantSearch",
             cond!("ChaseTargetUnchanged", |x| ChaseTargetUnchanged(x)),
@@ -1967,6 +1965,15 @@ fn HuntSelectedTarget() -> impl Bhv {
         act!("Search(Chase)", SearchForEnemy),
         act!("Follow(ChaseFallback)", |x| FollowPath(x, PathKind::ChaseFallback)),
         act!("Search(ChaseFallback)", SearchForEnemyFallback),
+    ]
+}
+
+fn HuntSelectedTarget() -> impl Bhv {
+    pri![
+        "HuntSelectedTarget",
+        act!("AttackEnemy", AttackEnemy),
+        act!("TrackPreyByScent", TrackEnemyByScent),
+        ChaseDownTarget(),
     ]
     .on_running(|x| x.blackboard.chasing_enemy = true)
 }
@@ -2057,17 +2064,20 @@ fn FightOrFlight() -> impl Bhv {
     ]
 }
 
+fn HuntAttackTarget() -> impl Bhv {
+    pri![
+        "HuntAttackTarget",
+        act!("UseSelectedAttack", UseSelectedAttack),
+        ChaseDownTarget(),
+    ]
+    .on_running(|x| x.blackboard.chasing_enemy = true)
+}
+
 fn FollowAttackCommand() -> impl Bhv {
     seq![
         "FollowAttackCommand",
         cond!("SelectAttackTarget", SelectAttackTarget),
-        pri![
-            "HuntAttackTarget",
-            act!("UseSelectedAttack", UseSelectedAttack),
-            act!("Follow(Chase)", |x| FollowPath(x, PathKind::Chase)),
-            act!("Search(Chase)", SearchForEnemy),
-        ]
-        .on_running(|x| x.blackboard.chasing_enemy = true)
+        HuntAttackTarget(),
     ]
 }
 
