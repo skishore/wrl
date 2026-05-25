@@ -41,8 +41,8 @@ pub struct Threat {
     pub species: Option<&'static Species>,
 
     // Stats:
-    pub hp: f64,
-    pub delta: i32,
+    hp: f64,
+    delta: i32,
 
     // Flags:
     pub asleep: bool,

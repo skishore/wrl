@@ -1284,9 +1284,7 @@ fn ListPreyBySight(ctx: &mut Ctx) -> bool {
 
 fn ListPreyBySound(ctx: &mut Ctx) -> bool {
     let initial = ctx.blackboard.targets.len();
-    for other in &ctx.blackboard.threats.threats {
-        if other.seen { continue; }
-        if other.delta >= 0 { continue; }
+    for other in &ctx.known.known.sources {
         if !check_time!(ctx, other.time, MAX_SEARCH_TURNS) { break; }
 
         let (loc, sense) = (other.loc, other.sense);
@@ -1308,7 +1306,7 @@ fn ListTargetsByScent<F: Fn(&ScentKnowledge) -> bool>(ctx: &mut Ctx, f: F) -> bo
     let initial = ctx.blackboard.targets.len();
     for scent in &ctx.known.known.scents {
         if !f(scent) { continue; }
-        if !check_time!(ctx, scent.time, MAX_TRACKING_TURNS) { continue; }
+        if !check_time!(ctx, scent.time, MAX_TRACKING_TURNS) { break; }
 
         let (loc, sense) = (scent.loc, Sense::Smell);
         let target = Target { loc, sense, sure: false };
