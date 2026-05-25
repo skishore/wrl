@@ -358,6 +358,7 @@ impl ThreatState {
         let call_limit = me.known.time_at_turn(CALL_LIMIT_TURNS);
         let call_retry = me.known.time_at_turn(CALL_RETRY_TURNS);
 
+        let mut uncertain = vec![];
         let mut hidden_hostile = 0;
         let mut seen_hostile = 0;
 
@@ -369,14 +370,12 @@ impl ThreatState {
             if x.time <= limit { break; }
             if x.time <= self.last_safe { break; }
 
-            let menacing = x.menacing();
-            let hostile = x.hostile();
-            let unknown = x.unknown() || x.uncertain();
-            let foe = hostile || menacing;
+            let foe = x.hostile() || x.menacing();
 
             if foe { self.menacing.push(x.clone()); }
-            if hostile { self.hostile.push(x.clone()); }
-            if unknown { self.unknown.push(x.clone()); }
+            if x.hostile() { self.hostile.push(x.clone()); }
+            if x.unknown() { self.unknown.push(x.clone()); }
+            if x.uncertain() { uncertain.push(x.clone()); }
 
             if foe && !x.seen { hidden_hostile += 1; }
             if foe && x.seen { seen_hostile += 1; }
@@ -394,6 +393,7 @@ impl ThreatState {
 
         // While active, also attack / flee from potential enemies.
         if active && !self.menacing.is_empty() {
+            self.menacing.extend_from_slice(&uncertain);
             self.menacing.extend_from_slice(&self.unknown);
             self.menacing.sort_by_key(|x| time - x.time);
         }
@@ -401,7 +401,6 @@ impl ThreatState {
             self.hostile.extend_from_slice(&self.unknown);
             self.hostile.sort_by_key(|x| time - x.time);
         }
-        self.unknown.retain(|x| x.unknown());
 
         // Compute a strength. For some entities that start by responding to
         // threats by fleeing from them, we'll add an additive penalty.

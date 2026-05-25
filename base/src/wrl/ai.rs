@@ -1690,6 +1690,11 @@ fn ChooseDefenseSquareImpl(
 //
 // Arguably, we only need the pathing for attack-point; attack-enemy already
 // works this way, and return is backed by PathToLeader.
+//
+// TODO: If a defender is currently the only one defending against a particular
+// rival, it should not move out of the way to defend against one other rival
+// (even if that square is better, e.g. because it's further from the leader).
+// This "stickiness" heuristic yields more predictable behavior.
 fn SelectAttackTarget(ctx: &mut Ctx) -> bool {
     let me = ctx.me;
     let Some(command) = me.command.get() else { return false };
@@ -1816,17 +1821,12 @@ fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
 //
 //  - Make the our-team-strength logic quadratic in team size.
 //
-//  - Drop "unknown" targets earlier if we're chasing down enemies...
-//    Many weird effects here. For example, if we see an entity but we don't
-//    know its valence (confidence == Low), we lump it into "threats.hostile"
-//    and purse and even attack it on sight. We actually want to extend
-//    hostile with unseen enemies, not unknown ones...
-//
-//  - Another weird effect of seeing unknown sources while fighting
-//    (in fight-or-flight): if we defeat the main threat, but the unknown
-//    source is Menacing-not-Hostile, then we'll immediately switch from
-//    fighting to fleeing instead of actually fighting back. We should fix
-//    this case by marking threats from which we've successfully fled.
+//  - We may learn about new Menacing-not-Hostile threats while we're fighting
+//    against a threat. For instance, if we're a prey, we fight back against a
+//    predator, and something warns us (because they heard our attack), we'll
+//    mark that noise source Menacing. Then, if we win the battle, we'll
+//    immediately switch to running away from the noise. We should fight back
+//    against it instead.
 //
 //  - Only run InvestigateNoises for recent unknown sources.
 //
