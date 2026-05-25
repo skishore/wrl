@@ -6,88 +6,15 @@ use std::num::NonZeroI32;
 use std::ops::{Index, IndexMut};
 
 use crate::static_assert_size;
-use super::point::{LOS, Matrix, Point, dirs};
+use super::point::{LOS, Point, dirs};
 use super::util::HashMap;
 
 //////////////////////////////////////////////////////////////////////////////
 
-// BFS (breadth-first search)
+// Pathing Status enum:
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub enum Status { Free, Blocked, Occupied, Unknown }
-
-#[derive(Default)]
-pub struct BFSResult {
-    pub dirs: Vec<Point>,
-    pub targets: Vec<Point>,
-}
-
-pub fn BFS<F: Fn(Point) -> bool, G: Fn(Point) -> Status>(
-        source: Point, target: F, limit: i32, check: G) -> Option<BFSResult> {
-    let kUnknown = -1;
-    let kBlocked = -2;
-
-    let n = 2 * limit + 1;
-    let initial = Point(limit, limit);
-    let offset = source - initial;
-    let mut distances = Matrix::new(Point(n, n), kUnknown);
-    distances.set(initial, 0);
-
-    let mut i = 1;
-    let mut prev: Vec<Point> = vec![initial];
-    let mut next: Vec<Point> = vec![];
-    let mut targets: Vec<Point> = vec![];
-
-    while i <= limit {
-        for pp in &prev {
-            for dir in &dirs::ALL {
-                let np = *pp + *dir;
-                let distance = distances.get(np);
-                if distance != kUnknown { continue; }
-
-                let point = np + offset;
-                let free = check(point) == Status::Free;
-                let done = free && target(point);
-
-                distances.set(np, if free { i } else { kBlocked });
-                if done { targets.push(np); }
-                if free { next.push(np); }
-            }
-        }
-        if next.is_empty() || !targets.is_empty() { break; }
-        std::mem::swap(&mut next, &mut prev);
-        next.clear();
-        i += 1;
-    }
-
-    if targets.is_empty() { return None; }
-
-    let mut result = BFSResult { dirs: vec![], targets: vec![] };
-    result.targets = targets.iter().map(|x| *x + offset).collect();
-    prev = targets;
-    next.clear();
-    i -= 1;
-
-    while i > 0 {
-        for pp in &prev {
-            for dir in &dirs::ALL {
-                let np = *pp + *dir;
-                let distance = distances.get(np);
-                if distance != i { continue; }
-
-                distances.set(np, kUnknown);
-                next.push(np);
-            }
-        }
-        std::mem::swap(&mut next, &mut prev);
-        next.clear();
-        i -= 1;
-    }
-
-    assert!(!prev.is_empty());
-    result.dirs = prev.iter().map(|x| *x - initial).collect();
-    Some(result)
-}
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -452,7 +379,7 @@ pub fn DijkstraLength(p: Point) -> i32 {
 pub fn DijkstraMap<F: Fn(Point) -> Status>(
         source: Point, check: F, cells: i32, limit: i32) -> Neighborhood {
     CACHE.with_borrow_mut(|cache|{
-        // Make sure the Matrix has enough space for the search.
+        // Make sure we've allocated enough space for the search.
         let state = &mut cache.1;
         let n = ((2 * limit + 1) as usize).pow(2);
         if state.nodes.len() < n { state.nodes.resize_with(n, Default::default); }
@@ -591,23 +518,12 @@ mod tests {
 
     extern crate test;
 
-    const BFS_LIMIT: i32 = 32;
     const DIJKSTRA_CELLS: i32 = 1024;
     const DIJKSTRA_LIMIT: i32 = 64;
 
     #[bench]
-    fn bench_bfs(b: &mut test::Bencher) {
-        let map = generate_map(2 * BFS_LIMIT);
-        b.iter(|| {
-            let done = |_: Point| { false };
-            let check = |p: Point| { map.get(&p).copied().unwrap_or(Status::Free) };
-            BFS(Point::default(), done, BFS_LIMIT, check);
-        });
-    }
-
-    #[bench]
     fn bench_dijkstra(b: &mut test::Bencher) {
-        let map = generate_map(2 * BFS_LIMIT);
+        let map = generate_map(DIJKSTRA_LIMIT);
         b.iter(|| {
             let done = |_: Point| { false };
             let check = |p: Point| { map.get(&p).copied().unwrap_or(Status::Free) };
@@ -617,7 +533,7 @@ mod tests {
 
     #[bench]
     fn bench_dijkstra_map(b: &mut test::Bencher) {
-        let map = generate_map(2 * BFS_LIMIT);
+        let map = generate_map(DIJKSTRA_LIMIT);
         b.iter(|| {
             let mut result = HashMap::default();
             result.insert(Point::default(), 0);
