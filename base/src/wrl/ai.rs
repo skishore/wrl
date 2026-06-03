@@ -1577,10 +1577,10 @@ fn CheckFollowerSquareImpl(leader: &Entity, known: MergedKnowledge,
 
     let delta = leader.pos - point;
     if !Bound::new(2).contains(delta) { return false; }
-    if delta.len_l1() <= 1  { return true; }
+    if delta.len_l1() <= 1 { return true; }
 
     let cell = known.get(point);
-    !cell.is_shadow_cover() && cell.visibility() == known.get(leader.pos).visibility()
+    cell.can_see_entity_at() && cell.visibility() == known.get(leader.pos).visibility()
 }
 
 // Choose the best cell from which to defend the `leader`, if any.
