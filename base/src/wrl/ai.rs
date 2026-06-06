@@ -22,7 +22,7 @@ use super::entity::{AttackTarget, Command, Entity};
 use super::event::{Call, Location, Sense};
 use super::game::{Action, Item, move_ready};
 use super::game::{FOV_RADIUS_NPC, CALL_VOLUME, FOLLOW_RANGE, SUMMON_RANGE};
-use super::knowledge::{Knowledge, PointLookup, ScentKnowledge};
+use super::knowledge::{Knowledge, ScentKnowledge};
 use super::threats::{FightOrFlight, ThreatState};
 use super::time::Timestamp;
 
@@ -205,42 +205,12 @@ impl Blackboard {
 
 //////////////////////////////////////////////////////////////////////////////
 
-// MergedKnowledge
-
-#[derive(Clone, Copy)]
-struct MergedKnowledge<'a> {
-    known: &'a Knowledge,
-    extra: Option<&'a Knowledge>,
-}
-
-impl<'a> MergedKnowledge<'a> {
-    fn time(&self) -> Timestamp { self.known.time() }
-
-    fn time_at_turn(&self, turn: i32) -> Timestamp { self.known.time_at_turn(turn) }
-
-    fn time_to_turn(&self, time: Timestamp) -> f64 { self.known.time_to_turn(time) }
-
-    fn get(&self, p: Point) -> PointLookup<'a> {
-        let Some(x) = self.extra else { return self.known.get(p) };
-
-        let extra = x.get(p);
-        let extra_time = extra.time_since_seen();
-        if extra_time == Default::default() { return extra; }
-
-        let known = self.known.get(p);
-        let known_time = known.time_since_seen();
-        if extra_time < known_time { extra } else { known }
-    }
-}
-
-//////////////////////////////////////////////////////////////////////////////
-
 // Ctx
 
 pub struct Ctx<'a> {
     // Derived from the entity:
     me: &'a Entity,
-    known: MergedKnowledge<'a>,
+    known: &'a Knowledge,
     pos: Point,
     dir: Point,
 
@@ -567,7 +537,7 @@ fn ClearLastSeen(ctx: &mut Ctx, kind: PathKind) -> Result {
 }
 
 fn UpdateLastSeen<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> Result {
-    for cell in &ctx.known.known.cells {
+    for cell in &ctx.known.cells {
         if !cell.visible() { break; }
         if !valid(ctx, cell.point) { continue; }
 
@@ -937,12 +907,8 @@ fn AttackTarget(ctx: &mut Ctx, target: Point) -> Option<Action> {
 }
 
 fn AttackWith(ctx: &mut Ctx, target: Point, attack: &'static Attack) -> Option<Action> {
-    let Ctx { me, pos, .. } = *ctx;
-    let known = MergedKnowledge { known: &*me.known, extra: None };
+    let Ctx { me, known, pos, .. } = *ctx;
     let range = attack.range;
-
-    // Have to do this check with our knowledge alone; that's a requirement
-    // for the attack action to succeed if we choose it.
     let ready = move_ready(me) && known.get(target).visible() &&
                 CanAttackFrom(known, pos, target, range);
 
@@ -953,11 +919,11 @@ fn AttackWith(ctx: &mut Ctx, target: Point, attack: &'static Attack) -> Option<A
     }
 }
 
-fn PathIsFree(known: MergedKnowledge, path: &[Point]) -> bool {
+fn PathIsFree(known: &Knowledge, path: &[Point]) -> bool {
     path.iter().skip(1).rev().skip(1).all(|&p| known.get(p).status() == Status::Free)
 }
 
-fn CanAttackFrom(known: MergedKnowledge, source: Point, target: Point, range: Bound) -> bool {
+fn CanAttackFrom(known: &Knowledge, source: Point, target: Point, range: Bound) -> bool {
     if source == target { return false; }
     if !range.contains(source - target) { return false; }
     PathIsFree(known, &LOS(source, target))
@@ -973,10 +939,6 @@ fn PathToTarget(ctx: &mut Ctx, target: Point, range: Bound) -> Option<Action> {
     let check = |p| match known.get(p).status() {
         Status::Occupied if (p - pos).len_l1() == 1 => Status::Blocked,
         x => x
-    };
-    let ready = |p| {
-        let known = MergedKnowledge { known: known.known, extra: None };
-        CanAttackFrom(known, p, target, range)
     };
     let valid = |p| {
         if p != pos && known.get(p).status() != Status::Free { return false; }
@@ -1009,13 +971,9 @@ fn PathToTarget(ctx: &mut Ctx, target: Point, range: Bound) -> Option<Action> {
     let update = cached.path.last().cloned() == Some(target);
 
     // If we could already attack the target, don't move out of view.
-    if ready(pos) {
-        let mut dirs = vec![Point::default()];
-        for &x in &dirs::ALL {
-            if check(pos + x) != Status::Free { continue; }
-            if ready(pos + x) { dirs.push(x); }
-        }
-
+    if valid(pos) {
+        let dirs: Vec<_> = [dirs::NONE].iter().chain(
+            dirs::ALL.iter().filter(|&&x| valid(pos + x))).copied().collect();
         let dir = pick(&dirs, rng);
         if update { cached.replace(LOS(pos + dir, target)); }
         return Some(step(dir))
@@ -1276,7 +1234,7 @@ fn ListThreatsByScent(ctx: &mut Ctx) -> bool {
 
 fn ListPreyBySight(ctx: &mut Ctx) -> bool {
     let initial = ctx.blackboard.targets.len();
-    for other in &ctx.known.known.entities {
+    for other in &ctx.known.entities {
         if other.delta >= 0 { continue; }
         if !check_time!(ctx, other.time, MAX_SEARCH_TURNS) { break; }
 
@@ -1289,7 +1247,7 @@ fn ListPreyBySight(ctx: &mut Ctx) -> bool {
 
 fn ListPreyBySound(ctx: &mut Ctx) -> bool {
     let initial = ctx.blackboard.targets.len();
-    for other in &ctx.known.known.sources {
+    for other in &ctx.known.sources {
         if !check_time!(ctx, other.time, MAX_SEARCH_TURNS) { break; }
 
         let (loc, sense) = (other.loc, other.sense);
@@ -1309,7 +1267,7 @@ fn ListHumansByScent(ctx: &mut Ctx) -> bool {
 
 fn ListTargetsByScent<F: Fn(&ScentKnowledge) -> bool>(ctx: &mut Ctx, f: F) -> bool {
     let initial = ctx.blackboard.targets.len();
-    for scent in &ctx.known.known.scents {
+    for scent in &ctx.known.scents {
         if !f(scent) { continue; }
         if !check_time!(ctx, scent.time, MAX_TRACKING_TURNS) { break; }
 
@@ -1566,12 +1524,12 @@ pub fn dangers(me: &Entity) -> Vec<Point> {
 
 // Check if `point` is a valid cell for a follower of the `leader`.
 pub fn CheckFollowerSquare(leader: &Entity, point: Point) -> bool {
-    let known = MergedKnowledge { known: &*leader.known, extra: None };
-    CheckFollowerSquareImpl(leader, known, point, /*ignore_occupant=*/false)
+    CheckFollowerSquareImpl(leader, point, /*ignore_occupant=*/false)
 }
 
-fn CheckFollowerSquareImpl(leader: &Entity, known: MergedKnowledge,
-                           point: Point, ignore_occupant: bool) -> bool {
+fn CheckFollowerSquareImpl(
+        leader: &Entity, point: Point, ignore_occupant: bool) -> bool {
+    let known = &*leader.known;
     let free = match known.get(point).status() {
         Status::Free => true,
         Status::Occupied => ignore_occupant,
@@ -1589,12 +1547,7 @@ fn CheckFollowerSquareImpl(leader: &Entity, known: MergedKnowledge,
 
 // Choose the best cell from which to defend the `leader`, if any.
 pub fn ChooseDefenseSquare(leader: &Entity, source: Point) -> Option<Point> {
-    let known = MergedKnowledge { known: &*leader.known, extra: None };
-    ChooseDefenseSquareImpl(leader, known, source)
-}
-
-fn ChooseDefenseSquareImpl(
-        leader: &Entity, known: MergedKnowledge, source: Point) -> Option<Point> {
+    let known = &*leader.known;
     let rivals = dangers(leader);
     if rivals.is_empty() { return None; }
 
@@ -1657,7 +1610,7 @@ fn ChooseDefenseSquareImpl(
             if x == 0 && y == 0 { continue; }
 
             let (d, p) = (Point(x, y), Point(x, y) + leader.pos);
-            if !CheckFollowerSquareImpl(leader, known, p, p == source) { continue; }
+            if !CheckFollowerSquareImpl(leader, p, p == source) { continue; }
 
             let mut score = scores.get(&d).cloned().unwrap_or(f64::NEG_INFINITY);
             if score == f64::NEG_INFINITY { continue; }
@@ -1705,7 +1658,7 @@ fn SelectAttackTarget(ctx: &mut Ctx) -> bool {
     let Command::Attack(attack, target) = command else { return false };
     let Some(eid) = target.eid else { return false };
 
-    let other = ctx.known.known.entity(eid);
+    let other = ctx.known.entity(eid);
     let other = other.and_then(|x| if x.time < target.loc.time { None } else { Some(x) });
 
     let loc = other.map(|x| x.loc).unwrap_or(target.loc);
@@ -1760,7 +1713,7 @@ fn FollowSimpleCommand(ctx: &mut Ctx) -> Option<Action> {
 }
 
 fn AttackRivals(ctx: &mut Ctx) -> Option<Action> {
-    for entity in &ctx.known.known.entities {
+    for entity in &ctx.known.entities {
         if entity.rival() && entity.visible() {
             let result = AttackTarget(ctx, entity.pos);
             if result.is_some() { return result; }
@@ -1778,7 +1731,7 @@ fn LeaderHasRivals(ctx: &mut Ctx) -> bool {
 fn DefendLeader(ctx: &mut Ctx) -> Option<Action> {
     let source = ctx.pos;
     let leader = ctx.env.leader?;
-    let target = ChooseDefenseSquareImpl(leader, ctx.known, source)?;
+    let target = ChooseDefenseSquare(leader, source)?;
 
     let check = |p: Point| ctx.known.get(p).status();
     let path = AStar(source, target, ASTAR_LIMIT_ATTACK, check)?;
@@ -1796,7 +1749,7 @@ fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
     let (known, source, target) = (ctx.known, ctx.pos, leader.pos);
 
     let turns = 0.5;
-    let valid = |p: Point| CheckFollowerSquareImpl(leader, known, p, p == source);
+    let valid = |p: Point| CheckFollowerSquareImpl(leader, p, p == source);
     let step = |step: Point| { Action::Move { look: step, step, turns } };
 
     if Bound::new(3).contains(source - target) {
@@ -2176,8 +2129,7 @@ impl AIState {
     }
 
     pub fn plan(&mut self, me: &Entity, env: AIEnv) -> Action {
-        let extra = env.leader.map(|x| &*x.known);
-        let known = MergedKnowledge { known: &*me.known, extra };
+        let known = &*me.known;
         let blackboard = &mut self.blackboard;
         let mut env = AIEnv { ..env };
 
