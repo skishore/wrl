@@ -1545,17 +1545,12 @@ fn CheckFollowerSquareImpl(
     cell.can_see_entity_at() && cell.visibility() == known.get(leader.pos).visibility()
 }
 
-// Choose the best cell from which to defend the `leader`, if any.
+// Choose the best cell from which to defend `leader`, starting from `source`.
+// This choice may fail, e.g. if there are no spots free near `leader`.
 pub fn ChooseDefenseSquare(leader: &Entity, source: Point) -> Option<Point> {
     let known = &*leader.known;
     let rivals = dangers(leader);
     if rivals.is_empty() { return None; }
-
-    let defended = |p: Point| {
-        if p == source || p == leader.pos { return false; }
-        let cell = known.get(p);
-        cell.blocked() || cell.entity().map(|x| x.friend()).unwrap_or(false)
-    };
 
     // Score each point in a 5x5 cell centered on the leader based on how many
     // rivals' line-of-sights to the player we'd block from that cell.
@@ -1569,34 +1564,44 @@ pub fn ChooseDefenseSquare(leader: &Entity, source: Point) -> Option<Point> {
 
         let los = LOS(rival, leader.pos);
         let los = &los[1..los.len() - 1];
+        if los.iter().any(|&x| known.get(x).blocked()) { continue; }
 
         let Point(dx, dy) = rival - leader.pos;
         let vertical = dy.abs() > dx.abs();
         let sign = if vertical { dy.signum() } else { dx.signum() };
         assert!(sign != 0);
 
+        let knight = dx * dx + dy * dy == 5;
+        let bonus = if knight { 4. } else { 0. };
         let shift = if vertical { Point(1, 0) } else { Point(0, 1) };
         let shifts: [Point; 3] = [Point::default(), shift, Point::default() - shift];
 
         for shift in shifts {
-            let defended = los.iter().any(|&x| defended(x + shift));
-            let penalty = if defended { 0.25 } else { 1.0 };
+            let mut defended = false;
 
-            for &point in los {
-                let delta = point + shift - leader.pos;
-                if delta.0.abs() > 2 || delta.1.abs() > 2 { continue; }
+            for &p in los {
+                let point = p + shift;
+                let delta = point - leader.pos;
+                let penalty = if defended { 0.0625 } else { 1.0 };
+
+                defended = defended || (
+                    point != source && point != leader.pos &&
+                    known.get(point).entity().map(|x| x.friend()).unwrap_or(false)
+                );
+
+                if !Bound::new(2).contains(delta) { continue; }
 
                 let score = (||{
                     if shift == Point::default() { return 64. };
 
-                    let Point(px, py) = point - leader.pos;
+                    let Point(px, py) = p - leader.pos;
                     let (a, b) = (px * dy * sign, py * dx * sign);
                     if a == b { return 6. }
 
                     if vertical {
-                        if (a < b) == (shift.0 > 0) { 8. } else { 6. }
+                        if (a < b) == (shift.0 > 0) { 8. + bonus } else { 6. }
                     } else {
-                        if (a < b) == (shift.1 < 0) { 8. } else { 6. }
+                        if (a < b) == (shift.1 < 0) { 8. + bonus } else { 6. }
                     }
                 })();
                 *scores.entry(delta).or_insert(0.) += score * penalty;
@@ -1636,6 +1641,8 @@ pub fn ChooseDefenseSquare(leader: &Entity, source: Point) -> Option<Point> {
 // and all of those squares are blocked or occupied. We should instead have
 // a dead-simple version that considers any cell within a 5x5 centered on
 // the player and picks one if more sophisticated checks fail.
+//
+// TODO: Choose a defense square even if a rival is adjacent to the player.
 //
 // TODO: Perhaps an alternate claim: MaybeAttackRivals only attacks rivals
 // that are currently visible; perhaps we should path to and attack any other
