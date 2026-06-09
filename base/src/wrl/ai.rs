@@ -263,7 +263,7 @@ impl<'a> Ctx<'a> {
 }
 
 fn safe_inv_l2(point: Point) -> f64 {
-    if point == Point::default() { return 0. }
+    if point == Point::default() { return 0. };
     (point.len_l2_squared() as f64).sqrt().recip()
 }
 
@@ -458,11 +458,9 @@ fn select_chase_target(ctx: &mut Ctx) -> Option<Point> {
 
         let d0 = scale * distance as f64;
         let d1 = (p - center).len_l2();
-
         let n = if known.get(p).unknown() { 0 } else {
             dirs::ALL.iter().filter(|&&x| is_search_candidate(p + x)).count()
         };
-
         Some(-1.0 * d0 + -6.0 * d1 * decay + 12.0 * cos0 + 15.0 * cos1 + 4.0 * n as f64)
     };
 
