@@ -311,6 +311,13 @@ fn ensure_neighborhood(ctx: &mut Ctx) {
     if let Some(x) = &mut ctx.env.debug { x.record_neighborhood(&ctx.neighborhood); }
 }
 
+fn ensure_sneakable(ctx: &mut Ctx) {
+    if !ctx.sneakable.visited.is_empty() { return; }
+
+    let (pos, check) = (ctx.pos, get_sneak_check(ctx));
+    ctx.sneakable = DijkstraMap(pos, check, HIDING_CELLS, HIDING_LIMIT);
+}
+
 fn ensure_vision(ctx: &mut Ctx) {
     if ctx.ran_vision { return; }
 
@@ -1487,8 +1494,7 @@ fn FleeToLocation(ctx: &mut Ctx, target: Point, kind: PathKind) -> Result {
 }
 
 fn HideFromThreats(ctx: &mut Ctx) -> Result {
-    let check = get_sneak_check(ctx);
-    ctx.sneakable = DijkstraMap(ctx.pos, check, HIDING_CELLS, HIDING_LIMIT);
+    ensure_sneakable(ctx);
     let target = select_flight_target(ctx, /*hiding=*/true);
     let Some(target) = target else { return Result::Failed };
 
