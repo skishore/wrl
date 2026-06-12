@@ -1733,22 +1733,24 @@ fn DefendLeader(ctx: &mut Ctx) -> Option<Action> {
     let leader = ctx.env.leader?;
     let target = ChooseDefenseSquare(leader, source)?;
 
+    let turns = FOLLOW_TURNS;
     let check = |p: Point| ctx.known.get(p).status();
     let path = AStar(source, target, ASTAR_LIMIT_ATTACK, check)?;
 
     let Some(&next) = path.first() else {
-        return Some(Action::Look { look: source - leader.pos })
+        let (step, look) = (dirs::NONE, source - leader.pos);
+        return Some(Action::Move { step, look, turns });
     };
 
-    let (look, step) = (next - leader.pos, next - source);
-    Some(Action::Move { step, look, turns: FOLLOW_TURNS })
+    let (step, look) = (next - source, next - leader.pos);
+    Some(Action::Move { step, look, turns })
 }
 
 fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
     let leader = ctx.env.leader?;
     let (known, source, target) = (ctx.known, ctx.pos, leader.pos);
 
-    let turns = 0.5;
+    let turns = FOLLOW_TURNS;
     let valid = |p: Point| CheckFollowerSquareImpl(leader, p, p == source);
     let step = |step: Point| { Action::Move { look: step, step, turns } };
 
