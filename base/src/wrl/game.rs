@@ -319,7 +319,7 @@ impl Board {
 
         match self._effect.events.remove(0) {
             effect::Event::Callback { callback, .. } => Some(callback),
-            effect::Event::Other { .. } => None
+            effect::Event::Other { .. } => panic!("add-event left non-Callback!"),
         }
     }
 
@@ -800,10 +800,16 @@ fn hit_entity(state: &mut State, eid: EID, attack: &Attack, logged: bool, tid: E
         board.add_item(Some(eid), pos, Item::Corpse);
     }
 
+    if tid == state.player {
+        let log = &mut env.ui.log;
+        if !logged { log.log(format!("Something attacked {}!", lower)); }
+        if critted { log.log_append("A critical hit!"); }
+        if fainted { log.log_append("You die..."); }
+    }
+
     for s in &sightings {
-        let oid = s.eid;
-        if fainted { board.remove_known_entity(oid, tid); }
-        if !s.source.seen() || !board.entities[oid].player { continue; }
+        if fainted { board.remove_known_entity(s.eid, tid); }
+        if s.eid != state.player || !s.source.seen() { continue; }
 
         let log = &mut env.ui.log;
         if !logged { log.log(format!("Something attacked {}!", lower)); }
@@ -1112,7 +1118,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let event = &mut board.create_event(eid, data, target);
             for s in &sightings {
                 state.board.observe_event(s.eid, &s.merged, event, &mut state.env);
-                if allied || s.eid != state.player { continue; }
+                if s.eid != state.player || allied { continue; }
 
                 let color = if s.merged.seen() { color } else { Color::white() };
                 state.env.ui.animate_move(color, source, 0);
@@ -1149,11 +1155,10 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let event = &mut board.create_event(eid, data, source);
             let mut logged = false;
             for s in &sightings {
-                let oid = s.eid;
                 let target = if s.target.seen() { tid } else { None };
                 event.data = EventData::Attack(AttackEvent { combat, target });
-                state.board.observe_event(oid, &s.source, event, &mut state.env);
-                if oid != state.player { continue; }
+                state.board.observe_event(s.eid, &s.source, event, &mut state.env);
+                if s.eid != state.player { continue; }
 
                 let entities = &state.board.entities;
                 let attacker = if s.source.seen() { Some(&entities[eid]) } else { None };
@@ -1357,16 +1362,19 @@ fn update_state(state: &mut State) {
     let pos = state.get_player().pos;
     state.env.ui.update(pos, &mut state.env.rng);
 
-    // If an Effect is active, run it, skipping frames the player can't see.
-    if state.advance_effect() {
-        update_player_knowledge(state);
-        return;
-    }
-
     // The game loop is interrupted by animations, and if the player dies.
     let game_loop_active = |state: &State| {
         !state.board.animation_running() && state.get_player().cur_hp > 0
     };
+
+    // If an Effect is active, run it, skipping frames the player can't see.
+    let animated = state.board.animation_running();
+    if state.advance_effect() || animated && !game_loop_active(state) {
+        update_player_knowledge(state);
+        return;
+    }
+
+    // Process inputs. Return true if the player has an action queued.
     let stage_input = |state: &mut State| {
         if !game_loop_active(state) { return true; }
         if !matches!(state.input, Action::WaitForInput) { return true; }
