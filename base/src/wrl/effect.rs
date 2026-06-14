@@ -338,7 +338,7 @@ pub fn WithdrawEffect(source: Point, target: Point) -> Effect {
     ])
 }
 
-fn SwitchEffect(source: Point, target: Point) -> Effect {
+pub fn SwitchEffect(source: Point, target: Point) -> Effect {
     Effect::serial(vec![
         WithdrawEffect(source, target),
         Effect::pause(4),

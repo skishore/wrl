@@ -818,11 +818,31 @@ fn hit_entity(state: &mut State, eid: EID, attack: &Attack, logged: bool, tid: E
     }
 }
 
+fn summon_entity(state: &mut State, eid: EID, target: Point, index: usize, team: usize) {
+    let State { board, env, .. } = state;
+    let (name, leader, player) = (None, Some(eid), false);
+
+    let teammate = board.entities[eid].team.get(team);
+    let &Individual { species, cur_hp } = match teammate {
+        Some(Teammate::In(x)) => x,
+        _ => return,
+    };
+
+    let args = EntityArgs { name, pos: target, player, leader, species };
+    let oid = board.add_entity(&args, env);
+
+    let other = &mut board.entities[oid];
+    other.cur_hp = cur_hp;
+
+    let me = &mut board.entities[eid];
+    let index = std::cmp::min(index, me.summons.len());
+    me.team[team] = Teammate::Out(oid);
+    me.summons.insert(index, oid);
+}
+
 fn try_recall_entity(state: &mut State, eid: EID, oid: EID) -> bool {
     let entity = &state.board.entities[eid];
     let summon = &state.board.entities[oid];
-    if summon.leader != Some(eid) { return false; }
-
     let (source, target) = (entity.pos, summon.pos);
     if !can_summon(&state.board, entity, target) { return false; }
 
@@ -923,6 +943,15 @@ fn can_summon(board: &Board, me: &Entity, target: Point) -> bool {
     if source == target { return false; }
     if !range.contains(source - target) { return false; }
     if !known.get(target).can_see_entity_at() { return false; }
+
+    let status = board.get_status(target);
+    let entity = board.get_cell(target).eid.and_then(|x| board.get_entity(x));
+    let free = match status {
+        Status::Free => true,
+        Status::Blocked | Status::Unknown => false,
+        Status::Occupied => entity.map(|x| x.leader == Some(me.eid)).unwrap_or(false),
+    };
+    if !free { return false; }
 
     let los = LOS(source, target);
     los[1..los.len() - 1].iter().all(|&p| {
@@ -1208,21 +1237,26 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let me = &state.board.entities[eid];
             if !can_summon(&state.board, me, target) { return ActionResult::failure(); }
 
-            shout(state, eid, &format!("Go! {}!", species.name), "");
+            if let Some(tid) = state.board.get_cell(target).eid {
+                let summon = me.summons.iter().position(|&x| x == tid);
+                let Some(index) = summon else { return ActionResult::failure() };
 
-            let cb: CB = Box::new(move |state| {
-                let State { board, env, .. } = state;
-                let (name, leader, player) = (None, Some(eid), false);
-                let args = EntityArgs { name, pos: target, player, leader, species };
-                let oid = board.add_entity(&args, env);
+                let last = state.board.entities[tid].species;
+                shout(state, eid, &format!("{}, return! Go, {}!", last.name, species.name), "");
 
-                let other = &mut board.entities[oid];
-                other.cur_hp = cur_hp;
+                let cb: CB = Box::new(move |x| x.board.remove_entity(tid));
+                let effect = effect::SwitchEffect(source, target);
+                let effect = apply_effect(effect, FT::Withdraw, cb);
 
-                let me = &mut board.entities[eid];
-                me.team[team] = Teammate::Out(oid);
-                me.summons.push(oid);
-            });
+                let cb: CB = Box::new(move |x| summon_entity(x, eid, target, index, team));
+                state.add_effect(apply_effect(effect, FT::Summon, cb));
+                return ActionResult::success();
+            }
+
+            let index = me.summons.len();
+            let cb: CB = Box::new(move |x| summon_entity(x, eid, target, index, team));
+
+            shout(state, eid, &format!("Go, {}!", species.name), "");
 
             let effect = effect::SummonEffect(source, target);
             state.add_effect(apply_effect(effect, FT::Summon, cb));

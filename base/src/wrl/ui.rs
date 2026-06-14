@@ -303,15 +303,23 @@ fn update_target(known: &Knowledge, target: &mut Target, update: Point) {
             }
             for (i, &x) in target.path.iter().enumerate() {
                 let cell = known.get(x);
-                let status = cell.status();
-                if status != Status::Free && status != Status::Unknown {
+                let last = i + 1 == target.path.len();
+                let friend = cell.entity().map(|x| x.friend()).unwrap_or(false);
+
+                let free = match cell.status() {
+                    Status::Blocked => false,
+                    Status::Occupied => friend && last,
+                    Status::Free | Status::Unknown => true,
+                };
+
+                if !free {
                     target.error = "There's something in the way.".into();
                 } else if !range.contains(x - target.source) {
                     target.error = "You can't throw that far.".into();
                 } else if !cell.visible() {
                     target.error = "You can't see a clear path there.".into();
-                } else if i == target.path.len() - 1 && !cell.can_see_entity_at() {
-                    target.error = "That cell might be occupied.".into();
+                } else if last && !cell.can_see_entity_at() {
+                    target.error = "That cell may be occupied.".into();
                 }
                 if !target.error.is_empty() { break; }
                 target.okay_until = i + 1;
