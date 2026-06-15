@@ -211,14 +211,14 @@ pub fn AStarHeuristic(p: Point, los: &[Point]) -> i32 {
 }
 
 pub fn AStar<F: Fn(Point) -> Status>(
-        source: Point, target: Point, limit: i32, check: F) -> Option<Vec<Point>> {
+        source: Point, target: Point, cells: i32, check: F) -> Option<Vec<Point>> {
     // Try line-of-sight - if that path is clear, then we don't need to search.
     // As with the full search below, we don't check if source is blocked here.
     let los = LOS(source, target);
     let free = (1..los.len() - 1).all(|i| check(los[i]) == Status::Free);
     if free { return Some(los.into_iter().skip(1).collect()) }
 
-    Dijkstra(source, |x| x == target, limit, check, |x| AStarHeuristic(x, &los))
+    Dijkstra(source, |x| x == target, cells, check, |x| AStarHeuristic(x, &los))
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -231,11 +231,11 @@ pub fn AStar<F: Fn(Point) -> Status>(
 // TODO: If it's AStar, and we haven't found a target, return a path that gets
 // us as close as possible to the target.
 pub fn Dijkstra<F: Fn(Point) -> bool, G: Fn(Point) -> Status, H: Fn(Point) -> i32>(
-        source: Point, target: F, limit: i32, check: G, heuristic: H) -> Option<Vec<Point>> {
+        source: Point, target: F, cells: i32, check: G, heuristic: H) -> Option<Vec<Point>> {
     CACHE.with_borrow_mut(|cache|{
         // Reuse AStar allocations via the cached AStarState.
         let state = &mut cache.0;
-        let result = CachedDijkstra(state, source, target, limit, check, heuristic);
+        let result = CachedDijkstra(state, source, target, cells, check, heuristic);
 
         // Clean up the updates done to the cache state.
         state.heap.heap.clear();
@@ -248,7 +248,7 @@ pub fn Dijkstra<F: Fn(Point) -> bool, G: Fn(Point) -> Status, H: Fn(Point) -> i3
 
 fn CachedDijkstra<F: Fn(Point) -> bool, G: Fn(Point) -> Status, H: Fn(Point) -> i32>(
         state: &mut AStarState, source: Point, target: F,
-        limit: i32, check: G, heuristic: H) -> Option<Vec<Point>> {
+        cells: i32, check: G, heuristic: H) -> Option<Vec<Point>> {
     let map = &mut state.map;
     let heap = &mut state.heap;
 
@@ -256,7 +256,7 @@ fn CachedDijkstra<F: Fn(Point) -> bool, G: Fn(Point) -> Status, H: Fn(Point) -> 
     let node = AStarNode::new(source, SOURCE_NODE, 0, score);
     map.insert(source, heap.push(node));
 
-    for _ in 0..limit {
+    for _ in 0..cells {
         if heap.is_empty() { break; }
         let prev = heap.extract_min();
         let prev_pos = heap.get_node(prev).pos;

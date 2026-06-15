@@ -30,8 +30,8 @@ use super::time::Timestamp;
 
 // Constants
 
-const ASTAR_LIMIT_ATTACK: i32 = 256;
-const ASTAR_LIMIT_WANDER: i32 = 1024;
+const ASTAR_CELLS_ATTACK: i32 = 256;
+const ASTAR_CELLS_WANDER: i32 = 1024;
 const HIDING_CELLS: i32 = 256;
 const HIDING_LIMIT: i32 = 32;
 const SEARCH_CELLS: i32 = 1024;
@@ -765,9 +765,9 @@ fn AStarHelper(ctx: &mut Ctx, target: Point, kind: PathKind) -> Option<Vec<Point
     let source = ctx.pos;
     let hiding = kind == PathKind::Hide;
     let result = if hiding {
-        AStar(source, target, ASTAR_LIMIT_WANDER, get_sneak_check(ctx))
+        AStar(source, target, ASTAR_CELLS_WANDER, get_sneak_check(ctx))
     } else {
-        AStar(source, target, ASTAR_LIMIT_WANDER, get_basic_check(ctx))
+        AStar(source, target, ASTAR_CELLS_WANDER, get_basic_check(ctx))
     };
     if let Some(mut path) = result {
         path.insert(0, source);
@@ -997,11 +997,11 @@ fn PathToTargetImpl(ctx: &mut Ctx, target: Point, range: Bound, flip: bool) -> O
     }
 
     // Find the closest `source` cell from which we could attack the target.
-    let source = Dijkstra(pos, valid, ASTAR_LIMIT_ATTACK, check, |_| 0);
+    let source = Dijkstra(pos, valid, ASTAR_CELLS_ATTACK, check, |_| 0);
     let source = source.and_then(|x| x.last().cloned()).unwrap_or(target);
 
     // Then, use A* to find a path to that cell.
-    let mut path = AStar(pos, source, ASTAR_LIMIT_ATTACK, check)?;
+    let mut path = AStar(pos, source, ASTAR_CELLS_ATTACK, check)?;
     let dir = *path.first()? - pos;
 
     if update {
@@ -1666,7 +1666,7 @@ pub fn ChooseDefenseSquare(leader: &Entity, source: Point) -> Option<Point> {
 // rivals the player knows about instead.
 //
 // TODO: FollowSimpleCommand is weak. If we can't find a short-term path to
-// the target within ASTAR_LIMIT_ATTACK, we need to switch to CachedPath-based
+// the target within ASTAR_CELLS_ATTACK, we need to switch to CachedPath-based
 // long-range pathing even for relatively nearby targets.
 //
 // Arguably, we only need the pathing for attack-point; attack-enemy already
@@ -1760,7 +1760,7 @@ fn DefendLeader(ctx: &mut Ctx) -> Option<Action> {
 
     let turns = FOLLOW_TURNS;
     let check = |p: Point| ctx.known.get(p).status();
-    let path = AStar(source, target, ASTAR_LIMIT_ATTACK, check)?;
+    let path = AStar(source, target, ASTAR_CELLS_ATTACK, check)?;
 
     let Some(&next) = path.first() else {
         let (step, look) = (dirs::NONE, source - leader.pos);
@@ -1787,7 +1787,7 @@ fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
     }
 
     let check = |p: Point| known.get(p).status();
-    let path = AStar(source, target, ASTAR_LIMIT_ATTACK, check)?;
+    let path = AStar(source, target, ASTAR_CELLS_ATTACK, check)?;
     Some(step(*path.first()? - source))
 }
 
