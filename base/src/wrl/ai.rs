@@ -929,7 +929,15 @@ fn CanAttackFrom(known: &Knowledge, source: Point, target: Point, range: Bound) 
     PathIsFree(known, &LOS(source, target))
 }
 
+fn PathToReturn(ctx: &mut Ctx, target: Point) -> Option<Action> {
+    PathToTargetImpl(ctx, target, SUMMON_RANGE, /*flip=*/true)
+}
+
 fn PathToTarget(ctx: &mut Ctx, target: Point, range: Bound) -> Option<Action> {
+    PathToTargetImpl(ctx, target, range, /*flip=*/false)
+}
+
+fn PathToTargetImpl(ctx: &mut Ctx, target: Point, range: Bound, flip: bool) -> Option<Action> {
     let Ctx { known, pos, .. } = *ctx;
     let rng = &mut ctx.env.rng;
     let step = |dir| {
@@ -941,17 +949,27 @@ fn PathToTarget(ctx: &mut Ctx, target: Point, range: Bound) -> Option<Action> {
         x => x
     };
     let valid = |p| {
-        if p != pos && known.get(p).status() != Status::Free { return false; }
-        CanAttackFrom(known, p, target, range)
+        let cell = known.get(p);
+        if p != pos && cell.status() != Status::Free { return false; }
+
+        let (a, b) = if flip { (target, p) } else { (p, target) };
+        if !CanAttackFrom(known, a, b, range) { return false; }
+
+        if !flip { return true; }
+        if (p - target).len_l1() <= 1 { return true; }
+
+        let light = ctx.me.species.light.radius;
+        let cover = matches!(cell.tile(), Some(x) if x.is_cover());
+        !cover && (light > 0 || !cell.is_shadow_cover())
     };
 
     // Given a non-empty list of "good" directions (each of which brings us
     // close to attacking the target), choose one closest to our attack range.
     let pick = |dirs: &[Point], rng: &mut RNG| {
         let cell = known.get(target);
-        let (shade, tile) = (cell.shade(), cell.tile());
+        let shade = cell.shade();
         let light = ctx.me.species.light.radius;
-        let cover = matches!(tile, Some(x) if x.is_cover());
+        let cover = matches!(cell.tile(), Some(x) if x.is_cover());
 
         // Check for any of several reasons to stay close to a target.
         let mut radius = min(range.radius, FOLLOW_RANGE.radius);
@@ -1706,7 +1724,7 @@ fn UseSelectedAttack(ctx: &mut Ctx) -> Option<Action> {
 }
 
 fn FollowSimpleCommand(ctx: &mut Ctx) -> Option<Action> {
-    let (me, leader) = (ctx.me, ctx.env.leader);
+    let me = ctx.me;
     let command = me.command.get()?;
 
     match command {
@@ -1716,7 +1734,7 @@ fn FollowSimpleCommand(ctx: &mut Ctx) -> Option<Action> {
             if matches!(action, Action::Attack { .. }) { me.command.take(); }
             Some(action)
         },
-        Command::Return | Command::Switch(_) => PathToTarget(ctx, leader?.pos, SUMMON_RANGE),
+        Command::Return | Command::Switch(_) => PathToReturn(ctx, ctx.env.leader?.pos),
     }
 }
 
