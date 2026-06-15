@@ -1706,8 +1706,9 @@ fn UseSelectedAttack(ctx: &mut Ctx) -> Option<Action> {
 }
 
 fn FollowSimpleCommand(ctx: &mut Ctx) -> Option<Action> {
-    let me = ctx.me;
+    let (me, leader) = (ctx.me, ctx.env.leader);
     let command = me.command.get()?;
+
     match command {
         Command::Attack(attack, target) => {
             if target.eid.is_some() { return None; }
@@ -1715,7 +1716,7 @@ fn FollowSimpleCommand(ctx: &mut Ctx) -> Option<Action> {
             if matches!(action, Action::Attack { .. }) { me.command.take(); }
             Some(action)
         },
-        Command::Return => PathToTarget(ctx, ctx.env.leader?.pos, SUMMON_RANGE)
+        Command::Return | Command::Switch(_) => PathToTarget(ctx, leader?.pos, SUMMON_RANGE),
     }
 }
 

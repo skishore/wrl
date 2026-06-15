@@ -820,14 +820,11 @@ fn hit_entity(state: &mut State, eid: EID, attack: &Attack, logged: bool, tid: E
 
 fn summon_entity(state: &mut State, eid: EID, target: Point, index: usize, team: usize) {
     let State { board, env, .. } = state;
-    let (name, leader, player) = (None, Some(eid), false);
-
     let teammate = board.entities[eid].team.get(team);
-    let &Individual { species, cur_hp } = match teammate {
-        Some(Teammate::In(x)) => x,
-        _ => return,
-    };
+    let Some(Teammate::In(teammate)) = teammate else { return };
 
+    let Individual { species, cur_hp } = *teammate;
+    let (name, leader, player) = (None, Some(eid), false);
     let args = EntityArgs { name, pos: target, player, leader, species };
     let oid = board.add_entity(&args, env);
 
@@ -840,15 +837,51 @@ fn summon_entity(state: &mut State, eid: EID, target: Point, index: usize, team:
     me.summons.insert(index, oid);
 }
 
-fn try_recall_entity(state: &mut State, eid: EID, oid: EID) -> bool {
+fn try_recall(state: &mut State, eid: EID, oid: EID, quiet: bool) -> bool {
+    let entity = &state.board.entities[eid];
+    let summon = &state.board.entities[oid];
+    let (source, target) = (entity.pos, summon.pos);
+    let (player, name) = (entity.player, summon.species.name);
+
+    if !can_summon(&state.board, entity, target) { return false; }
+
+    if player && !quiet {
+        state.env.ui.log.log_neutral(format!("You withdraw {}.", name));
+        state.env.ui.log.end_menu_logging();
+    }
+
+    let cb: CB = Box::new(move |x| x.board.remove_entity(oid));
+    let effect = effect::WithdrawEffect(source, target);
+    state.add_effect(apply_effect(effect, FT::Withdraw, cb));
+    true
+}
+
+fn try_switch(state: &mut State, eid: EID, oid: EID, team: usize, quiet: bool) -> bool {
     let entity = &state.board.entities[eid];
     let summon = &state.board.entities[oid];
     let (source, target) = (entity.pos, summon.pos);
     if !can_summon(&state.board, entity, target) { return false; }
 
+    let index = entity.summons.iter().position(|&x| x == oid);
+    let Some(index) = index else { return false };
+
+    let teammate = entity.team.get(team);
+    let Some(Teammate::In(x)) = teammate else { return false };
+
+    let Individual { species, cur_hp } = *x;
+    if cur_hp == 0 { return false; }
+
+    if !quiet {
+        let name = summon.species.name;
+        shout(state, eid, &format!("{}, return! Go, {}!", name, species.name), "");
+    }
+
     let cb: CB = Box::new(move |x| x.board.remove_entity(oid));
-    let effect = effect::WithdrawEffect(source, target);
-    state.add_effect(apply_effect(effect, FT::Withdraw, cb));
+    let effect = effect::SwitchEffect(source, target);
+    let effect = apply_effect(effect, FT::Withdraw, cb);
+
+    let cb: CB = Box::new(move |x| summon_entity(x, eid, target, index, team));
+    state.add_effect(apply_effect(effect, FT::Summon, cb));
     true
 }
 
@@ -909,6 +942,7 @@ pub enum Action {
     Attack { target: Point, attack: &'static Attack },
     Recall { summon: usize },
     Summon { team: usize, target: Point },
+    Switch { summon: usize, team: usize, quiet: bool, fallback: bool },
     Shout { summon: usize, command: Command },
 }
 
@@ -1224,7 +1258,31 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
         Action::Recall { summon } => {
             let summon = me.summons.get(summon);
             let Some(&oid) = summon else { return ActionResult::failure() };
-            if !try_recall_entity(state, eid, oid) { return ActionResult::failure(); }
+            if !try_recall(state, eid, oid, /*quiet=*/true) { return ActionResult::failure(); }
+            ActionResult::success()
+        }
+        Action::Switch { summon, team, quiet, fallback } => {
+            let player = me.player;
+            let summon = me.summons.get(summon);
+            let Some(&oid) = summon else { return ActionResult::failure() };
+
+            let new = match me.team.get(team) {
+                Some(Teammate::In(x)) => x.species.name,
+                Some(&Teammate::Out(x)) => state.board.entities[x].species.name,
+                None => "your other teammate",
+            };
+            let old = state.board.entities[oid].species.name;
+
+            let okay = try_switch(state, eid, oid, team, quiet);
+            if okay { return ActionResult::success(); }
+
+            let okay = fallback && try_recall(state, eid, oid, /*quiet=*/true);
+            if !okay { return ActionResult::failure(); }
+
+            if player {
+                let msg = format!("You withdraw {}, but can't summon {}.", old, new);
+                state.env.ui.log.log_failure(msg);
+            }
             ActionResult::success()
         }
         Action::Summon { team, target } => {
@@ -1234,24 +1292,11 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let Individual { species, cur_hp } = *x;
             if cur_hp == 0 { return ActionResult::failure(); }
 
+            let status = state.board.get_status(target);
+            if status != Status::Free { return ActionResult::failure(); }
+
             let me = &state.board.entities[eid];
             if !can_summon(&state.board, me, target) { return ActionResult::failure(); }
-
-            if let Some(tid) = state.board.get_cell(target).eid {
-                let summon = me.summons.iter().position(|&x| x == tid);
-                let Some(index) = summon else { return ActionResult::failure() };
-
-                let last = state.board.entities[tid].species;
-                shout(state, eid, &format!("{}, return! Go, {}!", last.name, species.name), "");
-
-                let cb: CB = Box::new(move |x| x.board.remove_entity(tid));
-                let effect = effect::SwitchEffect(source, target);
-                let effect = apply_effect(effect, FT::Withdraw, cb);
-
-                let cb: CB = Box::new(move |x| summon_entity(x, eid, target, index, team));
-                state.add_effect(apply_effect(effect, FT::Summon, cb));
-                return ActionResult::success();
-            }
 
             let index = me.summons.len();
             let cb: CB = Box::new(move |x| summon_entity(x, eid, target, index, team));
@@ -1279,7 +1324,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                             format!("{}, use {}!", name, attack.name)
                         }
                     },
-                    Command::Return => format!("{}, return!", name),
+                    Command::Return | Command::Switch(_) => format!("{}, return!", name),
                 };
                 shout(state, eid, &command, suffix);
                 ActionResult::success()
@@ -1290,7 +1335,11 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 return succeed(state, &suffix);
             }
 
-            let done = matches!(command, Command::Return) && try_recall_entity(state, eid, oid);
+            let done = match command {
+                Command::Attack(..) => false,
+                Command::Return => try_recall(state, eid, oid, /*quiet=*/false),
+                Command::Switch(team) => try_switch(state, eid, oid, team, /*quiet=*/false),
+            };
             if done { return ActionResult::success(); }
 
             let summon = &mut state.board.entities[oid];
@@ -1417,10 +1466,15 @@ fn update_state(state: &mut State) {
         let player = state.get_player();
         for (i, &summon) in player.summons.iter().enumerate() {
             let summon = &state.board.entities[summon];
-            if !matches!(summon.command.get(), Some(Command::Return)) { continue; }
+            let Some(command) = summon.command.get() else { continue };
+            if !matches!(command, Command::Return | Command::Switch(_)) { continue; }
             if !can_summon(&state.board, player, summon.pos) { continue; }
 
-            state.input = Action::Recall { summon: i };
+            state.input = if let Command::Switch(team) = command {
+                Action::Switch { summon: i, team, quiet: true, fallback: true }
+            } else {
+                Action::Recall { summon: i }
+            };
             summon.command.take();
             return true;
         }

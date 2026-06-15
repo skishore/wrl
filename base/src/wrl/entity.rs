@@ -30,7 +30,11 @@ const SCENT_BASE: f64 = 0.25;
 pub struct AttackTarget { pub eid: Option<EID>, pub loc: Location, pub seen: bool }
 
 #[derive(Clone, Copy, Debug)]
-pub enum Command { Attack(&'static Attack, AttackTarget), Return }
+pub enum Command {
+    Attack(&'static Attack, AttackTarget),
+    Switch(usize),
+    Return,
+}
 
 //////////////////////////////////////////////////////////////////////////////
 

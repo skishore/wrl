@@ -52,8 +52,10 @@ const UI_GRAY_OPTION: i32 = 0x545454;
 
 const PLAYER_KEY: char = 'a';
 const RETURN_KEY: char = 'r';
+const SWITCH_KEY: char = 'w';
 const SUMMON_KEYS: [char; 3] = ['s', 'd', 'f'];
 const ATTACK_KEYS: [char; 4] = ['a', 's', 'd', 'f'];
+const ACTION_KEYS: [char; 2] = [SWITCH_KEY, RETURN_KEY];
 const PARTY_KEYS: [char; 6] = ['a', 'b', 'c', 'd', 'e', 'f'];
 
 //////////////////////////////////////////////////////////////////////////////
@@ -235,30 +237,29 @@ fn init_summon_target(me: &Entity, data: TargetData) -> Box<Target> {
     let (known, pos, dir) = (&*me.known, me.pos, me.dir);
     let mut target = init_target(data, pos, pos);
 
-    if let Some(x) = ChooseDefenseSquare(me, pos) {
-        let line = LOS(pos, x);
-        for p in line.iter().skip(1).rev() {
-            update_target(known, &mut target, *p);
-            if target.error.is_empty() { return target; }
-        }
-    }
-
-    let mut okay = |p: Point| {
+    let okay = |p: Point, target: &mut Target| {
         if !CheckFollowerSquare(me, p) { return false; }
-        update_target(known, &mut target, p);
+        update_target(known, target, p);
         target.error.is_empty()
     };
 
+    if let Some(x) = ChooseDefenseSquare(me, pos) {
+        let line = LOS(pos, x);
+        for &p in line.iter().skip(1).rev() {
+            if okay(p, &mut target) { return target; }
+        }
+    }
+
     let best = pos + dir.scale(2);
     let next = pos + dir.scale(1);
-    if okay(best) { return target; }
-    if okay(next) { return target; }
+    if okay(best, &mut target) { return target; }
+    if okay(next, &mut target) { return target; }
 
     let mut options: Vec<Point> = vec![];
     for dx in -2..=2 {
         for dy in -2..=2 {
             let p = pos + Point(dx, dy);
-            if okay(p) { options.push(p); }
+            if okay(p, &mut target) { options.push(p); }
         }
     }
 
@@ -331,6 +332,7 @@ fn update_target(known: &Knowledge, target: &mut Target, update: Point) {
 fn select_valid_target(ui: &mut UI, me: &Entity) -> Option<EID> {
     let target = ui.target.as_ref()?;
     let entity = me.known.get(target.target).entity();
+    let summon = entity.and_then(|x| me.summons.iter().position(|&y| x.eid == y));
 
     match &target.data {
         TargetData::FarLook => {
@@ -348,8 +350,10 @@ fn select_valid_target(ui: &mut UI, me: &Entity) -> Option<EID> {
             if can_target(entity) { Some(entity.eid) } else { None }
         }
         &TargetData::Summon { team, .. } => {
-            let target = target.target;
-            ui.action = Some(Action::Summon { team, target });
+            ui.action = Some(match summon {
+                Some(summon) => Action::Switch { summon, team, quiet: false, fallback: false },
+                None => Action::Summon { team, target: target.target },
+            });
             ui.focus
         }
     }
@@ -360,13 +364,13 @@ fn select_valid_target(ui: &mut UI, me: &Entity) -> Option<EID> {
 // UI inputs
 
 fn process_summon_input(ui: &mut UI, me: &Entity, input: Input) {
-    let choice = ui.choice.as_mut().unwrap();
+    let menu = ui.summon.as_mut().unwrap();
 
     // Cancel out of the dialog:
 
     if input == Input::Escape {
         ui.log.log_neutral("Canceled.");
-        ui.choice = None;
+        ui.summon = None;
         return;
     }
 
@@ -376,50 +380,72 @@ fn process_summon_input(ui: &mut UI, me: &Entity, input: Input) {
     let dir = if let Input::Char(x) = input { get_direction(x) } else { None };
 
     if let Some(dir) = dir && dir.0 == 0 {
-        *choice += dir.1;
-        if *choice >= n as i32 { *choice = 0; }
-        if *choice < 0 { *choice = max(n as i32 - 1, 0); }
+        menu.choice += dir.1;
+        if menu.choice >= n as i32 { menu.choice = 0; }
+        if menu.choice < 0 { menu.choice = max(n as i32 - 1, 0); }
         return;
     }
 
-    // Select an entry with either its key or Enter:
+    // Select an entry with either its key or Enter; else, fail.
 
     let enter = input == Input::Char('\n') || input == Input::Char('.');
     let chosen = if enter {
-        Some(*choice as usize)
+        Some(menu.choice as usize)
     } else {
         PARTY_KEYS.iter().position(|x| input == Input::Char(*x))
     };
+    let Some(chosen) = chosen else { return };
 
-    if let Some(chosen) = chosen {
-        let teammate = me.team.get(chosen);
-        if teammate.is_none() {
-            let error = format!("You are only carrying {} Pokemon!", n);
+    // If the given index isn't a valid party member, fail.
+
+    let Some(teammate) = me.team.get(chosen) else {
+        let error = format!("You are only carrying {} Pokemon!", n);
+        ui.log.log_failure(error);
+        return;
+    };
+
+    // If the given party member is already out, fail.
+
+    let teammate = match teammate {
+        Teammate::In(x) => x,
+        Teammate::Out(x) => {
+            let other = me.known.entity(*x).unwrap();
+            let error = format!("{} is already out!", other.species.name);
             ui.log.log_failure(error);
-        } else if let Some(&Teammate::Out(x)) = teammate {
-            let x = me.known.entity(x).unwrap();
-            let error = format!("{} is already out!", x.species.name);
-            ui.log.log_failure(error);
-        } else if let Some(Teammate::In(x)) = teammate && x.cur_hp == 0 {
-            let error = format!("{} has no strength left!", x.species.name);
-            ui.log.log_failure(error);
-        } else if let Some(Teammate::In(x)) = teammate {
-            let data = TargetData::Summon { team: chosen, range: SUMMON_RANGE };
-            let target = init_summon_target(me, data);
-            let message = format!("Choose where to summon {}:", x.species.name);
-            ui.log.log_neutral(message);
-            ui.target = Some(target);
-            ui.choice = None;
+            return;
         }
+    };
+
+    // If the given party member has fainted, fail.
+
+    if teammate.cur_hp == 0 {
+        let error = format!("{} has no strength left!", teammate.species.name);
+        ui.log.log_failure(error);
+        return;
+    };
+
+    // Choose either a switch or a new summon.
+
+    if let Some(summon) = menu.replacing {
+        let command = Command::Switch(chosen);
+        ui.action = Some(Action::Shout { summon, command });
+        ui.summon = None;
         return;
     }
+
+    let data = TargetData::Summon { team: chosen, range: SUMMON_RANGE };
+    let target = init_summon_target(me, data);
+    let message = format!("Choose where to summon {}:", teammate.species.name);
+    ui.log.log_neutral(message);
+    ui.target = Some(target);
+    ui.summon = None;
 }
 
 fn process_regular_input(ui: &mut UI, me: &mut Entity, input: Input) -> bool {
     let index = SUMMON_KEYS.iter().position(|&x| input == Input::Char(x));
     if let Some(i) = index && i >= me.summons.len() {
         ui.log.log_neutral("Choose a Pokemon to send out with J/K:");
-        ui.choice = Some(0);
+        ui.summon = Some(SummonMenu { choice: 0, replacing: None });
         return true;
     } else if let Some(i) = index {
         ui.log.log_neutral("Choose a command with J/K:");
@@ -453,7 +479,7 @@ fn process_ui_input(ui: &mut UI, me: &mut Entity, input: Input) -> bool {
 
     // Mode: selecting a party member to summon:
 
-    if ui.choice.is_some() {
+    if ui.summon.is_some() {
         process_summon_input(ui, me, input);
         return true;
     }
@@ -532,16 +558,20 @@ fn process_ui_input(ui: &mut UI, me: &mut Entity, input: Input) -> bool {
 
     if let Some(x) = &mut ui.menu {
         let summon = me.known.entity(me.summons[x.summon as usize]).unwrap();
-        let attack = summon.species.attacks.len() as i32;
-        let count = ATTACK_KEYS.len() as i32 + 1;
-        let valid = |x: i32| { x == count - 1 || 0 <= x && x < attack };
+        let num_attacks = summon.species.attacks.len() as i32;
+        let max_attacks = ATTACK_KEYS.len() as i32;
 
-        type I = Input;
+        let count = max_attacks + ACTION_KEYS.len() as i32;
+        let valid = |x: i32| { 0 <= x && x < num_attacks || x >= max_attacks };
+
+        let ch = if let Input::Char(x) = input { Some(x) } else { None };
+        let dir = ch.and_then(get_direction);
+
         let chosen = if enter { x.choice } else {
-            ATTACK_KEYS.iter().position(|x| input == I::Char(*x)).map(|x| x as i32)
-                .unwrap_or(if input == I::Char(RETURN_KEY) { count - 1} else { -1})
+            ATTACK_KEYS.iter().chain(&ACTION_KEYS).position(
+                |&x| ch == Some(x)).map(|x| x as i32).unwrap_or(-1)
         };
-        let dir = if let I::Char(x) = input { get_direction(x) } else { None };
+        let action = ACTION_KEYS.get((chosen - max_attacks) as usize).copied();
 
         if let Some(dir) = dir && dir.0 == 0 {
             loop {
@@ -551,13 +581,19 @@ fn process_ui_input(ui: &mut UI, me: &mut Entity, input: Input) -> bool {
                 if valid(x.choice) { break; }
             }
         } else if chosen >= 0 {
-            if chosen == count - 1 {
+            const _: () = assert!(ACTION_KEYS.len() == 2);
+            let name = summon.species.name;
+
+            if !valid(chosen) {
+                ui.log.log_failure(format!("{} does not have that attack.", name));
+            } else if action == Some(RETURN_KEY) {
                 let (summon, command) = (x.summon as usize, Command::Return);
                 ui.action = Some(Action::Shout { summon, command });
                 ui.menu = None;
-            } else if !valid(chosen) {
-                let name = summon.species.name;
-                ui.log.log_failure(format!("{} does not have that attack.", name));
+            } else if action == Some(SWITCH_KEY) {
+                ui.log.log_neutral(format!("Choose who will replace {} with J/K:", name));
+                ui.summon = Some(SummonMenu { choice: 0, replacing: Some(x.summon as usize) });
+                ui.menu = None;
             } else {
                 let update = get_initial_target(summon.pos);
                 let attack = summon.species.attacks[chosen as usize];
@@ -643,6 +679,10 @@ impl Log {
         self.end_menu_logging();
     }
 
+    pub fn end_menu_logging(&mut self) {
+        self.lines.last_mut().map(|x| x.menu = false);
+    }
+
     fn log_color<S: Into<String>, T: Into<Color>>(&mut self, text: S, color: T) {
         let (color, text) = (color.into(), text.into());
         self.lines.push(LogLine { color, menu: false, text });
@@ -654,10 +694,6 @@ impl Log {
         if self.lines.last().map(|x| x.menu).unwrap_or(false) { self.lines.pop(); }
         self.lines.push(LogLine { color, menu: true, text });
         if self.lines.len() as i32 > UI_LOG_SIZE { self.lines.remove(0); }
-    }
-
-    fn end_menu_logging(&mut self) {
-        self.lines.last_mut().map(|x| x.menu = false);
     }
 }
 
@@ -703,6 +739,11 @@ struct Menu {
     summon: usize,
 }
 
+struct SummonMenu {
+    choice: i32,
+    replacing: Option<usize>
+}
+
 pub struct Effect<'a> {
     pub frame: &'a Frame,
     pub known: &'a Knowledge,
@@ -724,7 +765,7 @@ pub struct UI {
     // Modal components:
     menu: Option<Menu>,
     focus: Option<EID>,
-    choice: Option<i32>,
+    summon: Option<SummonMenu>,
     target: Option<Box<Target>>,
     focused: Focused,
 
@@ -751,7 +792,7 @@ impl UI {
         self.render_map(buffer, me, effect);
         self.render_weather(buffer, me, effect);
 
-        if let Some(x) = self.choice { self.render_choice(buffer, me, x); }
+        if let Some(x) = &self.summon { self.render_summon_menu(buffer, me, x); }
     }
 
     // Update entry points:
@@ -1243,7 +1284,7 @@ impl UI {
         }
     }
 
-    fn render_choice(&self, buffer: &mut Buffer, me: &Entity, choice: i32) {
+    fn render_summon_menu(&self, buffer: &mut Buffer, me: &Entity, menu: &SummonMenu) {
         let default = *buffer.default();
         self.render_box(buffer, &self.layout.choice);
         let slice = &mut Slice::new(buffer, self.layout.choice);
@@ -1251,7 +1292,7 @@ impl UI {
 
         let options = &me.team;
         for (i, key) in PARTY_KEYS.iter().enumerate() {
-            let selected = choice == i as i32;
+            let selected = menu.choice == i as i32;
             match options.get(i) {
                 Some(&Teammate::Out(x)) => {
                     let x = me.known.entity(x).unwrap();
@@ -1273,20 +1314,24 @@ impl UI {
     fn render_menu(&self, slice: &mut Slice, index: i32, summon: &EntityKnowledge) {
         let spaces = UI::render_key('-').chars().count();
 
-        for (i, key) in ATTACK_KEYS.iter().enumerate() {
+        for (i, &key) in ATTACK_KEYS.iter().chain(&ACTION_KEYS).enumerate() {
+            let (active, name) = if i < ATTACK_KEYS.len() {
+                let attack = summon.species.attacks.get(i);
+                let name = attack.map(|x| x.name).unwrap_or("---");
+                (attack.is_some(), name)
+            } else {
+                const _: () = assert!(ACTION_KEYS.len() == 2);
+                let name = if key == SWITCH_KEY { "Switch" } else { "Call back" };
+                (true, name)
+            };
+
             let prefix = if index == i as i32 { " > " } else { "  " };
-            let attack = summon.species.attacks.get(i);
-            let name = attack.map(|x| x.name).unwrap_or("---");
-            let fg = if attack.is_some() { None } else { Some(UI_GRAY_OPTION.into()) };
+            let fg = if active { None } else { Some(UI_GRAY_OPTION.into()) };
+
             slice.set_fg(fg).spaces(spaces).write_str(prefix);
-            slice.write_str(&Self::render_key(*key)).write_str(name);
+            slice.write_str(&Self::render_key(key)).write_str(name);
             slice.newline().newline();
         }
-
-        let prefix = if index == ATTACK_KEYS.len() as i32 { " > " } else { "  " };
-        slice.spaces(spaces).write_str(prefix);
-        slice.write_str(&Self::render_key(RETURN_KEY)).write_str("Call back");
-        slice.newline().newline();
     }
 
     fn render_empty_option(&self, key: char, space: i32, slice: &mut Slice) {
