@@ -971,7 +971,7 @@ fn can_attack(board: &Board, me: &Entity, target: Point, range: Bound) -> bool {
     if !range.contains(source - target) { return false; }
 
     let los = LOS(source, target);
-    los.iter().skip(1).rev().skip(1).all(
+    los[1..los.len() - 1].iter().all(
         |&p| known.get(p).status() == Status::Free && board.get_status(p) == Status::Free)
 }
 
