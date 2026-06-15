@@ -32,7 +32,6 @@ use super::time::Timestamp;
 
 const ASTAR_LIMIT_ATTACK: i32 = 256;
 const ASTAR_LIMIT_WANDER: i32 = 1024;
-const BFS_LIMIT_ATTACK: i32 = 8;
 const HIDING_CELLS: i32 = 256;
 const HIDING_LIMIT: i32 = 32;
 const SEARCH_CELLS: i32 = 1024;
@@ -998,7 +997,7 @@ fn PathToTargetImpl(ctx: &mut Ctx, target: Point, range: Bound, flip: bool) -> O
     }
 
     // Find the closest `source` cell from which we could attack the target.
-    let source = Dijkstra(pos, valid, BFS_LIMIT_ATTACK, check, |_| 0);
+    let source = Dijkstra(pos, valid, ASTAR_LIMIT_ATTACK, check, |_| 0);
     let source = source.and_then(|x| x.last().cloned()).unwrap_or(target);
 
     // Then, use A* to find a path to that cell.
