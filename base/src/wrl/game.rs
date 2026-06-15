@@ -840,6 +840,8 @@ fn summon_entity(state: &mut State, eid: EID, target: Point, index: usize, team:
 fn try_recall(state: &mut State, eid: EID, oid: EID, quiet: bool) -> bool {
     let entity = &state.board.entities[eid];
     let summon = &state.board.entities[oid];
+    if summon.leader != Some(eid) { return false; }
+
     let (source, target) = (entity.pos, summon.pos);
     let (player, name) = (entity.player, summon.species.name);
 
@@ -859,6 +861,8 @@ fn try_recall(state: &mut State, eid: EID, oid: EID, quiet: bool) -> bool {
 fn try_switch(state: &mut State, eid: EID, oid: EID, team: usize, quiet: bool) -> bool {
     let entity = &state.board.entities[eid];
     let summon = &state.board.entities[oid];
+    if summon.leader != Some(eid) { return false; }
+
     let (source, target) = (entity.pos, summon.pos);
     if !can_summon(&state.board, entity, target) { return false; }
 
@@ -977,15 +981,6 @@ fn can_summon(board: &Board, me: &Entity, target: Point) -> bool {
     if source == target { return false; }
     if !range.contains(source - target) { return false; }
     if !known.get(target).can_see_entity_at() { return false; }
-
-    let status = board.get_status(target);
-    let entity = board.get_cell(target).eid.and_then(|x| board.get_entity(x));
-    let free = match status {
-        Status::Free => true,
-        Status::Blocked | Status::Unknown => false,
-        Status::Occupied => entity.map(|x| x.leader == Some(me.eid)).unwrap_or(false),
-    };
-    if !free { return false; }
 
     let los = LOS(source, target);
     los[1..los.len() - 1].iter().all(|&p| {
