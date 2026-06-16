@@ -1049,7 +1049,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             ActionResult::success()
         }
         Action::Drink { target } => {
-            let (source, dir) = (me.pos, target - me.pos);
+            let dir = target - source;
             if dir.len_l1() > 1 { return ActionResult::failure(); }
 
             me.face_direction(dir);
@@ -1101,7 +1101,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 board.observe_event(s.eid, &s.merged, event, &mut state.env);
             }
 
-            // Use a different color for different call types.
+            // The callout text depends on the call type.
             let color = 0xff8000;
             let (text, wait) = match call {
                 Call::Command => ("*shout*", false),
@@ -1115,7 +1115,6 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 let Some(me) = state.board.entities.get_mut(eid) else { return };
                 me.face_direction(look);
             };
-
             let mut effect = apply_noise(source, color, text, CALL_VOLUME);
             if wait {
                 effect.sub_on_finished(Box::new(cb));

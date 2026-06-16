@@ -417,7 +417,7 @@ impl ThreatState {
             let delay = time - x.penalty_start;
             let ratio = delay.nsec() as f64 / max(denom.nsec(), 1) as f64;
             let bonus = x.penalty_score - 0.1 * ratio * ACTIVE_THREAT_TURNS as f64;
-            base + if bonus > 0. { bonus } else { 0. }
+            base + bonus.max(0.)
         };
         let mut hidden_count = max(hidden_hostile - seen_hostile, 0);
         let mut team_strength = me.hp_fraction();
@@ -436,7 +436,7 @@ impl ThreatState {
                 let denom = time - limit;
                 let delay = time - x.combat;
                 let ratio = delay.nsec() as f64 / max(denom.nsec(), 1) as f64;
-                let decay = if ratio > 1. { 0. } else { 1. - ratio };
+                let decay = 1. - ratio.min(1.);
                 team_strength += base * decay;
 
                 let recent = x.time > call_limit;

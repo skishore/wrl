@@ -333,8 +333,7 @@ fn assess_directions(dirs: &[Point], turns: i32, rng: &mut RNG) -> Vec<Point> {
 }
 
 fn select_target(scores: &[(Point, f64)], env: &mut AIEnv) -> Option<Point> {
-    let max = scores.iter().fold(
-        0., |acc, x| if acc > x.1 { acc } else { x.1 });
+    let max = scores.iter().fold(0f64, |acc, x| acc.max(x.1));
     if max == 0. { return None; }
 
     let limit = (1 << 16) - 1;
@@ -353,8 +352,7 @@ fn select_target(scores: &[(Point, f64)], env: &mut AIEnv) -> Option<Point> {
 fn select_target_softmax(scores: &[(Point, f64)], env: &mut AIEnv, temp: f64) -> Option<Point> {
     if scores.is_empty() { return None; }
 
-    let max = scores.iter().fold(
-        std::f64::NEG_INFINITY, |acc, x| if acc > x.1 { acc } else { x.1 });
+    let max = scores.iter().fold(std::f64::NEG_INFINITY, |acc, x| acc.max(x.1));
     let scale = ((1 << 16) - 1) as f64;
     let inv_temp = 1. / temp;
     let values: Vec<_> = scores.iter().map(|&(p, score)| {
@@ -388,7 +386,7 @@ fn select_explore_target(ctx: &mut Ctx) -> Option<Point> {
         let bonus1 = unblocked_neighbors == dirs::ALL.len();
         let bonus2 = unblocked_neighbors > 0;
 
-        let base = (if bonus0 > 1. { 1. } else { bonus0 }) *
+        let base = bonus0.min(1.) *
                    (if bonus1 {  8.0 } else { 1.0 }) *
                    (if bonus2 { 64.0 } else { 1.0 });
         base * (cos + 1.).pow(4) / (distance as f64).pow(2)
