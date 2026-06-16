@@ -1126,11 +1126,12 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             ActionResult::success()
         }
         Action::Move { look, step, turns } => {
-            me.face_direction(look);
-            let slowed = turns < SLOWED_TURNS && !move_ready(me);
-            let turns = if slowed { SLOWED_TURNS } else { turns };
-            if step == dirs::NONE { return ActionResult::success_turns(turns); }
             if step.len_l1() > 1 { return ActionResult::failure(); }
+
+            me.face_direction(look);
+            let slow = me.leader.is_none() && !move_ready(me);
+            let turns = if slow { turns.max(SLOWED_TURNS) } else { turns };
+            if step == dirs::NONE { return ActionResult::success_turns(turns); }
 
             // Moving diagonally is slower. Moving quickly is noisier.
             let noisy = turns <= 1.;
