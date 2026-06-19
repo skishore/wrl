@@ -95,21 +95,26 @@ impl PartialEq for &'static Species {
 static SPECIES: LazyLock<HashMap<&'static str, Species>> = LazyLock::new(|| {
     let items = vec![
         ("Human",      0xffffff, 0, 0, 0.000, 0.9, 3,   vec![]),
-        ("Pidgey",     0xd0a070, 0, 0, 0.125, 1.0, 200, vec!["Tackle"]),
-        ("Rattata",    0xa060ff, 1, 0, 1.000, 1.0, 200, vec!["Tackle", "Headbutt"]),
-        ("Bulbasaur",  0x408020, 0, 0, 0.250, 1.0, 300, vec!["Tackle"]),
-        ("Charmander", 0xea8b24, 1, 4, 0.500, 1.0, 200, vec!["Tackle", "Ember"]),
-        ("Squirtle",   0x80c0ff, 0, 0, 0.250, 1.0, 200, vec!["Tackle", "Ice Beam"]),
-        ("Pikachu",    0xffff00, 0, 4, 0.500, 1.1, 200, vec!["Tackle"]),
-        ("Eevee",      0xd0a070, 0, 0, 1.000, 1.0, 200, vec!["Tackle", "Headbutt"]),
+        ("Pidgey",     0xd0a070, 0, 0, 0.125, 1.0, 200, vec![]),
+        ("Rattata",    0xa060ff, 1, 0, 1.000, 1.0, 200, vec!["Headbutt"]),
+        ("Bulbasaur",  0x408020, 0, 0, 0.250, 1.0, 300, vec![]),
+        ("Charmander", 0xea8b24, 1, 4, 0.500, 1.0, 200, vec!["Ember"]),
+        ("Squirtle",   0x80c0ff, 0, 0, 0.250, 1.0, 200, vec!["Ice Beam"]),
+        ("Pikachu",    0xffff00, 0, 4, 0.500, 1.1, 200, vec![]),
+        ("Eevee",      0xd0a070, 0, 0, 1.000, 1.0, 200, vec!["Headbutt"]),
     ];
     let mut result = HashMap::default();
     for (name, color, predator, light, scent, speed, hp, attacks) in items {
-        let attacks = attacks.into_iter().map(&Attack::get).collect();
-        let ch = if name == "Human" { '@' } else { name.chars().next().unwrap() };
-        let f0 = if name == "Human" { SF::Human } else { SF::Empty };
+        let human = name == "Human";
+        let ch = if human { '@' } else { name.chars().next().unwrap() };
+        let f0 = if human { SF::Human } else { SF::Empty };
         let f1 = if predator != 0 { SF::Predator } else { SF::Empty };
         let flags = f0 | f1;
+
+        let mut attacks = attacks;
+        if !human { attacks.push("Tackle"); }
+        let attacks = attacks.into_iter().map(&Attack::get).collect();
+
         let glyph = Glyph::wdfg(ch, color);
         let light = Bound::new(if light == 0 { -1 } else { light });
         result.insert(name, Species {
