@@ -38,9 +38,9 @@ const SEARCH_CELLS: i32 = 1024;
 const SEARCH_LIMIT: i32 = 64;
 
 const ASSESS_ANGLE: f64 = TAU / 18.;
-const ASSESS_STEPS: i32 = 4;
-const ASSESS_TURNS_EXPLORE: i32 = 2;
-const ASSESS_TURNS_FLIGHT: i32 = 1;
+const ASSESS_TURNS_FLIGHT: (i32, i32) = (4, 1);
+const ASSESS_TURNS_THREAT: (i32, i32) = (2, 1);
+const ASSESS_TURNS_WANDER: (i32, i32) = (4, 2);
 
 const MAX_ASSESS: i32 = 32;
 const MAX_HUNGER: i32 = 512;
@@ -306,13 +306,14 @@ fn ensure_vision(ctx: &mut Ctx) {
 
 // Uncategorized helpers:
 
-fn assess_directions(dirs: &[Point], turns: i32, rng: &mut RNG) -> Vec<Point> {
+fn assess_directions(dirs: &[Point], turns: (i32, i32), rng: &mut RNG) -> Vec<Point> {
     if dirs.is_empty() { return vec![]; }
 
     let mut result = vec![];
-    result.reserve((ASSESS_STEPS * turns) as usize);
+    let (steps, turns) = turns;
+    result.reserve((steps * turns) as usize);
 
-    for i in 0..ASSESS_STEPS {
+    for i in 0..steps {
         let dir = dirs[i as usize % dirs.len()];
         if dir == Point::default() { continue; }
 
@@ -630,7 +631,7 @@ fn Assess(ctx: &mut Ctx) -> Option<Action> {
     if !bb.assess.active { return None; }
 
     let kind = DirsKind::Assess;
-    let dirs = assess_directions(&[ctx.dir], ASSESS_TURNS_EXPLORE, rng);
+    let dirs = assess_directions(&[ctx.dir], ASSESS_TURNS_WANDER, rng);
     bb.dirs = CachedDirs { kind, dirs, used: false };
     FollowDirs(ctx, kind)
 }
@@ -676,7 +677,7 @@ fn LookForNoises(ctx: &mut Ctx) -> Option<Action> {
     let dirs = if dirs.is_empty() { &[ctx.dir] } else { dirs.as_slice() };
 
     let kind = DirsKind::Noises;
-    let dirs = assess_directions(&dirs, ASSESS_TURNS_FLIGHT, rng);
+    let dirs = assess_directions(&dirs, ASSESS_TURNS_THREAT, rng);
     ctx.blackboard.dirs = CachedDirs { kind, dirs, used: false };
     FollowDirs(ctx, kind)
 }
