@@ -1208,6 +1208,11 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let sightings = merge_views(board, &saw_source, &saw_target);
 
             // Deliver an AttackEvent to each other entity that heard the attack.
+            //
+            // TODO: Also deliver an event revealing the targeted entity.
+            // Maybe also do this for warnings, and calls for help? As-is, if
+            // we identify an entity and it then attacks / warns / etc. we may
+            // completely ignore those events.
             let combat = tid.is_some();
             let data = EventData::Attack(AttackEvent { combat, target: None });
             let event = &mut board.create_event(eid, data, source);
