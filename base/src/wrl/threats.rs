@@ -288,6 +288,7 @@ pub struct ThreatState {
     pub threat_index: HashMap<TID, ThreatHandle>,
 
     // Summaries used for flight pathing.
+    pub uncertain: Vec<Threat>,
     pub menacing: Vec<Threat>,
     pub hostile: Vec<Threat>,
     pub unknown: Vec<Threat>,
@@ -350,6 +351,7 @@ impl ThreatState {
             if threat.certain() && threat.hostile() { self.forget_tid(TID::CID); }
         }
 
+        self.uncertain.clear();
         self.menacing.clear();
         self.hostile.clear();
         self.unknown.clear();
@@ -358,7 +360,6 @@ impl ThreatState {
         let call_limit = me.known.time_at_turn(CALL_LIMIT_TURNS);
         let call_retry = me.known.time_at_turn(CALL_RETRY_TURNS);
 
-        let mut uncertain = vec![];
         let mut hidden_hostile = 0;
         let mut seen_hostile = 0;
 
@@ -375,7 +376,7 @@ impl ThreatState {
             if foe { self.menacing.push(x.clone()); }
             if x.hostile() { self.hostile.push(x.clone()); }
             if x.unknown() { self.unknown.push(x.clone()); }
-            if x.uncertain() { uncertain.push(x.clone()); }
+            if x.uncertain() { self.uncertain.push(x.clone()); }
 
             if foe && !x.seen { hidden_hostile += 1; }
             if foe && x.seen { seen_hostile += 1; }
@@ -393,7 +394,7 @@ impl ThreatState {
 
         // While active, also attack / flee from potential enemies.
         if active && !self.menacing.is_empty() {
-            self.menacing.extend_from_slice(&uncertain);
+            self.menacing.extend_from_slice(&self.uncertain);
             self.menacing.extend_from_slice(&self.unknown);
             self.menacing.sort_by_key(|x| time - x.time);
         }

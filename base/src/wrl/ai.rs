@@ -871,7 +871,7 @@ fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
     let mut turns = WANDER_TURNS;
     if IsChasePathKind(kind) && let Some(x) = &ctx.blackboard.chase {
         let limit = ctx.known.time_at_turn(MIN_SEARCH_TURNS);
-        if x.target.time > limit && x.target.sense != Sense::Smell { turns = 1. };
+        if x.target.time > limit && !x.target.slow { turns = 1. };
     } else if kind == PathKind::Flee && any_threat_awake(ctx) {
         turns = 1.;
     } else if kind == PathKind::Leader {
@@ -1174,6 +1174,7 @@ fn RestHere(ctx: &mut Ctx) -> Option<Action> {
 struct Target {
     loc: Location,
     sense: Sense,
+    slow: bool,
     sure: bool,
 }
 
@@ -1235,7 +1236,7 @@ fn ListThreatsBySight(ctx: &mut Ctx) -> bool {
         if !check_time!(ctx, other.time, MIN_SEARCH_TURNS) { break; }
 
         let (loc, sense) = (other.loc, other.sense);
-        let target = Target { loc, sense, sure: other.hostile() };
+        let target = Target { loc, sense, slow: false, sure: other.hostile() };
         ctx.blackboard.targets.push(target);
     }
     ctx.blackboard.targets.len() > initial
@@ -1255,7 +1256,7 @@ fn ListPreyBySight(ctx: &mut Ctx) -> bool {
         if !check_time!(ctx, other.time, MAX_SEARCH_TURNS) { break; }
 
         let (loc, sense) = (other.loc, other.sense);
-        let target = Target { loc, sense, sure: true };
+        let target = Target { loc, sense, slow: false, sure: true };
         ctx.blackboard.targets.push(target);
     }
     ctx.blackboard.targets.len() > initial
@@ -1267,7 +1268,7 @@ fn ListPreyBySound(ctx: &mut Ctx) -> bool {
         if !check_time!(ctx, other.time, MAX_SEARCH_TURNS) { break; }
 
         let (loc, sense) = (other.loc, other.sense);
-        let target = Target { loc, sense, sure: false };
+        let target = Target { loc, sense, slow: false, sure: false };
         ctx.blackboard.targets.push(target);
     }
     ctx.blackboard.targets.len() > initial
@@ -1275,6 +1276,19 @@ fn ListPreyBySound(ctx: &mut Ctx) -> bool {
 
 fn ListPreyByScent(ctx: &mut Ctx) -> bool {
     ListTargetsByScent(ctx, |x| x.delta < 0)
+}
+
+fn ListHumansBySound(ctx: &mut Ctx) -> bool {
+    let initial = ctx.blackboard.targets.len();
+    let threats = &ctx.blackboard.threats;
+    for other in threats.uncertain.iter().chain(threats.unknown.iter()) {
+        if !check_time!(ctx, other.time, MAX_SEARCH_TURNS) { break; }
+
+        let (loc, sense) = (other.loc, other.sense);
+        let target = Target { loc, sense, slow: true, sure: false };
+        ctx.blackboard.targets.push(target);
+    }
+    ctx.blackboard.targets.len() > initial
 }
 
 fn ListHumansByScent(ctx: &mut Ctx) -> bool {
@@ -1288,7 +1302,7 @@ fn ListTargetsByScent<F: Fn(&ScentKnowledge) -> bool>(ctx: &mut Ctx, f: F) -> bo
         if !check_time!(ctx, scent.time, MAX_TRACKING_TURNS) { break; }
 
         let (loc, sense) = (scent.loc, Sense::Smell);
-        let target = Target { loc, sense, sure: false };
+        let target = Target { loc, sense, slow: true, sure: false };
         ctx.blackboard.targets.push(target);
     }
     ctx.blackboard.targets.len() > initial
@@ -1702,7 +1716,7 @@ fn SelectAttackTarget(ctx: &mut Ctx) -> bool {
         me.command.set(Some(Command::Attack(attack, target)));
     }
 
-    let target = Target { loc, sense, sure: other.is_some() };
+    let target = Target { loc, sense, slow: false, sure: other.is_some() };
     UpdateChaseTarget(ctx, target);
     true
 }
@@ -1906,6 +1920,7 @@ fn InvestigateScents() -> impl Bhv {
         "InvestigateScents",
         run![
             "SelectRecentScent",
+            cond!("ListHumansBySound", ListHumansBySound),
             cond!("ListHumansByScent", ListHumansByScent),
             cond!("SelectBestTarget", SelectBestTarget),
         ],
