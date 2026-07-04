@@ -243,32 +243,34 @@ fn init_summon_target(me: &Entity, data: TargetData) -> Box<Target> {
         target.error.is_empty()
     };
 
+    let closest = |p: Point, mut target: Box<Target>| {
+        let mut best = (pos, std::i64::MAX);
+        for dx in -2..=2 {
+            for dy in -2..=2 {
+                let point = pos + Point(dx, dy);
+                let score = (p - point).len_l2_squared();
+                if score >= best.1 || !okay(point, &mut target) { continue; }
+                best = (point, score)
+            }
+        }
+        let update = best.0;
+        update_target(known, &mut target, update);
+        target
+    };
+
     if let Some(x) = ChooseDefenseSquare(me, pos) {
         let line = LOS(pos, x);
         for &p in line.iter().skip(1).rev() {
             if okay(p, &mut target) { return target; }
         }
+        return closest(x, target);
     }
 
     let best = pos + dir.scale(2);
     let next = pos + dir.scale(1);
     if okay(best, &mut target) { return target; }
     if okay(next, &mut target) { return target; }
-
-    let mut options: Vec<Point> = vec![];
-    for dx in -2..=2 {
-        for dy in -2..=2 {
-            let p = pos + Point(dx, dy);
-            if okay(p, &mut target) { options.push(p); }
-        }
-    }
-
-    let update = (|| {
-        if options.is_empty() { return pos; }
-        *options.select_nth_unstable_by_key(0, |x| (*x - best).len_l2_squared()).1
-    })();
-    update_target(known, &mut target, update);
-    target
+    closest(best, target)
 }
 
 fn update_target(known: &Knowledge, target: &mut Target, update: Point) {
