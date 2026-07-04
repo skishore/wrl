@@ -8,8 +8,8 @@ use rand::Rng;
 use rand_distr::{Distribution, Normal};
 use rand_distr::num_traits::Pow;
 
-use crate::base::point::{Bound, LOS, Point, dirs};
 use crate::base::pathing::{AStar, AStarHeuristic, Status};
+use crate::base::point::{Bound, LOS, Point, dirs};
 use crate::base::pathing::{Dijkstra, DijkstraLength, DijkstraMap, Neighborhood};
 use crate::base::util::{HashMap, HashSet, RNG, clamp, sample, sortable, weighted};
 use crate::base::vision::{INITIAL_VISIBILITY, Vision, VisionArgs};
@@ -1553,25 +1553,21 @@ pub fn dangers(me: &Entity) -> Vec<Point> {
 }
 
 // Check if `point` is a valid cell for a follower of the `leader`.
-pub fn CheckFollowerSquare(leader: &Entity, point: Point) -> bool {
-    CheckFollowerSquareImpl(leader, point, /*ignore_occupant=*/false)
-}
+pub fn CheckFollowerSquare(leader: &Entity, point: Point, ignore_occupant: bool) -> bool {
+    let delta = leader.pos - point;
+    if !Bound::new(2).contains(delta) { return false; }
 
-fn CheckFollowerSquareImpl(
-        leader: &Entity, point: Point, ignore_occupant: bool) -> bool {
     let known = &*leader.known;
-    let free = match known.get(point).status() {
+    let cell = known.get(point);
+    let free = match cell.status() {
         Status::Free => true,
         Status::Occupied => ignore_occupant,
         Status::Blocked | Status::Unknown => false,
     };
     if !free { return false }
 
-    let delta = leader.pos - point;
-    if !Bound::new(2).contains(delta) { return false; }
     if delta.len_l1() <= 1 { return true; }
 
-    let cell = known.get(point);
     cell.can_see_entity_at() && cell.visibility() == known.get(leader.pos).visibility()
 }
 
@@ -1645,7 +1641,7 @@ pub fn ChooseDefenseSquare(leader: &Entity, source: Point) -> Option<Point> {
             if x == 0 && y == 0 { continue; }
 
             let (d, p) = (Point(x, y), Point(x, y) + leader.pos);
-            if !CheckFollowerSquareImpl(leader, p, p == source) { continue; }
+            if !CheckFollowerSquare(leader, p, p == source) { continue; }
 
             let mut score = scores.get(&d).cloned().unwrap_or(f64::NEG_INFINITY);
             if score == f64::NEG_INFINITY { continue; }
@@ -1789,8 +1785,8 @@ fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
     let (known, source, target) = (ctx.known, ctx.pos, leader.pos);
 
     let turns = FOLLOW_TURNS;
-    let valid = |p: Point| CheckFollowerSquareImpl(leader, p, p == source);
-    let step = |step: Point| { Action::Move { look: step, step, turns } };
+    let valid = |p: Point| CheckFollowerSquare(leader, p, p == source);
+    let step = |dir: Point| { Action::Move { look: dir, step: dir, turns } };
 
     if Bound::new(3).contains(source - target) {
         let mut moves: Vec<_> = dirs::ALL.iter().filter_map(

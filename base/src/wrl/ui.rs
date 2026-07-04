@@ -238,7 +238,7 @@ fn init_summon_target(me: &Entity, data: TargetData) -> Box<Target> {
     let mut target = init_target(data, pos, pos);
 
     let okay = |p: Point, target: &mut Target| {
-        if !CheckFollowerSquare(me, p) { return false; }
+        if !CheckFollowerSquare(me, p, /*ignore_occupant=*/false) { return false; }
         update_target(known, target, p);
         target.error.is_empty()
     };
