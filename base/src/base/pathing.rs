@@ -445,6 +445,8 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
 
         let entry = &mut state.nodes[index];
         let visited = entry.status.is_some();
+        if visited && prev_score >= entry.score { return; }
+
         let status = entry.status.unwrap_or_else(|| check(point + offset));
 
         entry.status = Some(status);
@@ -467,22 +469,10 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
     };
 
     let index = get_index(initial).unwrap();
+    let (mut cur_index, mut cur_score) = (Some(index), 0);
     init(state, index, initial, 0, Status::Free);
 
-    let mut current = 0;
-    loop {
-        let lists = &state.lists;
-        while current < lists.len() && lists[current].next.is_none() { current += 1; }
-        if current == lists.len() { break; }
-
-        // Remove the entry at the head of the selected list.
-        let head = &mut state.lists[current];
-        let prev = head.next.unwrap();
-        let next = state.nodes[prev].link.next;
-        head.next = next;
-        let next = state.link(next, current as i32);
-        next.prev = None;
-
+    while let Some(prev) = cur_index {
         let node = &state.nodes[prev];
         let DijkstraNode { point, score, .. } = *node;
         let value = (point + offset, score);
@@ -503,6 +493,14 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
             for &dir in &dirs::ALL {
                 step(state, dir, point, score);
             }
+        }
+
+        let len = state.lists.len();
+        cur_index = state.nodes[prev].link.next;
+        while cur_index.is_none() {
+            cur_score += 1;
+            if cur_score >= len { break; }
+            cur_index = state.lists[cur_score].next;
         }
     }
     result
