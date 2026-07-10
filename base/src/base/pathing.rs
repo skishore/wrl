@@ -18,7 +18,16 @@ pub enum Status { Free, Blocked, Occupied, Unknown }
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Heap, used for Dijkstra and A*
+// Pathfinding is not re-entrant. Reuse heap allocations for perf:
+
+thread_local! {
+    static ASTAR_STATE: RefCell<AStarState> = Default::default();
+    static DIJKSTRA_STATE: RefCell<DijkstraState> = Default::default();
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// Heap, used for A* and Dijkstra
 
 #[derive(Clone, Copy, Eq, PartialEq)] struct AStarHeapIndex(i32);
 #[derive(Clone, Copy, Eq, PartialEq)] struct AStarNodeIndex(i32);
@@ -53,7 +62,7 @@ struct AStarHeap {
 }
 
 impl AStarHeap {
-    // Heap operations
+    // Heap operations:
 
     fn is_empty(&self) -> bool { self.heap.is_empty() }
 
@@ -117,7 +126,7 @@ impl AStarHeap {
         result
     }
 
-    // Lower-level helpers
+    // Lower-level helpers:
 
     fn heap_score(&self, h: AStarHeapIndex) -> i32 {
         self.get_node(self.get_heap(h)).score
@@ -232,9 +241,7 @@ pub fn AStar<F: Fn(Point) -> Status>(
 // us as close as possible to the target.
 pub fn Dijkstra<F: Fn(Point) -> bool, G: Fn(Point) -> Status, H: Fn(Point) -> i32>(
         source: Point, target: F, cells: i32, check: G, heuristic: H) -> Option<Vec<Point>> {
-    CACHE.with_borrow_mut(|cache|{
-        // Reuse AStar allocations via the cached AStarState.
-        let state = &mut cache.0;
+    ASTAR_STATE.with_borrow_mut(|state|{
         let result = CachedDijkstra(state, source, target, cells, check, heuristic);
 
         // Clean up the updates done to the cache state.
@@ -359,10 +366,6 @@ impl IndexMut<DijkstraNodeIndex> for Vec<DijkstraNode> {
     }
 }
 
-thread_local! {
-    static CACHE: RefCell<(AStarState, DijkstraState)> = Default::default();
-}
-
 #[derive(Default)]
 pub struct Neighborhood {
     pub blocked: Vec<(Point, i32)>,
@@ -378,15 +381,13 @@ pub fn DijkstraLength(p: Point) -> i32 {
 
 pub fn DijkstraMap<F: Fn(Point) -> Status>(
         source: Point, check: F, cells: i32, limit: i32) -> Neighborhood {
-    CACHE.with_borrow_mut(|cache|{
+    DIJKSTRA_STATE.with_borrow_mut(|state|{
         // Make sure we've allocated enough space for the search.
-        let state = &mut cache.1;
         let n = ((2 * limit + 1) as usize).pow(2);
         if state.nodes.len() < n { state.nodes.resize_with(n, Default::default); }
         let result = CachedDijkstraMap(state, source, check, cells, limit);
 
         // Restore the cached state to a clean condition.
-        let state = &mut cache.1;
         for &p in &state.dirty { state.nodes[p] = Default::default(); }
         state.dirty.clear();
         state.lists.clear();
@@ -399,6 +400,7 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
         state: &mut DijkstraState, source: Point,
         check: F, cells: i32, limit: i32) -> Neighborhood {
     let cells = cells as usize;
+    let cells = min(cells, (2 * limit as usize + 1).pow(2));
     let mut result = Neighborhood::default();
     result.blocked.reserve(cells);
     result.visited.reserve(cells);
@@ -490,7 +492,7 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
             result.blocked.push(value);
         } else {
             result.visited.push(value);
-            if result.visited.len() >= (cells as usize) { break; }
+            if result.visited.len() >= cells { break; }
         }
 
         let expand = match status {
@@ -535,8 +537,6 @@ mod tests {
     fn bench_dijkstra_map(b: &mut test::Bencher) {
         let map = generate_map(DIJKSTRA_LIMIT);
         b.iter(|| {
-            let mut result = HashMap::default();
-            result.insert(Point::default(), 0);
             let check = |p: Point| { map.get(&p).copied().unwrap_or(Status::Free) };
             DijkstraMap(Point::default(), check, DIJKSTRA_CELLS, DIJKSTRA_LIMIT);
         });
