@@ -13,3 +13,6 @@ mod ui;
 
 pub mod game;
 pub mod mapgen;
+
+#[cfg(not(target_family = "wasm"))]
+mod log;

@@ -1,13 +1,10 @@
 #![cfg_attr(target_family = "wasm", allow(unused))]
 
 use std::cmp::max;
-use std::fs::File;
-use std::io::{BufWriter, Result, Write};
+use std::io::{Result, Write};
 
 #[cfg(not(target_family = "wasm"))]
-use flate2::Compression;
-#[cfg(not(target_family = "wasm"))]
-use flate2::write::GzEncoder;
+use super::log::{Logger, LogFile};
 
 use crate::base::glyph::{Color, Glyph};
 use crate::base::point::{Matrix, Point};
@@ -87,21 +84,26 @@ struct DebugDetail {
 #[cfg(not(target_family = "wasm"))]
 pub struct DebugFile {
     detail: DebugDetail,
-    dir: &'static str,
-    file: BufWriter<File>,
     map: Matrix<Glyph>,
     next_tick: usize,
+
+    file: LogFile,
+    logger: Logger,
 }
 
 #[cfg(not(target_family = "wasm"))]
 impl Default for DebugFile {
     fn default() -> Self {
-        let dir = "wasm/debug";
-        std::fs::remove_dir_all(dir).unwrap();
-        std::fs::create_dir_all(dir).unwrap();
-        let file = BufWriter::new(File::create(format!("{}/ticks.txt", dir)).unwrap());
+        let dir = "wasm/debug".into();
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let logger = Logger::new(dir);
+        let file = logger.open_text("ticks.txt");
+
+        let detail = DebugDetail::default();
         let map = Matrix::new(Point(WORLD_SIZE, WORLD_SIZE), Glyph::wide(' '));
-        Self { detail: Default::default(), dir, file, map, next_tick: 0 }
+        Self { detail, map, next_tick: 0, file, logger }
     }
 }
 
@@ -183,9 +185,8 @@ impl DebugFile {
     fn record_tick(&mut self, action: &Action, board: &Board, me: &Entity) -> Result<()> {
         // Dump binary data for all animations happening prior to this tick.
         if !self.detail.animation.is_empty() {
-            let filename = format!("{}/animation-{}.bin.gz", self.dir, self.next_tick);
-            let file = BufWriter::new(File::create(&filename).unwrap());
-            let mut file = GzEncoder::new(file, Compression::default());
+            let filename = format!("animation-{}.bin.gz", self.next_tick);
+            let mut file = self.logger.open_compressed(&filename);
 
             Self::write_bin(&mut file, &(self.detail.animation.len() as i32))?;
             for frame in &self.detail.animation {
@@ -196,9 +197,8 @@ impl DebugFile {
         }
 
         // Dump binary data for the tick itself.
-        let filename = format!("{}/tick-{}.bin.gz", self.dir, self.next_tick);
-        let file = BufWriter::new(File::create(&filename).unwrap());
-        let mut file = GzEncoder::new(file, Compression::default());
+        let filename = format!("tick-{}.bin.gz", self.next_tick);
+        let mut file = self.logger.open_compressed(&filename);
 
         // Dump binary data revealing all of the entities.
         let entities: Vec<_> = board.entities.iter().collect();
