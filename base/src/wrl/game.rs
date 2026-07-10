@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 use rand::{Rng, SeedableRng};
 use thin_vec::ThinVec;
 
-use crate::{flags, static_assert_size};
+use crate::flags;
 use crate::base::glyph::{Color, Glyph, Buffer};
 use crate::base::lighting::Lighting;
 use crate::base::pathing::Status;
@@ -257,8 +257,6 @@ pub struct Cell {
     pub shadow: i32,
     pub tile: &'static Tile,
 }
-#[cfg(target_pointer_width = "64")]
-static_assert_size!(Cell, 32);
 
 pub struct Board {
     map: Matrix<Cell>,

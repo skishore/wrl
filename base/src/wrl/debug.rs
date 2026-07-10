@@ -1,8 +1,12 @@
+#![cfg_attr(target_family = "wasm", allow(unused))]
+
 use std::cmp::max;
 use std::fs::File;
 use std::io::{BufWriter, Result, Write};
 
+#[cfg(not(target_family = "wasm"))]
 use flate2::Compression;
+#[cfg(not(target_family = "wasm"))]
 use flate2::write::GzEncoder;
 
 use crate::base::glyph::{Color, Glyph};
@@ -55,6 +59,22 @@ impl DebugLog {
 
 //////////////////////////////////////////////////////////////////////////////
 
+// DebugFile wasm stub
+
+#[cfg(target_family = "wasm")]
+#[derive(Default)]
+pub struct DebugFile {}
+
+#[cfg(target_family = "wasm")]
+impl DebugFile {
+    pub fn record(&mut self, _: &Action, _: &Board, _: &Entity) {}
+    pub fn record_frame(&mut self, _: &Board, _: &Frame) {}
+    pub fn record_neighborhood(&mut self, _: &Neighborhood) {}
+    pub fn record_utility(&mut self, _: &[(i32, Point)]) {}
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 // DebugFile
 
 #[derive(Default)]
@@ -64,6 +84,7 @@ struct DebugDetail {
     neighborhood: Vec<Point>,
 }
 
+#[cfg(not(target_family = "wasm"))]
 pub struct DebugFile {
     detail: DebugDetail,
     dir: &'static str,
@@ -72,6 +93,7 @@ pub struct DebugFile {
     next_tick: usize,
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl Default for DebugFile {
     fn default() -> Self {
         let dir = "wasm/debug";
@@ -83,6 +105,7 @@ impl Default for DebugFile {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl DebugFile {
     pub fn record(&mut self, action: &Action, board: &Board, me: &Entity) {
         self.try_record(action, board, me).unwrap();
