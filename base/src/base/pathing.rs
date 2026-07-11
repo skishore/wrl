@@ -471,6 +471,7 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
     let index = get_index(initial).unwrap();
     let (mut cur_index, mut cur_score) = (Some(index), 0);
     init(state, index, initial, 0, Status::Free);
+    state.dirty.push(index);
 
     while let Some(prev) = cur_index {
         let node = &state.nodes[prev];
