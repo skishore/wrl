@@ -263,8 +263,20 @@ fn CachedDijkstra<F: Fn(Point) -> bool, G: Fn(Point) -> Status, H: Fn(Point) -> 
     let node = AStarNode::new(source, SOURCE_NODE, 0, score);
     map.insert(source, heap.push(node));
 
+    const STEPS: [(Point, i32); 8] = [
+        (dirs::N,  ASTAR_UNIT_COST),
+        (dirs::S,  ASTAR_UNIT_COST),
+        (dirs::E,  ASTAR_UNIT_COST),
+        (dirs::W,  ASTAR_UNIT_COST),
+        (dirs::NE, ASTAR_UNIT_COST + ASTAR_DIAGONAL_PENALTY),
+        (dirs::NW, ASTAR_UNIT_COST + ASTAR_DIAGONAL_PENALTY),
+        (dirs::SE, ASTAR_UNIT_COST + ASTAR_DIAGONAL_PENALTY),
+        (dirs::SW, ASTAR_UNIT_COST + ASTAR_DIAGONAL_PENALTY),
+    ];
+
     for _ in 0..cells {
         if heap.is_empty() { break; }
+
         let prev = heap.extract_min();
         let prev_pos = heap.get_node(prev).pos;
         let prev_distance = heap.get_node(prev).distance;
@@ -279,15 +291,13 @@ fn CachedDijkstra<F: Fn(Point) -> bool, G: Fn(Point) -> Status, H: Fn(Point) -> 
             return Some(result);
         }
 
-        for dir in &dirs::ALL {
-            let next = prev_pos + *dir;
+        for &(dir, penalty) in &STEPS {
+            let next = prev_pos + dir;
             let status = if target(next) { Status::Free } else { check(next) };
             if status == Status::Blocked { continue; }
 
             let occupied = status == Status::Occupied;
-            let diagonal = dir.0 != 0 && dir.1 != 0;
-            let distance = prev_distance + ASTAR_UNIT_COST +
-                           if diagonal { ASTAR_DIAGONAL_PENALTY } else { 0 } +
+            let distance = prev_distance + penalty +
                            if occupied { ASTAR_OCCUPIED_PENALTY } else { 0 };
 
             map.entry(next).and_modify(|x| {
@@ -297,7 +307,7 @@ fn CachedDijkstra<F: Fn(Point) -> bool, G: Fn(Point) -> Status, H: Fn(Point) -> 
                 // Using such a heuristic speeds up search in easy cases, with
                 // the downside that we don't always find an optimal path.
                 let existing = heap.mut_node(*x);
-                if existing.index != NOT_IN_HEAP && existing.distance > distance {
+                if existing.index != NOT_IN_HEAP && existing.distance >= distance {
                     existing.score += distance - existing.distance;
                     existing.distance = distance;
                     existing.parent = prev;
@@ -317,7 +327,7 @@ fn CachedDijkstra<F: Fn(Point) -> bool, G: Fn(Point) -> Status, H: Fn(Point) -> 
 
 // DijkstraMap
 
-const DIJKSTRA_COST: i32 = 5;
+const DIJKSTRA_UNIT_COST: i32 = 5;
 const DIJKSTRA_DIAGONAL_PENALTY: i32 = 2;
 const DIJKSTRA_OCCUPIED_PENALTY: i32 = 20;
 
@@ -376,7 +386,7 @@ pub struct Neighborhood {
 // Expose a distance function for use in other heuristics.
 pub fn DijkstraLength(p: Point) -> i32 {
     let (x, y) = (p.0.abs(), p.1.abs());
-    DIJKSTRA_COST * max(x, y) + DIJKSTRA_DIAGONAL_PENALTY * min(x, y)
+    DIJKSTRA_UNIT_COST * max(x, y) + DIJKSTRA_DIAGONAL_PENALTY * min(x, y)
 }
 
 pub fn DijkstraMap<F: Fn(Point) -> Status>(
@@ -444,22 +454,17 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
     };
 
     // Relax the edge from `prev_point` (at `prev_score`) to `prev_point + dir`.
-    let step = |state: &mut DijkstraState,
-                dir: Point, prev_point: Point, prev_score: i32| {
-        let point = prev_point + dir;
+    let step = |state: &mut DijkstraState, point: Point, score: i32| {
         let Some(index) = get_index(point) else { return };
 
         let entry = &mut state.nodes[index];
         let visited = entry.status.is_some();
-        if visited && prev_score >= entry.score { return; }
+        if visited && score >= entry.score { return; }
 
         let status = entry.status.unwrap_or_else(|| check(point + offset));
 
-        let diagonal = dir.0 != 0 && dir.1 != 0;
         let occupied = status == Status::Occupied;
-        let score = prev_score + DIJKSTRA_COST +
-                    if diagonal { DIJKSTRA_DIAGONAL_PENALTY } else { 0 } +
-                    if occupied { DIJKSTRA_OCCUPIED_PENALTY } else { 0 };
+        let score = score + if occupied { DIJKSTRA_OCCUPIED_PENALTY } else { 0 };
 
         if !visited {
             init(state, index, point, score, status);
@@ -480,6 +485,17 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
     let (mut cur_index, mut cur_score) = (Some(index), 0);
     init(state, index, initial, 0, Status::Free);
 
+    const STEPS: [(Point, i32); 8] = [
+        (dirs::N,  DIJKSTRA_UNIT_COST),
+        (dirs::S,  DIJKSTRA_UNIT_COST),
+        (dirs::E,  DIJKSTRA_UNIT_COST),
+        (dirs::W,  DIJKSTRA_UNIT_COST),
+        (dirs::NE, DIJKSTRA_UNIT_COST + DIJKSTRA_DIAGONAL_PENALTY),
+        (dirs::NW, DIJKSTRA_UNIT_COST + DIJKSTRA_DIAGONAL_PENALTY),
+        (dirs::SE, DIJKSTRA_UNIT_COST + DIJKSTRA_DIAGONAL_PENALTY),
+        (dirs::SW, DIJKSTRA_UNIT_COST + DIJKSTRA_DIAGONAL_PENALTY),
+    ];
+
     while let Some(prev) = cur_index {
         let node = &state.nodes[prev];
         let DijkstraNode { point, score, .. } = *node;
@@ -498,8 +514,8 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
             Status::Blocked | Status::Unknown => false,
         };
         if expand {
-            for &dir in &dirs::ALL {
-                step(state, dir, point, score);
+            for &(dir, penalty) in &STEPS {
+                step(state, point + dir, score + penalty);
             }
         }
 
