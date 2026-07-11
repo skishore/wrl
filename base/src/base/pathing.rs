@@ -415,6 +415,16 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
         Some(DijkstraNodeIndex(unsafe { NonZeroI32::new_unchecked(x + y * extent + 1) }))
     };
 
+    // Add the node at `index` to the tail of the list of nodes at `score`.
+    let link = |state: &mut DijkstraState, index: DijkstraNodeIndex, score: i32| {
+        let head = &mut state.lists[score as usize];
+        let prev = head.prev;
+        head.prev = Some(index);
+        let tail = state.link(prev, score);
+        tail.next = Some(index);
+        prev
+    };
+
     // Add the node at `index` to the tail of the list of nodes at `score`,
     // and set its point and status (both of which may already be set).
     let init = |state: &mut DijkstraState,
@@ -423,18 +433,14 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
             state.lists.push(DijkstraLink::default())
         }
 
-        let head = &mut state.lists[score as usize];
-        let prev = head.prev;
-        head.prev = Some(index);
-        let tail = state.link(prev, score);
-        tail.next = Some(index);
-
+        let prev = link(state, index, score);
         let entry = &mut state.nodes[index];
-        entry.link.prev = prev;
-        entry.link.next = None;
+        entry.link = DijkstraLink { prev, next: None };
         entry.point = point;
         entry.score = score;
         entry.status = Some(status);
+
+        state.dirty.push(index);
     };
 
     // Relax the edge from `prev_point` (at `prev_score`) to `prev_point + dir`.
@@ -449,29 +455,30 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
 
         let status = entry.status.unwrap_or_else(|| check(point + offset));
 
-        entry.status = Some(status);
-        if !visited { state.dirty.push(index); }
-
         let diagonal = dir.0 != 0 && dir.1 != 0;
         let occupied = status == Status::Occupied;
         let score = prev_score + DIJKSTRA_COST +
                     if diagonal { DIJKSTRA_DIAGONAL_PENALTY } else { 0 } +
                     if occupied { DIJKSTRA_OCCUPIED_PENALTY } else { 0 };
-        if visited && score >= entry.score { return; }
 
-        if visited {
-            let score = entry.score;
+        if !visited {
+            init(state, index, point, score, status);
+        } else if score < entry.score {
+            let old = entry.score;
             let DijkstraLink { next, prev } = entry.link;
-            state.link(next, score).prev = prev;
-            state.link(prev, score).next = next;
+            state.link(next, old).prev = prev;
+            state.link(prev, old).next = next;
+
+            let prev = link(state, index, score);
+            let entry = &mut state.nodes[index];
+            entry.link = DijkstraLink { prev, next: None };
+            entry.score = score;
         }
-        init(state, index, point, score, status);
     };
 
     let index = get_index(initial).unwrap();
     let (mut cur_index, mut cur_score) = (Some(index), 0);
     init(state, index, initial, 0, Status::Free);
-    state.dirty.push(index);
 
     while let Some(prev) = cur_index {
         let node = &state.nodes[prev];
