@@ -248,6 +248,23 @@ impl std::ops::Deref for ScentKnowledge {
 
 //////////////////////////////////////////////////////////////////////////////
 
+// Cell state cache:
+
+#[derive(Eq, PartialEq)]
+struct PointEntry {
+    cell: Option<CellHandle>,
+    occupant: Option<OccupantHandle>,
+    status: Status,
+}
+
+impl Default for PointEntry {
+    fn default() -> Self {
+        Self { cell: None, occupant: None, status: Status::Unknown }
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 // Overall knowledge index:
 
 type CellHandle = Handle<CellKnowledge>;
@@ -261,12 +278,6 @@ enum OccupantHandle { Entity(EntityHandle), Source(SourceHandle) }
 struct EIDEntry {
     entity: Option<EntityHandle>,
     source: Option<SourceHandle>,
-}
-
-#[derive(Default, Eq, PartialEq)]
-struct PointEntry {
-    cell: Option<CellHandle>,
-    occupant: Option<OccupantHandle>,
 }
 
 #[derive(Default)]
@@ -457,6 +468,15 @@ impl Knowledge {
 
             // Clear the cell's entity if it's definitely unoccupied.
             if see_all_entities && entity.is_none() { entry.occupant = None; }
+
+            // Update the cell's pathfinding status.
+            entry.status = if tile.blocks_movement() {
+                Status::Blocked
+            } else if entry.occupant.is_some() {
+                Status::Occupied
+            } else {
+                Status::Free
+            };
         }
 
         self.forget(me.player);
@@ -598,12 +618,17 @@ impl Knowledge {
         if prev != next && let Some(prev) = prev {
             if let Some(x) = self.pos_index.get_mut(&prev) && x.occupant == Some(h) {
                 x.occupant = None;
-                if *x == Default::default() { self.pos_index.remove(&prev); }
+                match x.cell {
+                    Some(_) => if x.status != Status::Blocked { x.status = Status::Free; }
+                    None => { self.pos_index.remove(&prev); }
+                }
             }
         }
 
         if let Some(next) = next {
-            self.pos_index.entry(next).or_default().occupant = Some(h);
+            let x = self.pos_index.entry(next).or_default();
+            if x.status != Status::Blocked { x.status = Status::Occupied; }
+            x.occupant = Some(h);
         }
     }
 
@@ -670,7 +695,10 @@ impl Knowledge {
         let Some(y) = self.pos_index.get_mut(&x.point) else { return };
 
         y.cell = None;
-        if *y == Default::default() { self.pos_index.remove(&x.point); }
+        match y.occupant {
+            Some(_) => y.status = Status::Occupied,
+            None => { self.pos_index.remove(&x.point); }
+        }
     }
 
     fn forget_last_source(&mut self) {
@@ -736,11 +764,20 @@ impl Knowledge {
 
         // Check that the indices are consistent and minimal:
         type OH = OccupantHandle;
-        for (&pos, &PointEntry { cell, occupant }) in &self.pos_index {
+        for (&pos, &PointEntry { cell, occupant, status }) in &self.pos_index {
             assert!(cell.is_some() || occupant.is_some());
             if let Some(x) = cell { assert!(self.cells[x].point == pos); }
             if let Some(OH::Entity(x)) = occupant { assert!(self.entities[x].pos == pos); }
             if let Some(OH::Source(x)) = occupant { assert!(self.sources[x].pos == pos); }
+
+            let actual = if let Some(x) = cell && self.cells[x].tile.blocks_movement() {
+                Status::Blocked
+            } else if occupant.is_some() {
+                Status::Occupied
+            } else {
+                Status::Free
+            };
+            assert!(actual == status);
         }
         for (&eid, &EIDEntry { entity, source }) in &self.eid_index {
             assert!(entity.is_some() || source.is_some());
@@ -810,22 +847,17 @@ impl<'a> PointLookup<'a> {
     }
 
     pub fn status(&self) -> Status {
-        let Some(spot) = self.spot else { return Status::Unknown };
-        let Some(cell) = spot.cell else { return Status::Unknown };
-
-        let tile = self.root.cells[cell].tile;
-        if tile.blocks_movement() { return Status::Blocked; }
-        if spot.occupant.is_some() { Status::Occupied } else { Status::Free }
+        self.spot.map_or(Status::Unknown, |x| x.status)
     }
 
     // Predicates
 
     pub fn occupied(&self) -> bool {
-        self.spot.map_or(false, |x| x.occupant.is_some())
+        self.spot.map_or(false, |x| x.status == Status::Occupied)
     }
 
     pub fn blocked(&self) -> bool {
-        self.cell().map_or(false, |x| x.tile.blocks_movement())
+        self.spot.map_or(false, |x| x.status == Status::Blocked)
     }
 
     pub fn unblocked(&self) -> bool {
