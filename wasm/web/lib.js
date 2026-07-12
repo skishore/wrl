@@ -207,7 +207,9 @@ class Terminal {
           items.push(sprite);
         }
         const [bg, fg] = items;
-        this.map.push({bg, fg});
+        const bgTint = 0xffffff;
+        const fgTint = 0xffffff;
+        this.map.push({bg, fg, bgTint, fgTint});
       }
     }
   }
@@ -230,16 +232,18 @@ class Terminal {
 
     if (code <= 0xff) {
       cell.fg.texture = this.unifontFrames[code];
-      cell.fg.tint = fg;
-      cell.bg.tint = bg;
+      if (cell.fgTint != fg) cell.fg.tint = cell.fgTint = fg;
+      if (cell.bgTint != bg) cell.bg.tint = cell.bgTint = bg;
       return 1;
     } else if (code >= 0xff00) {
       const wide = code - 0xff00 + 0x20;
       const next = this.map[spriteIndex + 1];
       cell.fg.texture = this.aquariusFrames[2 * wide + 0];
       next.fg.texture = this.aquariusFrames[2 * wide + 1];
-      cell.fg.tint = next.fg.tint = fg;
-      cell.bg.tint = next.bg.tint = bg;
+      if (cell.fgTint != fg) cell.fg.tint = cell.fgTint = fg;
+      if (cell.bgTint != bg) cell.bg.tint = cell.bgTint = bg;
+      if (next.fgTint != fg) next.fg.tint = next.fgTint = fg;
+      if (next.bgTint != bg) next.bg.tint = next.bgTint = bg;
       return 2;
     }
   }
