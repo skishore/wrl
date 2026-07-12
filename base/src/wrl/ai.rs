@@ -1071,6 +1071,10 @@ fn FindNeed<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> bool {
     for &(point, _) in n.blocked.iter().chain(&n.visited) {
         if valid(ctx, point) { return FindPath(ctx, point, kind); }
     }
+
+    if let Some(point) = ctx.blackboard.last_seen.get(&kind).copied() {
+        return FindPath(ctx, point, kind);
+    }
     false
 }
 
@@ -1825,6 +1829,13 @@ fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
 //
 //  - Only warn seen-but-unknown-valence sources. As is, we can have long
 //    chains of warnings over nothing. Investigate unseen sources instead.
+//
+//  - Split up the two FindNeed cases (target in neighborhood; and pathing
+//    to a faraway-but-remembered cell) into different nodes.
+//
+//  - In the second FindNeed case, if we can't find a path all the way to the
+//    remembered cell, path as close to it as possible. Or: generalize this
+//    fallback to all "path to target" cases - see the second item above.
 
 fn AttackOrFollowPath(kind: PathKind) -> impl Bhv {
     pri![
