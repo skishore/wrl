@@ -1,3 +1,5 @@
+#![allow(unused_features)]
+
 #![feature(test)]
 #![feature(trait_alias)]
 

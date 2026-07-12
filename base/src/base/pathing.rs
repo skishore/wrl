@@ -532,7 +532,6 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
 
 //////////////////////////////////////////////////////////////////////////////
 
-#[allow(soft_unstable)]
 #[cfg(test)]
 mod tests {
     use super::*;

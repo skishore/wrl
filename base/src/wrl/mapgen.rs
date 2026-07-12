@@ -884,7 +884,6 @@ pub fn legacy_mapgen_with_size(size: Point, rng: &mut RNG) -> Matrix<char> {
 
 //////////////////////////////////////////////////////////////////////////////
 
-#[allow(soft_unstable)]
 #[cfg(test)]
 mod tests {
     use super::*;
