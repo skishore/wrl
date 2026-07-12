@@ -508,7 +508,7 @@ impl ThreatState {
 
     fn known_good(&self, me: &Entity, tid: TID) -> bool {
         let TID::EID(x) = tid else { return false };
-        x == me.eid || me.known.entity(x).map(|x| x.friend()).unwrap_or(false)
+        x == me.eid || me.known.entity(x).map_or(false, |x| x.friend())
     }
 
     fn friendly_call(me: &Entity, x: &CallEvent) -> bool {

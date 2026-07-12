@@ -382,7 +382,7 @@ impl Board {
         frame.iter().for_each(|x| match &x.data {
             &ParticleData::Light(light) => {
                 let eid = self.get_cell(x.point).eid;
-                let prev = eid.map(|x| self.entities[x].species.light.radius).unwrap_or(-1);
+                let prev = eid.map_or(-1, |x| self.entities[x].species.light.radius);
                 let next = std::cmp::max(prev, light.radius);
                 if prev == next { return; }
 
@@ -1741,7 +1741,7 @@ impl State {
     }
 
     fn _execute_one_effect_callback(&mut self) -> bool {
-        self.board.pop_callback().map(|x| { x(self); true }).unwrap_or(false)
+        self.board.pop_callback().map_or(false, |x| { x(self); true })
     }
 }
 

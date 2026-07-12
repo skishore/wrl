@@ -519,7 +519,7 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
             return if center { f64::INFINITY } else { *costs.get(&' ').unwrap() };
         }
         let noise_score = 8.0 * (1.0 - noise.get(p));
-        let tiles_score = *costs.get(&map.get(p)).unwrap_or(&0.0);
+        let tiles_score = costs.get(&map.get(p)).copied().unwrap_or(0.0);
         noise_score + tiles_score
     };
     let score = |p: Point| {
@@ -668,7 +668,7 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
         if tile == 'W' && center { return f64::INFINITY; }
 
         let noise_score = 8.0 * (1.0 - noise.get(p));
-        let tiles_score = *costs.get(&tile).unwrap_or(&0.0);
+        let tiles_score = costs.get(&tile).copied().unwrap_or(0.0);
         noise_score + tiles_score
     };
     let score = |p: Point| {
@@ -723,7 +723,7 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
     for component in &components {
         let score = |p: Point| {
             let noise_score = 8.0 * (1.0 - noise.get(p));
-            let tiles_score = *costs.get(&map.get(p)).unwrap_or(&0.0);
+            let tiles_score = costs.get(&map.get(p)).copied().unwrap_or(0.0);
             noise_score + tiles_score
         };
         let edges = |p: Point| {

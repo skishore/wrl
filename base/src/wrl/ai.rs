@@ -1038,23 +1038,23 @@ fn Weariness(ctx: &mut Ctx) -> i64 {
 }
 
 fn IsLeader(ctx: &Ctx, point: Point) -> bool {
-    ctx.env.leader.map(|x| x.pos == point).unwrap_or(false)
+    ctx.env.leader.map_or(false, |x| x.pos == point)
 }
 
 fn HasMeat(ctx: &Ctx, point: Point) -> bool {
-    ctx.known.get(point).cell().map(|x| x.items.contains(&Item::Corpse)).unwrap_or(false)
+    ctx.known.get(point).cell().map_or(false, |x| x.items.contains(&Item::Corpse))
 }
 
 fn HasBerry(ctx: &Ctx, point: Point) -> bool {
-    ctx.known.get(point).cell().map(|x| x.items.contains(&Item::Berry)).unwrap_or(false)
+    ctx.known.get(point).cell().map_or(false, |x| x.items.contains(&Item::Berry))
 }
 
 fn HasWater(ctx: &Ctx, point: Point) -> bool {
-    ctx.known.get(point).cell().map(|x| x.tile.can_drink()).unwrap_or(false)
+    ctx.known.get(point).cell().map_or(false, |x| x.tile.can_drink())
 }
 
 fn HasBerryTree(ctx: &Ctx, point: Point) -> bool {
-    ctx.known.get(point).cell().map(|x| x.tile.drops_berries()).unwrap_or(false)
+    ctx.known.get(point).cell().map_or(false, |x| x.tile.drops_berries())
 }
 
 fn CanRestAt(ctx: &Ctx, point: Point) -> bool {
@@ -1077,7 +1077,7 @@ fn FindNeed<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> bool {
 fn CheckPathTarget<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> bool {
     if ctx.blackboard.path.kind != kind { return false; }
 
-    let okay = ctx.blackboard.path.path.last().map(|&x| valid(ctx, x)).unwrap_or(false);
+    let okay = ctx.blackboard.path.path.last().map_or(false, |&x| valid(ctx, x));
     if !okay { ctx.blackboard.path.clear(); }
     okay
 }
@@ -1208,7 +1208,7 @@ fn ClearTargets(ctx: &mut Ctx) {
 }
 
 fn ChaseTargetUnchanged(ctx: &Ctx) -> bool {
-    ctx.blackboard.chase.as_ref().map(|x| !x.reset).unwrap_or(false)
+    ctx.blackboard.chase.as_ref().map_or(false, |x| !x.reset)
 }
 
 fn IsChasePathKind(kind: PathKind) -> bool {
@@ -1318,7 +1318,7 @@ fn SelectBestTarget(ctx: &mut Ctx) -> bool {
         let age = known.time_to_turn(target.time);
         let bonus = target.sure as i32 as f64;
         let d0 = (target.pos - pos).len_l2();
-        let d1 = prev.map(|x| (target.pos - x.target.pos).len_l2()).unwrap_or(0.0);
+        let d1 = prev.map_or(0.0, |x| (target.pos - x.target.pos).len_l2());
         1.0 * age - 2.0 * bonus + 0.5 * d0 + 0.25 * d1
     };
 
@@ -1529,7 +1529,7 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
     let threats = &mut ctx.blackboard.threats;
     threats.on_call_for_help(ctx.pos, ctx.known.time());
 
-    let look = threats.hostile.first().map(|x| x.pos - ctx.pos).unwrap_or(ctx.dir);
+    let look = threats.hostile.first().map_or(ctx.dir, |x| x.pos - ctx.pos);
     Some(Action::Call { look, call: Call::Help })
 }
 
@@ -1612,7 +1612,7 @@ pub fn ChooseDefenseSquare(leader: &Entity, source: Point) -> Option<Point> {
 
                 defended = defended || (
                     point != source && point != leader.pos &&
-                    known.get(point).entity().map(|x| x.friend()).unwrap_or(false)
+                    known.get(point).entity().map_or(false, |x| x.friend())
                 );
 
                 if !Bound::new(2).contains(delta) { continue; }
@@ -1694,8 +1694,8 @@ fn SelectAttackTarget(ctx: &mut Ctx) -> bool {
     let other = ctx.known.entity(eid);
     let other = other.and_then(|x| if x.time < target.loc.time { None } else { Some(x) });
 
-    let loc = other.map(|x| x.loc).unwrap_or(target.loc);
-    let sense = other.map(|x| x.sense).unwrap_or(Sense::Sound);
+    let loc = other.map_or(target.loc, |x| x.loc);
+    let sense = other.map_or(Sense::Sound, |x| x.sense);
 
     if !check_time!(ctx, loc.time, MIN_SEARCH_TURNS) {
         me.command.take();

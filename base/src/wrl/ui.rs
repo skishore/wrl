@@ -307,7 +307,7 @@ fn update_target(known: &Knowledge, target: &mut Target, update: Point) {
             for (i, &x) in target.path.iter().enumerate() {
                 let cell = known.get(x);
                 let last = i + 1 == target.path.len();
-                let friend = cell.entity().map(|x| x.friend()).unwrap_or(false);
+                let friend = cell.entity().map_or(false, |x| x.friend());
 
                 let free = match cell.status() {
                     Status::Blocked => false,
@@ -570,8 +570,8 @@ fn process_ui_input(ui: &mut UI, me: &mut Entity, input: Input) -> bool {
         let dir = ch.and_then(get_direction);
 
         let chosen = if enter { x.choice } else {
-            ATTACK_KEYS.iter().chain(&ACTION_KEYS).position(
-                |&x| ch == Some(x)).map(|x| x as i32).unwrap_or(-1)
+            let mut keys = ATTACK_KEYS.iter().chain(&ACTION_KEYS);
+            keys.position(|&x| ch == Some(x)).map_or(-1, |x| x as i32)
         };
         let action = ACTION_KEYS.get((chosen - max_attacks) as usize).copied();
 
@@ -693,7 +693,7 @@ impl Log {
 
     fn log_menu<S: Into<String>, T: Into<Color>>(&mut self, text: S, color: T) {
         let (color, text) = (color.into(), text.into());
-        if self.lines.last().map(|x| x.menu).unwrap_or(false) { self.lines.pop(); }
+        if self.lines.last().map_or(false, |x| x.menu) { self.lines.pop(); }
         self.lines.push(LogLine { color, menu: true, text });
         if self.lines.len() as i32 > UI_LOG_SIZE { self.lines.remove(0); }
     }
@@ -725,8 +725,7 @@ impl Focused {
             self.vision.clear();
             self.vision.set_center(pos);
         } else {
-            let floor = Tile::get('.');
-            let opacity_lookup = |x| known.get(x).tile().unwrap_or(floor).opacity();
+            let opacity_lookup = |x| known.get(x).tile().map_or(0, |x| x.opacity());
             self.vision.compute(&VisionArgs { pos, dir, opacity_lookup });
         }
     }
@@ -907,7 +906,7 @@ impl UI {
 
     fn render_map(&self, buffer: &mut Buffer, me: &Entity, effect: Option<&Effect>) {
         let size = self.get_map_size();
-        let known = effect.map(|x| x.known).unwrap_or(&me.known);
+        let known = effect.map_or(&*me.known, |x| x.known);
         let slice = &mut Slice::new(buffer, self.layout.map);
         let offset = self.get_map_offset(me);
         let player = me.player;
@@ -961,7 +960,7 @@ impl UI {
         let focused_vision = self.focused.vision.get_points_seen();
         if self.focused.active &&
            let Some(&point) = focused_vision.first() &&
-           !effect.map(|x| x.sources.contains(&point)).unwrap_or(false) {
+           !effect.map_or(false, |x| x.sources.contains(&point)) {
             highlight(slice, point, Color::gray(UI_TARGET_SHADE));
             skip_first = true;
         }
@@ -1101,7 +1100,7 @@ impl UI {
 
         let size = self.get_map_size();
         let base = Tile::get('~').glyph.fg();
-        let known = effect.map(|x| x.known).unwrap_or(&me.known);
+        let known = effect.map_or(&*me.known, |x| x.known);
 
         for drop in &rainfall.drops {
             let index = drop.frame - self.frame;
@@ -1249,7 +1248,7 @@ impl UI {
             None => {
                 let tile = self.focused.tile;
                 let view = self.focus.and_then(|x| known.entity(x));
-                let seen = view.map(|x| x.visible()).unwrap_or(false);
+                let seen = view.map_or(false, |x| x.visible());
                 let source = None;
                 let header = if seen {
                     "Last target:"
@@ -1281,7 +1280,7 @@ impl UI {
         }
 
         if view.is_none() && let Some(x) = source {
-            let desc = x.sound.map(describe_sound).unwrap_or("an unknown sound");
+            let desc = x.sound.map_or("an unknown sound", describe_sound);
             slice.newline().write_str("You heard: ").write_str(desc).newline().newline();
         }
     }
@@ -1319,7 +1318,7 @@ impl UI {
         for (i, &key) in ATTACK_KEYS.iter().chain(&ACTION_KEYS).enumerate() {
             let (active, name) = if i < ATTACK_KEYS.len() {
                 let attack = summon.species.attacks.get(i);
-                let name = attack.map(|x| x.name).unwrap_or("---");
+                let name = attack.map_or("---", |x| x.name);
                 (attack.is_some(), name)
             } else {
                 const _: () = assert!(ACTION_KEYS.len() == 2);
@@ -1374,7 +1373,7 @@ impl UI {
 
     fn render_entity(&self, key: Option<char>, fg: Option<Color>,
                      view: &EntityKnowledge, slice: &mut Slice) {
-        let prefix = key.map(|x| UI::render_key(x)).unwrap_or(String::default());
+        let prefix = key.map_or_default(|x| UI::render_key(x));
         let n = prefix.chars().count();
         let w = UI_STATUS_SIZE - 6;
         let status_bar_line = |p: &str, v: f64, c: Color, s: &mut Slice| {
@@ -1534,9 +1533,9 @@ impl UI {
     }
 
     pub fn render_tile(me: &Entity, point: Point, effect: Option<&Effect>) -> Glyph {
-        let known = effect.map(|x| x.known).unwrap_or(&*me.known);
-        let is_source = effect.map(|x| x.sources.contains(&point)).unwrap_or(false);
-        let is_target = effect.map(|x| x.targets.contains(&point)).unwrap_or(false);
+        let known = effect.map_or(&*me.known, |x| x.known);
+        let is_source = effect.map_or(false, |x| x.sources.contains(&point));
+        let is_target = effect.map_or(false, |x| x.targets.contains(&point));
         let is_source = is_source && !is_target;
 
         let cell = known.get(point);

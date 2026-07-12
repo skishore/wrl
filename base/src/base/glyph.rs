@@ -156,8 +156,8 @@ impl<'a> Slice<'a> {
 
     pub fn set(&mut self, point: Point, glyph: Glyph) {
         if !self.contains(point) { return; }
-        let glyph = self.fg.map(|x| glyph.with_fg(x)).unwrap_or(glyph);
-        let glyph = self.bg.map(|x| glyph.with_bg(x)).unwrap_or(glyph);
+        let glyph = self.fg.map_or(glyph, |x| glyph.with_fg(x));
+        let glyph = self.bg.map_or(glyph, |x| glyph.with_bg(x));
         self.buffer.set(self.bounds.root + point, glyph);
     }
 

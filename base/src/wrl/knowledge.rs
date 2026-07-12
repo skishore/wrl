@@ -764,25 +764,25 @@ impl<'a> PointLookup<'a> {
     // Field lookups
 
     pub fn time_since_seen(&self) -> Timedelta {
-        let time = self.cell().map(|x| x.last_seen).unwrap_or_default();
+        let time = self.cell().map_or_default(|x| x.last_seen);
         self.root.time() - time
     }
 
     pub fn time_since_entity_visible(&self) -> Timedelta {
-        let time = self.cell().map(|x| x.last_see_entity_at).unwrap_or_default();
+        let time = self.cell().map_or_default(|x| x.last_see_entity_at);
         self.root.time() - time
     }
 
     pub fn items(&self) -> &[Item] {
-        self.cell().map(|x| x.items.as_slice()).unwrap_or(&[])
+        self.cell().map_or(&[], |x| x.items.as_slice())
     }
 
     pub fn light(&self) -> bool {
-        self.cell().map(|x| x.light()).unwrap_or(false)
+        self.cell().map_or(false, |x| x.light())
     }
 
     pub fn shade(&self) -> bool {
-        self.cell().map(|x| x.shade()).unwrap_or(false)
+        self.cell().map_or(false, |x| x.shade())
     }
 
     pub fn tile(&self) -> Option<&'static Tile> {
@@ -790,7 +790,7 @@ impl<'a> PointLookup<'a> {
     }
 
     pub fn visibility(&self) -> i32 {
-        self.cell().map(|x| x.visibility).unwrap_or(-1)
+        self.cell().map_or(-1, |x| x.visibility)
     }
 
     // Derived fields
@@ -821,15 +821,15 @@ impl<'a> PointLookup<'a> {
     // Predicates
 
     pub fn occupied(&self) -> bool {
-        self.spot.map(|x| x.occupant.is_some()).unwrap_or(false)
+        self.spot.map_or(false, |x| x.occupant.is_some())
     }
 
     pub fn blocked(&self) -> bool {
-        self.cell().map(|x| x.tile.blocks_movement()).unwrap_or(false)
+        self.cell().map_or(false, |x| x.tile.blocks_movement())
     }
 
     pub fn unblocked(&self) -> bool {
-        self.cell().map(|x| !x.tile.blocks_movement()).unwrap_or(false)
+        self.cell().map_or(false, |x| !x.tile.blocks_movement())
     }
 
     pub fn unknown(&self) -> bool {
@@ -837,14 +837,14 @@ impl<'a> PointLookup<'a> {
     }
 
     pub fn visible(&self) -> bool {
-        self.cell().map(|x| x.visible()).unwrap_or(false)
+        self.cell().map_or(false, |x| x.visible())
     }
 
     pub fn can_see_entity_at(&self) -> bool {
-        self.cell().map(|x| x.see_entity_at()).unwrap_or(false)
+        self.cell().map_or(false, |x| x.see_entity_at())
     }
 
     pub fn is_shadow_cover(&self) -> bool {
-        self.cell().map(|x| x.shade() && !x.light()).unwrap_or(false)
+        self.cell().map_or(false, |x| x.shade() && !x.light())
     }
 }
