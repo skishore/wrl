@@ -260,7 +260,7 @@ fn main() {
             time = start;
         }
     }, |_| {
-        std::thread::sleep(std::time::Duration::from_micros(1000));
+        std::thread::yield_now();
     });
 
     screen.exit_alt_screen().unwrap();

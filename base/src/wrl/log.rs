@@ -3,8 +3,7 @@ use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufWriter, Result, Write};
 use std::sync::{Arc, Mutex};
-use std::thread::{JoinHandle, sleep, spawn};
-use std::time::Duration;
+use std::thread::{JoinHandle, spawn};
 
 use flate2::Compression;
 use flate2::write::GzEncoder;
@@ -34,7 +33,7 @@ struct LogWorker {
 impl LogWorker {
     fn run(&mut self) {
         while self.process(/*max=*/1024) {
-            sleep(Duration::from_millis(1));
+            std::thread::yield_now();
         }
     }
 
