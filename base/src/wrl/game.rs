@@ -208,7 +208,7 @@ impl FOV {
 
         let map = &board.map;
         let dir = if player { Point::default() } else { dir };
-        let opacity_lookup = |x| map.get(x).tile.opacity();
+        let opacity_lookup = |x| map.entry_ref(x).tile.opacity();
         vision.check_point(&VisionArgs { pos, dir, opacity_lookup }, point)
     }
 
@@ -239,7 +239,7 @@ impl FOV {
         } else {
             let map = &board.map;
             let dir = if player { Point::default() } else { dir };
-            let opacity_lookup = |x| map.get(x).tile.opacity();
+            let opacity_lookup = |x| map.entry_ref(x).tile.opacity();
             vision.compute(&VisionArgs { pos, dir, opacity_lookup });
         }
         vision
@@ -1568,16 +1568,16 @@ impl State {
         let mut rng = rng;
 
         loop {
-            let map = mapgen(size, &mut rng);
+            let result = mapgen(size, &mut rng);
             for x in 0..size.0 {
                 for y in 0..size.1 {
                     let p = Point(x, y);
-                    board.set_tile(p, Tile::get(map.get(p)));
+                    board.set_tile(p, Tile::get(result.get(p)));
                 }
             }
             for y in 0..size.1 {
                 let p = Point(0, y);
-                if map.get(p) == 'R' { pos = p; }
+                if result.get(p) == 'R' { pos = p; }
             }
             if !board.get_tile(pos).blocks_movement() { break; }
         }
