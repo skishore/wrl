@@ -206,6 +206,17 @@ impl Blackboard {
 
 // Ctx
 
+#[derive(Default)]
+struct ScoredNeighborhood {
+    neighborhood: Neighborhood,
+    scores: HashMap<Point, i32>,
+}
+
+impl std::ops::Deref for ScoredNeighborhood {
+    type Target = Neighborhood;
+    fn deref(&self) -> &Self::Target { &self.neighborhood }
+}
+
 pub struct Ctx<'a> {
     // Derived from the entity:
     me: &'a Entity,
@@ -214,8 +225,8 @@ pub struct Ctx<'a> {
     dir: Point,
 
     // Computed during the turn:
-    neighborhood: Neighborhood,
-    sneakable: Neighborhood,
+    reachable: ScoredNeighborhood,
+    sneakable: ScoredNeighborhood,
     ran_vision: bool,
 
     // Mutable outputs:
@@ -250,7 +261,7 @@ fn is_hiding_place(ctx: &Ctx, point: Point) -> bool {
     cell.is_shadow_cover() && ctx.me.species.light.is_empty()
 }
 
-fn get_basic_check<'a>(ctx: &'a Ctx) -> impl Fn(Point) -> Status + use<'a> {
+fn get_reach_check<'a>(ctx: &'a Ctx) -> impl Fn(Point) -> Status + use<'a> {
     let (fov, known, pos) = (&ctx.env.fov, ctx.known, ctx.pos);
     move |p: Point| match known.get(p).status() {
         Status::Occupied if (p - pos).len_l1() == 1 => Status::Blocked,
@@ -270,21 +281,21 @@ fn get_sneak_check<'a, 'b>(ctx: &'a Ctx<'b>) -> impl Fn(Point) -> Status + use<'
     }
 }
 
-fn ensure_neighborhood(ctx: &mut Ctx) {
-    if !ctx.neighborhood.visited.is_empty() { return; }
+fn ensure_reachable(ctx: &mut Ctx) {
+    if !ctx.reachable.visited.is_empty() { return; }
 
     ensure_vision(ctx);
-    let (pos, check) = (ctx.pos, get_basic_check(ctx));
-    ctx.neighborhood = DijkstraMap(pos, check, SEARCH_CELLS, SEARCH_LIMIT);
+    let (pos, check) = (ctx.pos, get_reach_check(ctx));
+    ctx.reachable.neighborhood = DijkstraMap(pos, check, SEARCH_CELLS, SEARCH_LIMIT);
 
-    if let Some(x) = &mut ctx.env.debug { x.record_neighborhood(&ctx.neighborhood); }
+    if let Some(x) = &mut ctx.env.debug { x.record_neighborhood(&ctx.reachable); }
 }
 
 fn ensure_sneakable(ctx: &mut Ctx) {
     if !ctx.sneakable.visited.is_empty() { return; }
 
     let (pos, check) = (ctx.pos, get_sneak_check(ctx));
-    ctx.sneakable = DijkstraMap(pos, check, HIDING_CELLS, HIDING_LIMIT);
+    ctx.sneakable.neighborhood = DijkstraMap(pos, check, HIDING_CELLS, HIDING_LIMIT);
 }
 
 fn ensure_vision(ctx: &mut Ctx) {
@@ -393,9 +404,9 @@ fn select_explore_target(ctx: &mut Ctx) -> Option<Point> {
         base * (cos + 1.).pow(4) / (distance as f64).pow(2)
     };
 
-    ensure_neighborhood(ctx);
+    ensure_reachable(ctx);
 
-    let scores: Vec<_> = ctx.neighborhood.visited.iter().map(
+    let scores: Vec<_> = ctx.reachable.visited.iter().map(
         |&(p, distance)| (p, score(p, distance))).collect();
     select_target(&scores, ctx.env)
 }
@@ -439,9 +450,9 @@ fn select_chase_target(ctx: &mut Ctx) -> Option<Point> {
         Some(-1.0 * d0 + -6.0 * d1 * decay + 12.0 * cos0 + 15.0 * cos1 + 4.0 * n as f64)
     };
 
-    ensure_neighborhood(ctx);
+    ensure_reachable(ctx);
 
-    let n = &ctx.neighborhood;
+    let n = &ctx.reachable.neighborhood;
     let scores: Vec<_> = n.blocked.iter().chain(&n.visited).filter_map(
         |&(p, distance)| Some((p, score(p, distance)?))).collect();
     select_target_softmax(&scores, ctx.env, 4.)
@@ -482,8 +493,8 @@ fn select_flight_target(ctx: &mut Ctx, hiding: bool) -> Option<Point> {
     };
 
     let min_score = score(pos, 0).0;
-    let map = if hiding { &ctx.sneakable.visited } else { &ctx.neighborhood.visited };
-    let scores: Vec<_> = map.iter().filter_map(|&(p, distance)| {
+    let n = if hiding { &ctx.sneakable.visited } else { &ctx.reachable.visited };
+    let scores: Vec<_> = n.iter().filter_map(|&(p, distance)| {
         let (score, valid) = score(p, distance);
         if valid && score >= min_score { Some((p, score)) } else { None }
     }).collect();
@@ -766,7 +777,7 @@ fn AStarHelper(ctx: &mut Ctx, target: Point, kind: PathKind) -> Option<Vec<Point
     let result = if hiding {
         AStar(source, target, ASTAR_CELLS_WANDER, get_sneak_check(ctx))
     } else {
-        AStar(source, target, ASTAR_CELLS_WANDER, get_basic_check(ctx))
+        AStar(source, target, ASTAR_CELLS_WANDER, get_reach_check(ctx))
     };
     if let Some(mut path) = result {
         path.insert(0, source);
@@ -774,12 +785,12 @@ fn AStarHelper(ctx: &mut Ctx, target: Point, kind: PathKind) -> Option<Vec<Point
     }
 
     // If that fails, recover a path from the Dijkstra neighborhood:
-    let cells = if hiding { &mut ctx.sneakable } else { &mut ctx.neighborhood };
+    let cells = if hiding { &mut ctx.sneakable } else { &mut ctx.reachable };
     if cells.visited.is_empty() { return None; }
 
     // Lazily construct a table of neighborhood's scores:
     let scores = &mut cells.scores;
-    if scores.is_empty() { *scores = cells.visited.iter().map(|&x| x).collect(); }
+    if scores.is_empty() { *scores = cells.neighborhood.visited.iter().map(|&x| x).collect(); }
 
     // Walk back from `target`, greedily moving to the closest neighbor to `source`.
     // Use the A* heuristic to break ties to favor that follows the LOS.
@@ -1065,9 +1076,9 @@ fn CanRestAt(ctx: &Ctx, point: Point) -> bool {
 trait CellPredicate = Fn(&Ctx, Point) -> bool;
 
 fn FindNeed<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> bool {
-    ensure_neighborhood(ctx);
+    ensure_reachable(ctx);
 
-    let n = &ctx.neighborhood;
+    let n = &ctx.reachable.neighborhood;
     for &(point, _) in n.blocked.iter().chain(&n.visited) {
         if valid(ctx, point) { return FindPath(ctx, point, kind); }
     }
@@ -1494,7 +1505,7 @@ fn HideFromThreats(ctx: &mut Ctx) -> Result {
 }
 
 fn FleeFromThreats(ctx: &mut Ctx) -> Result {
-    ensure_neighborhood(ctx);
+    ensure_reachable(ctx);
     let target = select_flight_target(ctx, /*hiding=*/false);
     let Some(target) = target else { return Result::Failed };
 
@@ -2189,7 +2200,7 @@ impl AIState {
             dir: me.dir,
 
             // Computed during the turn:
-            neighborhood: Default::default(),
+            reachable: Default::default(),
             sneakable: Default::default(),
             ran_vision: false,
 

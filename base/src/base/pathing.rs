@@ -380,7 +380,6 @@ impl IndexMut<DijkstraNodeIndex> for Vec<DijkstraNode> {
 pub struct Neighborhood {
     pub blocked: Vec<(Point, i32)>,
     pub visited: Vec<(Point, i32)>,
-    pub scores: HashMap<Point, i32>,
 }
 
 // Expose a distance function for use in other heuristics.
