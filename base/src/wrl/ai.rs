@@ -2192,6 +2192,12 @@ impl AIState {
         debug.lines
     }
 
+    pub fn notify_item(&mut self, pos: Point, item: &Item) {
+        let map = &mut self.blackboard.last_seen;
+        if item == &Item::Berry { map.entry(PathKind::Berry).or_insert(pos); }
+        if item == &Item::Corpse { map.entry(PathKind::Meat).or_insert(pos); }
+    }
+
     pub fn plan(&mut self, me: &Entity, env: AIEnv) -> Action {
         let known = &*me.known;
         let blackboard = &mut self.blackboard;

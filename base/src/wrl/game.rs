@@ -440,6 +440,7 @@ impl Board {
         let Some(entity) = self.entities.get_mut(eid) else { return };
 
         entity.known.update_items(pos, &item);
+        entity.ai.notify_item(pos, &item);
     }
 
     fn remove_item(&mut self, pos: Point, item: Item) -> bool {
