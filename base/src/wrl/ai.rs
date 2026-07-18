@@ -1099,6 +1099,8 @@ fn CheckPathTarget<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) ->
 
 fn ChooseNeighbor<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> Option<Point> {
     let Ctx { pos, dir, .. } = *ctx;
+    if valid(ctx, pos) { return Some(pos); }
+
     let path = &ctx.blackboard.path;
     if path.kind == kind && let Some(&x) = path.path.last() &&
        (x - pos).len_l1() <= 1 && valid(ctx, x) && ctx.known.get(x).visible() {
@@ -1106,7 +1108,7 @@ fn ChooseNeighbor<F: CellPredicate>(ctx: &mut Ctx, kind: PathKind, valid: F) -> 
     }
 
     let mut best = (std::f64::NEG_INFINITY, None);
-    for &x in [dirs::NONE].iter().chain(&dirs::ALL) {
+    for &x in &dirs::ALL {
         if !valid(ctx, pos + x) { continue; }
         let score = (dir.dot(x) as f64).pow(2) / max(x.len_l2_squared(), 1) as f64;
         if score > best.0 { best = (score, Some(pos + x)); }
