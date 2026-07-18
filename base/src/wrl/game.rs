@@ -1056,11 +1056,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             if !okay { return ActionResult::failure(); }
 
             let color = 0x0080ff;
-            let effect = Effect::serial(vec![
-                flash_tile(target, color, None),
-                flash_entity(source, color).delay(UI_FLASH / 2),
-            ]);
-            state.add_effect(effect);
+            state.add_effect(apply_flash(source, target, color, None));
             ActionResult::success()
         }
         Action::Eat { target, item } => {
@@ -1080,11 +1076,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 let Some(item) = item else { return };
                 state.board.remove_item(target, item);
             });
-            let effect = Effect::serial(vec![
-                flash_tile(target, color, Some(cb)),
-                flash_entity(source, color).delay(UI_FLASH / 2),
-            ]);
-            state.add_effect(effect);
+            state.add_effect(apply_flash(source, target, color, Some(cb)));
             ActionResult::success()
         }
         Action::Call { call, look } => {
@@ -1366,6 +1358,17 @@ fn flash_tile<T: Into<Color>>(target: Point, color: T, cb: Option<CB>) -> Effect
     let mut effect = Effect::repeat(frame, UI_FLASH);
     if let Some(x) = cb { effect.sub_on_finished(x); }
     effect
+}
+
+fn apply_flash<T: Into<Color>>(source: Point, target: Point, color: T, cb: Option<CB>) -> Effect {
+    let color = color.into();
+    let scale = if source == target { 0. } else { 1. };
+    let delay = if source == target { UI_FLASH / 2 } else { 0 };
+
+    Effect::serial(vec![
+        flash_tile(target, color, cb).scale(scale),
+        flash_entity(source, color).delay(delay),
+    ])
 }
 
 fn apply_noise<T: Copy + Into<Color>>(
