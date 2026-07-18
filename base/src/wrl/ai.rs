@@ -869,8 +869,11 @@ fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
     let next = path.path[j];
     let mut target = next;
     for &point in path.path.iter().skip(j).take(8) {
-        let los = LOS(pos, point);
-        if los.iter().all(|&x| known.get(x).unblocked()) { target = point; }
+        let free = pos != point && {
+            let los = LOS(pos, point);
+            los[1..los.len() - 1].iter().all(|&x| known.get(x).unblocked())
+        };
+        if free { target = point; }
     }
     if IsChasePathKind(kind) && path.path.len() == j + 2 {
         target = path.path[j + 1];
