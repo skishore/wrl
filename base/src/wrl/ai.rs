@@ -979,14 +979,19 @@ fn PathToTargetImpl(ctx: &mut Ctx, target: Point, range: Bound, flip: bool) -> O
     // close to attacking the target), choose one closest to our attack range.
     let pick = |dirs: &[Point], rng: &mut RNG| {
         let cell = known.get(target);
-        let shade = cell.shade();
-        let light = ctx.me.species.light.radius;
-        let cover = matches!(cell.tile(), Some(x) if x.is_cover());
+        let mut radius = range.radius;
 
-        // Check for any of several reasons to stay close to a target.
-        let mut radius = min(range.radius, FOLLOW_RANGE.radius);
-        if shade { radius = min(radius, max(light - 1, 1)); }
-        if cover { radius = min(radius, 1); }
+        // Check for any of several reasons to move closer to a target entity.
+        // These reasons don't apply to cells, because cells don't move.
+        if cell.occupied() {
+            let shade = cell.shade();
+            let light = ctx.me.species.light.radius;
+            let cover = cell.tile().map_or(false, |x| x.is_cover());
+
+            radius = min(radius, FOLLOW_RANGE.radius);
+            if shade { radius = min(radius, max(light - 1, 1)); }
+            if cover { radius = min(radius, 1); }
+        }
         let radius = radius;
 
         assert!(!dirs.is_empty());
