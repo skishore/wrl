@@ -852,67 +852,21 @@ fn FindPath(ctx: &mut Ctx, target: Point, kind: PathKind) -> bool {
 }
 
 fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
-    if ctx.blackboard.path.kind != kind { return None; }
+    if !CheckPathKind(ctx, kind) { return None; }
 
-    let Ctx { known, pos, .. } = *ctx;
-    let path = std::mem::take(&mut ctx.blackboard.path);
-    if path.path.is_empty() { return None; }
-
-    // Check if every cell on the path is free. Other than the cell that we'll
-    // move to next, we allow entities to temporarily move onto the path.
-    let (i, j) = (path.step, path.step + 1);
-    let valid = (||{
-        let Some(&prev) = path.path.get(i) else { return false };
-        let Some(&next) = path.path.get(j) else { return false };
-        if prev != pos { return false };
-
-        let valid = |p: Point| match known.get(p).status() {
-            Status::Free | Status::Unknown => true,
-            Status::Occupied => p != next,
-            Status::Blocked => false,
-        };
-        path.path.iter().skip(j).rev().skip(path.skip).all(|&x| valid(x))
-    })();
-    if !valid { return None; }
-
-    // When sneaking, also check that all cells are valid hiding places.
-    let seen = kind == PathKind::Hide &&
-               path.path.iter().skip(i).any(|&x| !is_hiding_place(ctx, x));
-    if seen { return None; }
-
-    // The path is good! Follow it. Look ahead as far as possible on the path.
-    //
-    // Special case: don't let an enemy kite you around a one-tile obstacle.
-    let next = path.path[j];
-    let mut target = next;
-    for &point in path.path.iter().skip(j).take(8) {
-        let free = pos != point && {
-            let los = LOS(pos, point);
-            los[1..los.len() - 1].iter().all(|&x| known.get(x).unblocked())
-        };
-        if free { target = point; }
-    }
-    if IsChasePathKind(kind) && path.path.len() == j + 2 {
-        target = path.path[j + 1];
-    }
-    let (look, step) = (target - pos, next - pos);
-
-    // Determine how fast to move on the path. Only move quickly (and noisily)
-    // when fleeing from an enemy, chasing one down, or returning to a leader.
-    let mut turns = WANDER_TURNS;
-    if IsChasePathKind(kind) && let Some(x) = &ctx.blackboard.chase {
-        let limit = ctx.known.time_at_turn(MIN_SEARCH_TURNS);
-        if x.target.time > limit && !x.target.slow { turns = 1. };
-    } else if kind == PathKind::Flee && any_threat_awake(ctx) {
-        turns = 1.;
-    } else if kind == PathKind::Leader {
-        turns = FOLLOW_TURNS;
+    if !CheckStepsAreFree(ctx) || !CheckStepsAreHidingSpots(ctx) {
+        ctx.blackboard.path.clear();
+        return None;
     }
 
-    // We're following the path; restore it.
-    ctx.blackboard.path = path;
-    ctx.blackboard.path.step += 1;
-    Some(Action::Move { look, step, turns })
+    let skip = std::mem::take(&mut ctx.blackboard.path.skip);
+    if MoveAlongPath(ctx) != Result::Running {
+        ctx.blackboard.path.clear();
+        return None;
+    }
+
+    ctx.blackboard.path.skip = skip;
+    std::mem::take(&mut ctx.action)
 }
 
 fn CheckPathKind(ctx: &Ctx, kind: PathKind) -> bool {
