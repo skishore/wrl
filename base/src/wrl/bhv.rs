@@ -348,7 +348,7 @@ macro_rules! util {
 
 #[macro_export]
 macro_rules! pri {
-    (@go $name:expr, $x:expr) => { $x };
+    (@go $name:expr, $x:expr) => { { $name; $x } };
     (@go $name:expr, $x:expr $(,$xs:expr)+) => {{
         use super::bhv::{Composite, Node, PriPolicy};
         Node::new($name, Composite::new(PriPolicy {}, $x, pri![@go () $(,$xs)+]))
@@ -358,7 +358,7 @@ macro_rules! pri {
 
 #[macro_export]
 macro_rules! run {
-    (@go $name:expr, $x:expr) => { $x };
+    (@go $name:expr, $x:expr) => { { $name; $x } };
     (@go $name:expr, $x:expr $(,$xs:expr)+) => {{
         use super::bhv::{Composite, Node, RunPolicy};
         Node::new($name, Composite::new(RunPolicy {}, $x, run![@go () $(,$xs)+]))
@@ -368,7 +368,7 @@ macro_rules! run {
 
 #[macro_export]
 macro_rules! seq {
-    (@go $name:expr, $x:expr) => { $x };
+    (@go $name:expr, $x:expr) => { { $name; $x } };
     (@go $name:expr, $x:expr $(,$xs:expr)+) => {{
         use super::bhv::{Composite, Node, SeqPolicy};
         Node::new($name, Composite::new(SeqPolicy {}, $x, seq![@go () $(,$xs)+]))
