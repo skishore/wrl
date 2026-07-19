@@ -46,6 +46,10 @@ impl<S: Label, T: Bhv> Node<S, T> {
         Node::new(self.label, OnExit(f, self.tree))
     }
 
+    pub fn on_fail<F: Fn(&mut Ctx) -> ()>(self, f: F) -> Node<S, OnFail<F, T>> {
+        Node::new(self.label, OnFail(f, self.tree))
+    }
+
     pub fn on_tick<F: Fn(&mut Ctx) -> ()>(self, f: F) -> Node<S, OnTick<F, T>> {
         Node::new(self.label, OnTick(f, self.tree))
     }
@@ -93,13 +97,25 @@ impl<S: Label, T: Bhv> Bhv for Node<S, T> {
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Exit / Tick
+// Decorators:
 
 pub struct OnExit<S, T>(S, T);
 
 impl<S: Fn(&mut Ctx) -> (), T: Bhv> Bhv for OnExit<S, T> {
     fn debug(&self, debug: &mut DebugLog) { self.1.debug(debug) }
     fn reset(&mut self, ctx: &mut Ctx) { self.1.reset(ctx); (self.0)(ctx) }
+    fn tick(&mut self, ctx: &mut Ctx) -> Result {
+        let result = self.1.tick(ctx);
+        if result == Result::Failed { (self.0)(ctx); }
+        result
+    }
+}
+
+pub struct OnFail<S, T>(S, T);
+
+impl<S: Fn(&mut Ctx) -> (), T: Bhv> Bhv for OnFail<S, T> {
+    fn debug(&self, debug: &mut DebugLog) { self.1.debug(debug) }
+    fn reset(&mut self, ctx: &mut Ctx) { self.1.reset(ctx) }
     fn tick(&mut self, ctx: &mut Ctx) -> Result {
         let result = self.1.tick(ctx);
         if result == Result::Failed { (self.0)(ctx); }
@@ -315,7 +331,7 @@ impl<S: Policy, T: Bhv, U: Bhv> Bhv for Composite<S, T, U> {
 
 #[macro_export]
 macro_rules! act {
-    ($name:literal, $x:expr) => {{
+    ($name:expr, $x:expr) => {{
         use super::bhv::{Act, Node};
         Node::new(concat!("! ", $name), Act::new($x))
     }};
@@ -323,7 +339,7 @@ macro_rules! act {
 
 #[macro_export]
 macro_rules! cb {
-    ($name:literal, $x:expr) => {{
+    ($name:expr, $x:expr) => {{
         use super::bhv::{Lambda, Node};
         Node::new(concat!("\\ ", $name), Lambda::new($x))
     }};
@@ -331,7 +347,7 @@ macro_rules! cb {
 
 #[macro_export]
 macro_rules! cond {
-    ($name:literal, $x:expr) => {{
+    ($name:expr, $x:expr) => {{
         use super::bhv::{Cond, Node};
         Node::new(concat!("= ", $name), Cond::new($x))
     }};
@@ -339,7 +355,7 @@ macro_rules! cond {
 
 #[macro_export]
 macro_rules! util {
-    ($name:literal $(,($x:expr, $y:expr))+ $(,)?) => {{
+    ($name:expr $(,($x:expr, $y:expr))+ $(,)?) => {{
         use super::bhv::{Node, Utility, UtilityNode};
         let utility = Utility::new(vec![$(Box::new(UtilityNode::new($x, $y)),)+]);
         Node::new(concat!("# ", $name), utility)

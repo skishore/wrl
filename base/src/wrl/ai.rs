@@ -546,10 +546,9 @@ fn CheckLastSeen(ctx: &mut Ctx, kind: PathKind) -> bool {
     ctx.blackboard.last_seen.contains_key(&kind)
 }
 
-fn ClearLastSeen(ctx: &mut Ctx, kind: PathKind) -> Result {
-    if kind == PathKind::Leader { return Result::Failed; }
+fn ClearLastSeen(ctx: &mut Ctx, kind: PathKind) {
+    if kind == PathKind::Leader { return; }
     ctx.blackboard.last_seen.remove(&kind);
-    Result::Failed
 }
 
 fn UpdateLastSeen(ctx: &mut Ctx, kind: PathKind, valid: CellPredicate) -> Result {
@@ -859,13 +858,11 @@ fn FollowPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
         return None;
     }
 
-    let skip = std::mem::take(&mut ctx.blackboard.path.skip);
+    assert!(ctx.blackboard.path.skip == 0);
     if MoveAlongPath(ctx) != Result::Running {
         ctx.blackboard.path.clear();
         return None;
     }
-
-    ctx.blackboard.path.skip = skip;
     std::mem::take(&mut ctx.action)
 }
 
@@ -955,8 +952,7 @@ fn MoveAlongPath(ctx: &mut Ctx) -> Result {
 
 // Attacking:
 
-fn AttackPathTarget(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
-    if ctx.blackboard.path.kind != kind { return None; }
+fn AttackPathTarget(ctx: &mut Ctx) -> Option<Action> {
     let target = *ctx.blackboard.path.path.last()?;
     AttackTarget(ctx, target)
 }
@@ -1134,8 +1130,21 @@ fn CanRestAt(ctx: &Ctx, point: Point) -> bool {
     point == ctx.pos || ctx.known.get(point).status() == Status::Free
 }
 
-fn FindNeed(ctx: &mut Ctx, kind: PathKind, valid: CellPredicate) -> bool {
-    if let Some(point) = ChooseNeighbor(ctx, kind, valid) {
+fn FindMatchingNeighbor(ctx: &mut Ctx, valid: CellPredicate) -> Option<Point> {
+    let Ctx { pos, dir, .. } = *ctx;
+    if valid(ctx, pos) { return Some(pos); }
+
+    let mut best = (std::f64::NEG_INFINITY, None);
+    for &x in &dirs::ALL {
+        if !valid(ctx, pos + x) { continue; }
+        let score = (dir.dot(x) as f64).pow(2) / x.len_taxicab() as f64;
+        if score > best.0 { best = (score, Some(pos + x)); }
+    }
+    best.1
+}
+
+fn FindNewPath(ctx: &mut Ctx, kind: PathKind, valid: CellPredicate) -> bool {
+    if let Some(point) = FindMatchingNeighbor(ctx, valid) {
         return FindPath(ctx, point, kind);
     }
 
@@ -1151,30 +1160,7 @@ fn FindNeed(ctx: &mut Ctx, kind: PathKind, valid: CellPredicate) -> bool {
     false
 }
 
-fn ChooseNeighbor(ctx: &mut Ctx, kind: PathKind, valid: CellPredicate) -> Option<Point> {
-    let Ctx { pos, dir, .. } = *ctx;
-    if valid(ctx, pos) { return Some(pos); }
-
-    let path = &ctx.blackboard.path;
-    if path.kind == kind && let Some(&x) = path.path.last() &&
-       (x - pos).len_l1() <= 1 && valid(ctx, x) && ctx.known.get(x).visible() {
-        return Some(x);
-    }
-
-    let mut best = (std::f64::NEG_INFINITY, None);
-    for &x in &dirs::ALL {
-        if !valid(ctx, pos + x) { continue; }
-        let score = (dir.dot(x) as f64).pow(2) / max(x.len_l2_squared(), 1) as f64;
-        if score > best.0 { best = (score, Some(pos + x)); }
-    }
-
-    let result = best.1?;
-    let path = LOS(pos, result);
-    ctx.blackboard.path = CachedPath { kind, path, skip: 1, step: 0 };
-    Some(result)
-}
-
-fn EatMeatNearby(ctx: &mut Ctx) -> Option<Action> {
+fn EatMeatNow(ctx: &mut Ctx) -> Option<Action> {
     let target = *ctx.blackboard.path.path.last()?;
 
     ctx.blackboard.hunger.update(MAX_HUNGER);
@@ -1182,7 +1168,7 @@ fn EatMeatNearby(ctx: &mut Ctx) -> Option<Action> {
     Some(Action::Eat { target, item: Some(Item::Corpse) })
 }
 
-fn EatBerryNearby(ctx: &mut Ctx) -> Option<Action> {
+fn EatBerryNow(ctx: &mut Ctx) -> Option<Action> {
     let target = *ctx.blackboard.path.path.last()?;
 
     let prev = ctx.blackboard.hunger.cur;
@@ -1197,7 +1183,7 @@ fn EatBerryNearby(ctx: &mut Ctx) -> Option<Action> {
     Some(Action::Eat { target, item: Some(Item::Berry) })
 }
 
-fn DrinkWaterNearby(ctx: &mut Ctx) -> Option<Action> {
+fn DrinkWaterNow(ctx: &mut Ctx) -> Option<Action> {
     let target = *ctx.blackboard.path.path.last()?;
 
     let gain = ctx.env.rng.random_range(THIRST_GAIN);
@@ -1206,21 +1192,7 @@ fn DrinkWaterNearby(ctx: &mut Ctx) -> Option<Action> {
     Some(Action::Drink { target })
 }
 
-fn FindNearbyBerryTree(ctx: &mut Ctx) -> Option<Action> {
-    let Ctx { known, pos, .. } = *ctx;
-    let (kind, valid) = (PathKind::BerryTree, HasBerryTree);
-
-    if CheckPathTarget(ctx, kind, valid) {
-        let cur = ctx.blackboard.path.path.last().copied()?;
-        if (cur - pos).len_l1() > 1 && known.get(cur).visible() { return None; }
-    }
-
-    let target = ChooseNeighbor(ctx, kind, valid)?;
-    if !known.get(target).visible() { return Some(Action::Look { look: target - pos }); }
-    None
-}
-
-fn GetRestHere(ctx: &mut Ctx) -> Option<Action> {
+fn GetRestNow(ctx: &mut Ctx) -> Option<Action> {
     let gain = ctx.env.rng.random_range(RESTED_GAIN);
     ctx.blackboard.weariness.update(gain);
 
@@ -1894,68 +1866,51 @@ fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
 //    remembered cell, path as close to it as possible. Or: generalize this
 //    fallback to all "path to target" cases - see the second item above.
 
-fn AttackOrFollowPath(kind: PathKind) -> impl Bhv {
-    pri![
-        "AttackOrFollowPath",
-        act!("AttackPathTarget", move |x| AttackPathTarget(x, kind)),
-        act!("FollowPath", move |x| FollowPath(x, kind)),
+macro_rules! path {
+    ($n:expr, $k:expr, $v:expr, $f:expr) => {
+        seq![$n, ComputePath($k, $v), cb!("MoveAlongPath", MoveAlongPath), $f]
+    };
+}
+
+fn ComputePath(kind: PathKind, predicate: CellPredicate) -> impl Bhv {
+    seq![
+        "ComputePath",
+        cond!("CheckLastSeen", move |x| CheckLastSeen(x, kind)),
+        pri![
+            "SelectOldOrNewPath",
+            CheckOldPath(kind, predicate),
+            cond!("FindNewPath", move |x| FindNewPath(x, kind, predicate)),
+        ]
+        .on_fail(move |x| ClearLastSeen(x, kind)),
     ]
 }
 
-macro_rules! path {
-    ($n:expr, $k:expr, $v:expr, $f:expr) => {
-        seq![
-            concat!("Find(", $n, ")"),
-            cond!("CheckLastSeen", |x| CheckLastSeen(x, $k)),
-            pri![
-                concat!("PathTo(", $n, ")"),
-                seq!["FollowOldPath", cond!("CheckPath", |x| CheckPathTarget(x, $k, $v)), $f],
-                seq!["FindNewPath", cond!("FindPath", |x| FindNeed(x, $k, $v)), $f],
-                cb!("ClearLastSeen", |x| ClearLastSeen(x, $k)),
-            ],
-        ]
-    };
-}
-
-macro_rules! pathfind {
-    ($n:expr, $k:expr, $v:expr, $f:expr) => {
-        seq![
-            $n,
-            cond!("CheckLastSeen", |x| CheckLastSeen(x, $k)),
-            pri![
-                "ComputePath",
-                CheckCurrentPath($k, $v),
-                cond!("FindNewPath", |x| FindNeed(x, $k, $v)),
-                cb!("ClearLastSeen", |x| ClearLastSeen(x, $k)),
-            ],
-            cb!("MoveAlongPath", MoveAlongPath),
-            $f,
-        ]
-    };
-}
-
-fn CheckCurrentPath(kind: PathKind, predicate: CellPredicate) -> impl Bhv {
+fn CheckOldPath(kind: PathKind, predicate: CellPredicate) -> impl Bhv {
     seq![
-        "CheckCurrentPath",
+        "CheckOldPath",
         cond!("CheckPathKind", move |x| CheckPathKind(x, kind)),
         cond!("CheckPathTarget", move |x| CheckPathTarget(x, kind, predicate)),
         cond!("CheckStepsAreFree", |x| CheckStepsAreFree(x)),
-        cond!("CheckStepsAreHidingSpots", |x| CheckStepsAreHidingSpots(x)),
     ]
 }
 
 fn ForageForBerries() -> impl Bhv {
     const KIND: PathKind = PathKind::BerryTree;
-    pri![
+    seq![
         "ForageForBerries",
-        act!("FindNearbyBerryTree", FindNearbyBerryTree),
-        path!("BerryTree", KIND, HasBerryTree, AttackOrFollowPath(KIND)),
+        ComputePath(KIND, HasBerryTree),
+        pri![
+            "AttackOrFollowPath",
+            act!("AttackPathTarget", AttackPathTarget),
+            cb!("MoveAlongPath", MoveAlongPath),
+            cb!("Fail", |_| Result::Failed),
+        ],
     ]
 }
 
 fn EatBerries() -> impl Bhv {
     const KIND: PathKind = PathKind::Berry;
-    pathfind!("EatBerries", KIND, HasBerry, act!("EatBerryNearby", EatBerryNearby))
+    path!("EatBerries", KIND, HasBerry, act!("EatBerryNow", EatBerryNow))
 }
 
 fn EatFood() -> impl Bhv {
@@ -1966,16 +1921,16 @@ fn EatFood() -> impl Bhv {
 
 fn DrinkWater() -> impl Bhv {
     const KIND: PathKind = PathKind::Water;
-    pathfind!("DrinkWater", KIND, HasWater, act!("DrinkWaterNearby", DrinkWaterNearby))
-    .on_tick(|x| x.blackboard.finding_water = true)
-    .on_exit(|x| x.blackboard.finding_water = false)
+    path!("DrinkWater", KIND, HasWater, act!("DrinkWaterNow", DrinkWaterNow))
+        .on_tick(|x| x.blackboard.finding_water = true)
+        .on_exit(|x| x.blackboard.finding_water = false)
 }
 
 fn GetRest() -> impl Bhv {
     const KIND: PathKind = PathKind::Rest;
-    pathfind!("GetRest", KIND, CanRestAt, act!("GetRestHere", GetRestHere))
-    .on_tick(|x| x.blackboard.getting_rest_ = true)
-    .on_exit(|x| x.blackboard.getting_rest_ = false)
+    path!("GetRest", KIND, CanRestAt, act!("GetRestNow", GetRestNow))
+        .on_tick(|x| x.blackboard.getting_rest_ = true)
+        .on_exit(|x| x.blackboard.getting_rest_ = false)
 }
 
 fn Wander() -> impl Bhv {
@@ -2060,7 +2015,7 @@ fn HuntForMeat() -> impl Bhv {
         cond!("HungryForMeat", |x| HungryForMeat(x)),
         pri![
             "HuntForMeat",
-            pathfind!("EatMeat", KIND, HasMeat, act!("EatMeatNearby", EatMeatNearby)),
+            path!("EatMeat", KIND, HasMeat, act!("EatMeatNow", EatMeatNow)),
             seq![
                 "HuntForPrey",
                 run![
@@ -2154,7 +2109,7 @@ fn FollowAttackCommand() -> impl Bhv {
 
 fn ReturnToLeader() -> impl Bhv {
     const KIND: PathKind = PathKind::Leader;
-    path!("Leader", KIND, IsLeader, act!("FollowPath", |x| FollowPath(x, KIND)))
+    path!("FindLeader", KIND, IsLeader, cb!("Fail", |_| Result::Failed))
 }
 
 fn SummonRoot() -> impl Bhv {
@@ -2187,7 +2142,7 @@ fn Root() -> impl Bhv {
         "Root",
         cb!("TickBasicNeeds", TickBasicNeeds),
         cb!("RunCombatAnalysis", RunCombatAnalysis),
-        run!(
+        run![
             "UpdateLastSeen",
             cb!("SpotMeat", |x| UpdateLastSeen(x, PathKind::Meat, HasMeat)),
             cb!("SpotWater", |x| UpdateLastSeen(x, PathKind::Water, HasWater)),
@@ -2195,7 +2150,7 @@ fn Root() -> impl Bhv {
             cb!("SpotBerryTree", |x| UpdateLastSeen(x, PathKind::BerryTree, HasBerryTree)),
             cb!("SpotRestArea", |x| UpdateLastSeen(x, PathKind::Rest, CanRestAt)),
             cb!("Fail", |_| Result::Failed),
-        ),
+        ],
         SummonRoot(),
         FightOrFlight(),
         HuntForMeat(),
