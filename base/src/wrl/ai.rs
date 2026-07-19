@@ -760,7 +760,7 @@ impl CachedPath {
 
     fn replace(&mut self, path: Vec<Point>) {
         self.path = path;
-        self.skip = 0;
+        self.step = 0;
     }
 }
 
