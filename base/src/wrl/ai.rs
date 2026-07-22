@@ -1823,8 +1823,10 @@ fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
 //  - Last-seen cache for cells satisfying a need, to skip repeated searches.
 //    We have this cache, now, but we should add a "last failed" time too.
 //
-//  - Update CachedPath to do "look at the target for a path w/ skip = 1",
-//    then get rid of the Look actions for basic needs and `SearchForEnemy`.
+//  - If FindMatchingCell pulled from the cache, and we can't find a path
+//    all the way to the cache target, path as close as possible and re-plan
+//    when we're near it again. Or: generalize this fallback to all "path to
+//    target" cases, and drop the first bullet above.
 //
 //  - Make the our-team-strength logic quadratic in team size.
 //
@@ -1839,13 +1841,6 @@ fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
 //
 //  - Only warn seen-but-unknown-valence sources. As is, we can have long
 //    chains of warnings over nothing. Investigate unseen sources instead.
-//
-//  - Split up the two FindNeed cases (target in neighborhood; and pathing
-//    to a faraway-but-remembered cell) into different nodes.
-//
-//  - In the second FindNeed case, if we can't find a path all the way to the
-//    remembered cell, path as close to it as possible. Or: generalize this
-//    fallback to all "path to target" cases - see the second item above.
 
 macro_rules! path {
     ($n:expr, $k:expr, $v:expr, $f:expr) => {
