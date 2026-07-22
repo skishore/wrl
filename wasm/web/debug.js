@@ -28,7 +28,7 @@ class DebugTrace {
     this.showAll = true;
     this.showSeen = true;
     this.showUtility = true;
-    this.showNeighborhood = false;
+    this.showNeighborhood = true;
 
     this.animIndex = 0;
     this.tickIndex = 0;
@@ -477,7 +477,7 @@ class DebugTrace {
     const entityElements = this.tickState.entities.map(x => {
       const element = document.createElement('div');
       element.dataEID = x.eid;
-      element.textContent = `${x.name} - ${Math.max(Math.floor(100 * x.health), 1)}%`;
+      element.textContent = `${x.eid}: ${x.name} - ${Math.max(Math.floor(100 * x.health), 1)}%`;
       element.classList.add('entity');
       if (x.eid === this.eid) element.classList.add('selected');
       return element;

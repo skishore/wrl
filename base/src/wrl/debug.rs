@@ -85,7 +85,8 @@ struct DebugDetail {
 pub struct DebugFile {
     detail: DebugDetail,
     map: Matrix<Glyph>,
-    next_tick: usize,
+    tick: usize,
+    turn: usize,
 
     file: LogFile,
     logger: Logger,
@@ -103,7 +104,7 @@ impl Default for DebugFile {
 
         let detail = DebugDetail::default();
         let map = Matrix::new(Point(WORLD_SIZE, WORLD_SIZE), Glyph::wide(' '));
-        Self { detail, map, next_tick: 0, file, logger }
+        Self { detail, map, tick: 0, turn: 0, file, logger }
     }
 }
 
@@ -129,10 +130,11 @@ impl DebugFile {
         self.record_tick(action, board, me)?;
 
         self.detail = Default::default();
-        self.next_tick += 1;
+        self.turn += if me.player { 1 } else { 0 };
+        self.tick += 1;
 
         write!(self.file, "{{")?;
-        write!(self.file, r#""index":{},"#, self.next_tick - 1)?;
+        write!(self.file, r#""index":{},"#, self.tick - 1)?;
         write!(self.file, r#""type":"tick","#)?;
         write!(self.file, r#""time":"{}","#, board.time.nsec())?;
         write!(self.file, r#""eid":"{}""#, show(me.eid))?;
@@ -174,7 +176,7 @@ impl DebugFile {
         self.detail.animation.push(xs);
 
         write!(self.file, "{{")?;
-        write!(self.file, r#""index":{},"#, self.next_tick)?;
+        write!(self.file, r#""index":{},"#, self.tick)?;
         write!(self.file, r#""type":"animation","#)?;
         write!(self.file, r#""time":"{}","#, board.time.nsec())?;
         write!(self.file, r#""frame":{}"#, self.detail.animation.len() - 1)?;
@@ -185,7 +187,7 @@ impl DebugFile {
     fn record_tick(&mut self, action: &Action, board: &Board, me: &Entity) -> Result<()> {
         // Dump binary data for all animations happening prior to this tick.
         if !self.detail.animation.is_empty() {
-            let filename = format!("animation-{}.bin.gz", self.next_tick);
+            let filename = format!("animation-{}.bin.gz", self.tick);
             let mut file = self.logger.open_compressed(&filename);
 
             Self::write_bin(&mut file, &(self.detail.animation.len() as i32))?;
@@ -197,7 +199,7 @@ impl DebugFile {
         }
 
         // Dump binary data for the tick itself.
-        let filename = format!("tick-{}.bin.gz", self.next_tick);
+        let filename = format!("tick-{}.bin.gz", self.tick);
         let mut file = self.logger.open_compressed(&filename);
 
         // Dump binary data revealing all of the entities.
@@ -246,12 +248,14 @@ impl DebugFile {
 
         // Dump text debug output from behavior trees.
         let color = Color::white();
-        let mut lines = me.ai.get_trace(&me.known);
-        lines.insert(0, DebugLine { color, depth: 0, text: "".into() });
-        lines.insert(0, DebugLine { color, depth: 0, text: format!("{:?}", action) });
-        Self::write_bin(&mut file, &(lines.len() as i32))?;
+        let lines = me.ai.get_trace(&me.known);
+        let extra = [
+            DebugLine { color, depth: 0, text: format!("Turn {}: {:?}", self.turn, action) },
+            DebugLine { color, depth: 0, text: "".into() },
+        ];
+        Self::write_bin(&mut file, &((extra.len() + lines.len()) as i32))?;
 
-        for line in &lines {
+        for line in extra.iter().chain(&lines) {
             Self::write_bin(&mut file, &line.color)?;
             Self::write_bin(&mut file, &line.depth)?;
             Self::write_str(&mut file, &line.text)?;

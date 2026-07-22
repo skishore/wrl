@@ -228,7 +228,7 @@ fn main() {
         let sim = mode == GameMode::Sim;
         if sim { println!("Running with seed: {:?}", seed); }
         for i in 0..turns {
-            if sim { println!("Iteration {}:", i); }
+            if sim { println!("Turn {}:", i + 1); }
             game.add_input(Input::Char('.'));
             game.update();
         }
