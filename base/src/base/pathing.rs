@@ -221,6 +221,8 @@ pub fn AStarHeuristic(p: Point, los: &[Point]) -> i32 {
 
 pub fn AStar<F: Fn(Point) -> Status>(
         source: Point, target: Point, cells: i32, check: F) -> Option<Vec<Point>> {
+    if source == target { return Some(vec![]); }
+
     // Try line-of-sight - if that path is clear, then we don't need to search.
     // As with the full search below, we don't check if source is blocked here.
     let los = LOS(source, target);

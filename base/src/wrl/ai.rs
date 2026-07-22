@@ -75,6 +75,7 @@ const WANDER_TURNS: f64 = 2.0;
 struct Blackboard {
     dirs: CachedDirs,
     path: CachedPath,
+    request: Option<Point>,
     threats: ThreatState,
     flight: Option<FlightState>,
 
@@ -106,6 +107,7 @@ impl Blackboard {
         let mut result = Self {
             dirs: Default::default(),
             path: Default::default(),
+            request: None,
             threats: Default::default(),
             flight: None,
 
@@ -322,10 +324,6 @@ fn ensure_vision(ctx: &mut Ctx) {
     ctx.ran_vision = true;
 }
 
-//////////////////////////////////////////////////////////////////////////////
-
-// Uncategorized helpers:
-
 fn assess_directions(dirs: &[Point], turns: (i32, i32), rng: &mut RNG) -> Vec<Point> {
     if dirs.is_empty() { return vec![]; }
 
@@ -351,7 +349,29 @@ fn assess_directions(dirs: &[Point], turns: (i32, i32), rng: &mut RNG) -> Vec<Po
     result
 }
 
-fn select_target(scores: &[(Point, f64)], env: &mut AIEnv) -> Option<Point> {
+//////////////////////////////////////////////////////////////////////////////
+
+// Path target selectors:
+
+fn SelectChaseTarget(ctx: &mut Ctx) -> Option<Point> {
+    select_chase_target(ctx)
+}
+
+fn SelectExploreTarget(ctx: &mut Ctx) -> Option<Point> {
+    select_explore_target(ctx)
+}
+
+fn SelectFleeTarget(ctx: &mut Ctx) -> Option<Point> {
+    ensure_reachable(ctx);
+    select_flight_target(ctx, /*hiding=*/false)
+}
+
+fn SelectHideTarget(ctx: &mut Ctx) -> Option<Point> {
+    ensure_sneakable(ctx);
+    select_flight_target(ctx, /*hiding=*/true)
+}
+
+fn select_target_linear(scores: &[(Point, f64)], env: &mut AIEnv) -> Option<Point> {
     let max = scores.iter().fold(0f64, |acc, x| acc.max(x.1));
     if max == 0. { return None; }
 
@@ -415,7 +435,7 @@ fn select_explore_target(ctx: &mut Ctx) -> Option<Point> {
 
     let scores: Vec<_> = ctx.reachable.visited.iter().map(
         |&(p, distance)| (p, score(p, distance))).collect();
-    select_target(&scores, ctx.env)
+    select_target_linear(&scores, ctx.env)
 }
 
 fn select_chase_target(ctx: &mut Ctx) -> Option<Point> {
@@ -661,12 +681,6 @@ fn Assess(ctx: &mut Ctx) -> Option<Action> {
     FollowDirs(ctx, kind)
 }
 
-fn Explore(ctx: &mut Ctx) -> Option<Action> {
-    let kind = PathKind::Explore;
-    let target = select_explore_target(ctx)?;
-    if FindPath(ctx, target, kind) { FollowNewPath(ctx, kind) } else { None }
-}
-
 fn HeardUnknownNoise(ctx: &mut Ctx) -> bool {
     let bb = &mut ctx.blackboard;
     let (pos, threats) = (ctx.pos, &bb.threats);
@@ -742,6 +756,8 @@ fn WarnOffThreats(ctx: &mut Ctx) -> Option<Action> {
 // Pathfinding:
 
 type CellPredicate = fn(&Ctx, Point) -> bool;
+
+type PathTargetSelector = fn(&mut Ctx) -> Option<Point>;
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 enum PathKind {
@@ -830,7 +846,7 @@ fn AStarHelper(ctx: &mut Ctx, target: Point, kind: PathKind) -> Option<Vec<Point
     Some(path)
 }
 
-fn FindPath(ctx: &mut Ctx, target: Point, kind: PathKind) -> bool {
+fn FindPath(ctx: &mut Ctx, kind: PathKind, target: Point) -> bool {
     ensure_vision(ctx);
     let path = AStarHelper(ctx, target, kind);
     let Some(path) = path else { return false };
@@ -850,16 +866,18 @@ fn FindPath(ctx: &mut Ctx, target: Point, kind: PathKind) -> bool {
     true
 }
 
-fn FollowNewPath(ctx: &mut Ctx, kind: PathKind) -> Option<Action> {
-    if !CheckPathKind(ctx, kind) { return None; }
+fn IssuePathRequest(ctx: &mut Ctx, target: PathTargetSelector) -> bool {
+    ctx.blackboard.request = target(ctx);
+    ctx.blackboard.request.is_some()
+}
 
-    if !CheckPathStepsFree(ctx) || !CheckPathStepsHidden(ctx) {
-        ctx.blackboard.path.clear();
-        return None;
-    }
+fn FulfillPathRequest(ctx: &mut Ctx, kind: PathKind) -> bool {
+    let Some(target) = ctx.blackboard.request.take() else { return false };
+    FindPath(ctx, kind, target)
+}
 
-    assert!(ctx.blackboard.path.skip == 0);
-    if MoveAlongPath(ctx) != Result::Running {
+fn TakePathStep(ctx: &mut Ctx) -> Option<Action> {
+    if FollowPath(ctx) != Result::Running {
         ctx.blackboard.path.clear();
         return None;
     }
@@ -895,7 +913,7 @@ fn CheckPathStepsHidden(ctx: &Ctx) -> bool {
     path.path.iter().skip(path.step).all(|&x| is_hiding_place(ctx, x))
 }
 
-fn MoveAlongPath(ctx: &mut Ctx) -> Result {
+fn FollowPath(ctx: &mut Ctx) -> Result {
     let Ctx { pos, known, .. } = *ctx;
     let path = &ctx.blackboard.path;
     let kind = path.kind;
@@ -911,6 +929,13 @@ fn MoveAlongPath(ctx: &mut Ctx) -> Result {
         return ctx.choose_action(Action::Look { look: next - prev });
     }
 
+    // If `next` is occupied, look at it and discard the rest of the path.
+    let cell = known.get(next);
+    if !cell.visible() && matches!(cell.status(), Status::Blocked | Status::Occupied) {
+        ctx.blackboard.path.step += 1;
+        return ctx.choose_action(Action::Look { look: next - prev });
+    }
+
     // Else, follow the path, look as far ahead as posisble without seeing
     // any obstructions, and update our current step.
     //
@@ -923,7 +948,7 @@ fn MoveAlongPath(ctx: &mut Ctx) -> Result {
         };
         if free { target = point; }
     }
-    if IsChasePathKind(kind) && path.path.len() == j + 2 {
+    if IsChasePathKind(kind) && n == j + 2 {
         target = path.path[j + 1];
     }
     let (look, step) = (target - pos, next - pos);
@@ -1141,17 +1166,17 @@ fn FindMatchingNeighbor(ctx: &mut Ctx, valid: CellPredicate) -> Option<Point> {
 
 fn FindNewPath(ctx: &mut Ctx, kind: PathKind, valid: CellPredicate) -> bool {
     if let Some(point) = FindMatchingNeighbor(ctx, valid) {
-        return FindPath(ctx, point, kind);
+        return FindPath(ctx, kind, point);
     }
 
     ensure_reachable(ctx);
     let n = &ctx.reachable.neighborhood;
     for &(point, _) in n.blocked.iter().chain(&n.visited) {
-        if valid(ctx, point) { return FindPath(ctx, point, kind); }
+        if valid(ctx, point) { return FindPath(ctx, kind, point); }
     }
 
     if let Some(point) = ctx.blackboard.last_seen.get(&kind).copied() {
-        return FindPath(ctx, point, kind);
+        return FindPath(ctx, kind, point);
     }
     false
 }
@@ -1387,26 +1412,6 @@ fn TrackEnemyByScent(ctx: &mut Ctx) -> Option<Action> {
     Some(Action::SniffAround)
 }
 
-fn SearchForEnemy(ctx: &mut Ctx) -> Option<Action> {
-    let Ctx { known, pos, .. } = *ctx;
-    let target = select_chase_target(ctx)?;
-
-    if (target - pos).len_l1() == 1 {
-        let status = known.get(target).status();
-        let look = matches!(status, Status::Blocked | Status::Occupied);
-        if look { return Some(Action::Look { look: target - pos }); }
-    }
-
-    let kind = PathKind::Chase;
-    if FindPath(ctx, target, kind) { FollowNewPath(ctx, kind) } else { None }
-}
-
-fn SearchForEnemyFallback(ctx: &mut Ctx) -> Option<Action> {
-    let kind = PathKind::ChaseFallback;
-    let target = select_explore_target(ctx)?;
-    if FindPath(ctx, target, kind) { FollowNewPath(ctx, kind) } else { None }
-}
-
 //////////////////////////////////////////////////////////////////////////////
 
 // Fleeing:
@@ -1499,31 +1504,6 @@ fn LookForThreats(ctx: &mut Ctx) -> Option<Action> {
     let dirs = assess_directions(&dirs, ASSESS_TURNS_FLIGHT, rng);
     ctx.blackboard.dirs = CachedDirs { kind, dirs, step: 0, used: false };
     FollowDirs(ctx, kind)
-}
-
-fn FleeToLocation(ctx: &mut Ctx, target: Point, kind: PathKind) -> Result {
-    if target == ctx.pos { return Result::Success; }
-
-    if !FindPath(ctx, target, kind) { return Result::Failed; }
-    let Some(action) = FollowNewPath(ctx, kind) else { return Result::Failed };
-
-    ctx.choose_action(action)
-}
-
-fn HideFromThreats(ctx: &mut Ctx) -> Result {
-    ensure_sneakable(ctx);
-    let target = select_flight_target(ctx, /*hiding=*/true);
-    let Some(target) = target else { return Result::Failed };
-
-    FleeToLocation(ctx, target, PathKind::Hide)
-}
-
-fn FleeFromThreats(ctx: &mut Ctx) -> Result {
-    ensure_reachable(ctx);
-    let target = select_flight_target(ctx, /*hiding=*/false);
-    let Some(target) = target else { return Result::Failed };
-
-    FleeToLocation(ctx, target, PathKind::Flee)
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -1864,7 +1844,40 @@ fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
 
 macro_rules! path {
     ($n:expr, $k:expr, $v:expr, $f:expr) => {
-        seq![$n, ComputePath($k, $v), cb!("MoveAlongPath", MoveAlongPath), $f]
+        seq![$n, ComputePath($k, $v), cb!("FollowPath", FollowPath), $f]
+    };
+}
+
+macro_rules! follow {
+    ($n:expr, $k:expr) => {
+        seq![
+            concat!("Follow(", $n, ")"),
+            CheckPath($k, |_, _| true),
+            act!("TakePathStep", TakePathStep),
+        ]
+    };
+}
+
+macro_rules! search {
+    ($n:expr, $k:expr, $v:expr) => {
+        seq![
+            concat!("Search(", $n, ")"),
+            cond!("IssuePathRequest", |x| IssuePathRequest(x, $v)),
+            cond!("FulfillPathRequest", |x| FulfillPathRequest(x, $k)),
+            act!("TakePathStep", TakePathStep),
+        ]
+    };
+}
+
+macro_rules! flight {
+    ($n:expr, $k:expr, $v:expr) => {
+        seq![
+            concat!($n, "FromThreats"),
+            cond!("IssuePathRequest", |x| IssuePathRequest(x, $v)),
+            cond!("FulfillPathRequest", |x| FulfillPathRequest(x, $k)),
+            cb!("FollowPath", FollowPath),
+            act!("LookForThreats", LookForThreats),
+        ]
     };
 }
 
@@ -1895,15 +1908,6 @@ fn ComputePath(kind: PathKind, predicate: CellPredicate) -> impl Bhv {
     ]
 }
 
-fn FollowPath(kind: PathKind) -> impl Bhv {
-    seq![
-        "FollowPath",
-        CheckPath(kind, |_, _| true),
-        cb!("MoveAlongPath", MoveAlongPath),
-        cb!("Fail", |_| Result::Failed),
-    ]
-}
-
 fn ForageForBerries() -> impl Bhv {
     const KIND: PathKind = PathKind::BerryTree;
     seq![
@@ -1912,8 +1916,7 @@ fn ForageForBerries() -> impl Bhv {
         pri![
             "AttackOrFollowPath",
             act!("AttackPathTarget", AttackPathTarget),
-            cb!("MoveAlongPath", MoveAlongPath),
-            cb!("Fail", |_| Result::Failed),
+            act!("TakePathStep", TakePathStep),
         ],
     ]
 }
@@ -1953,9 +1956,9 @@ fn Wander() -> impl Bhv {
             (Thirst, DrinkWater()),
             (Weariness, GetRest()),
         ],
-        FollowPath(PathKind::Explore),
+        follow!("Explore", PathKind::Explore),
         act!("Search(Assess)", Assess),
-        act!("Search(Explore)", Explore),
+        search!("Explore", PathKind::Explore, SelectExploreTarget),
     ]
 }
 
@@ -1999,12 +2002,12 @@ fn ChaseDownTarget() -> impl Bhv {
         seq![
             "SkipRedundantSearch",
             cond!("ChaseTargetUnchanged", |x| ChaseTargetUnchanged(x)),
-            FollowPath(PathKind::ChaseFallback),
+            follow!("ChaseFallback", PathKind::ChaseFallback),
         ],
-        FollowPath(PathKind::Chase),
-        act!("Search(Chase)", SearchForEnemy),
-        FollowPath(PathKind::ChaseFallback),
-        act!("Search(ChaseFallback)", SearchForEnemyFallback),
+        follow!("Chase", PathKind::Chase),
+        search!("Chase", PathKind::Chase, SelectChaseTarget),
+        follow!("ChaseFallback", PathKind::ChaseFallback),
+        search!("ChaseFallback", PathKind::ChaseFallback, SelectExploreTarget),
     ]
 }
 
@@ -2070,20 +2073,18 @@ fn EscapeFromThreats() -> impl Bhv {
                 cond!("CheckFlightLimit", CheckFlightLimit),
                 act!("LookForThreats", LookForThreats),
             ],
-            FollowPath(PathKind::Hide),
-            FollowPath(PathKind::Flee),
+            follow!("Hide", PathKind::Hide),
+            follow!("Flee", PathKind::Flee),
             cb!("ClearFlightPath", ClearFlightPath),
             seq![
                 "TryHiding",
                 cond!("AnyThreatsAwake", |x| any_threat_awake(x)),
                 cond!("CurrentlyHidden", |x| is_hiding_place(x, x.pos)),
-                cb!("HideFromThreats", HideFromThreats),
-                act!("LookForThreats", LookForThreats),
+                flight!("Hide", PathKind::Hide, SelectHideTarget),
             ],
             seq![
                 "TryFleeing",
-                cb!("FleeFromThreats", FleeFromThreats),
-                act!("LookForThreats", LookForThreats),
+                flight!("Flee", PathKind::Flee, SelectFleeTarget),
             ],
         ],
     ]
