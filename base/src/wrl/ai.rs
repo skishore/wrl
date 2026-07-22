@@ -1853,39 +1853,33 @@ macro_rules! path {
     };
 }
 
-macro_rules! follow {
-    ($n:expr, $k:expr) => {
-        seq![
-            concat!("Follow(", $n, ")"),
-            CheckPath($k, |_, _| true),
-            cb!("FollowPath", FollowPath),
-            cb!("ClearFinishedPath", ClearFinishedPath),
-        ]
-    };
+fn Follow(name: &'static str, kind: PathKind) -> impl Bhv {
+    seq![
+        name,
+        CheckPath(kind, |_, _| true),
+        cb!("FollowPath", FollowPath),
+        cb!("ClearFinishedPath", ClearFinishedPath),
+    ]
 }
 
-macro_rules! search {
-    ($n:expr, $k:expr, $v:expr) => {
-        seq![
-            concat!("Search(", $n, ")"),
-            cond!("ChoosePathTarget", |x| ChoosePathTarget(x, $v)),
-            cond!("FindPathToTarget", |x| FindPathToTarget(x, $k)),
-            cb!("FollowPath", FollowPath),
-            cb!("ClearFinishedPath", ClearFinishedPath),
-        ]
-    };
+fn Search(name: &'static str, kind: PathKind, target: PathTargetSelector) -> impl Bhv {
+    seq![
+        name,
+        cond!("ChoosePathTarget", move |x| ChoosePathTarget(x, target)),
+        cond!("FindPathToTarget", move |x| FindPathToTarget(x, kind)),
+        cb!("FollowPath", FollowPath),
+        cb!("ClearFinishedPath", ClearFinishedPath),
+    ]
 }
 
-macro_rules! flight {
-    ($n:expr, $k:expr, $v:expr) => {
-        seq![
-            concat!($n, "FromThreats"),
-            cond!("ChoosePathTarget", |x| ChoosePathTarget(x, $v)),
-            cond!("FindPathToTarget", |x| FindPathToTarget(x, $k)),
-            cb!("FollowPath", FollowPath),
-            act!("LookForThreats", LookForThreats),
-        ]
-    };
+fn Flight(name: &'static str, kind: PathKind, target: PathTargetSelector) -> impl Bhv {
+    seq![
+        name,
+        cond!("ChoosePathTarget", move |x| ChoosePathTarget(x, target)),
+        cond!("FindPathToTarget", move |x| FindPathToTarget(x, kind)),
+        cb!("FollowPath", FollowPath),
+        act!("LookForThreats", LookForThreats),
+    ]
 }
 
 fn CheckPath(kind: PathKind, valid: CellPredicate) -> impl Bhv {
@@ -1968,9 +1962,9 @@ fn Wander() -> impl Bhv {
             (Thirst, DrinkWater()),
             (Weariness, GetRest()),
         ],
-        follow!("Explore", PathKind::Explore),
+        Follow("Follow(Explore)", PathKind::Explore),
         act!("Search(Assess)", Assess),
-        search!("Explore", PathKind::Explore, SelectExploreTarget),
+        Search("Search(Explore)", PathKind::Explore, SelectExploreTarget),
     ]
 }
 
@@ -2014,12 +2008,12 @@ fn ChaseDownTarget() -> impl Bhv {
         seq![
             "SkipRedundantSearch",
             cond!("ChaseTargetUnchanged", |x| ChaseTargetUnchanged(x)),
-            follow!("ChaseFallback", PathKind::ChaseFallback),
+            Follow("Follow(ChaseFallback)", PathKind::ChaseFallback),
         ],
-        follow!("Chase", PathKind::Chase),
-        search!("Chase", PathKind::Chase, SelectChaseTarget),
-        follow!("ChaseFallback", PathKind::ChaseFallback),
-        search!("ChaseFallback", PathKind::ChaseFallback, SelectExploreTarget),
+        Follow("Follow(Chase)", PathKind::Chase),
+        Search("Search(Chase)", PathKind::Chase, SelectChaseTarget),
+        Follow("Follow(ChaseFallback)", PathKind::ChaseFallback),
+        Search("Search(ChaseFallback)", PathKind::ChaseFallback, SelectExploreTarget),
     ]
 }
 
@@ -2085,18 +2079,18 @@ fn EscapeFromThreats() -> impl Bhv {
                 cond!("CheckFlightLimit", CheckFlightLimit),
                 act!("LookForThreats", LookForThreats),
             ],
-            follow!("Hide", PathKind::Hide),
-            follow!("Flee", PathKind::Flee),
+            Follow("Follow(Hide)", PathKind::Hide),
+            Follow("Follow(Flee)", PathKind::Flee),
             cb!("ClearFlightPath", ClearFlightPath),
             seq![
                 "TryHiding",
                 cond!("AnyThreatsAwake", |x| any_threat_awake(x)),
                 cond!("CurrentlyHidden", |x| is_hiding_place(x, x.pos)),
-                flight!("Hide", PathKind::Hide, SelectHideTarget),
+                Flight("HideFromThreats", PathKind::Hide, SelectHideTarget),
             ],
             seq![
                 "TryFleeing",
-                flight!("Flee", PathKind::Flee, SelectFleeTarget),
+                Flight("FleeFromThreats", PathKind::Flee, SelectFleeTarget),
             ],
         ],
     ]
