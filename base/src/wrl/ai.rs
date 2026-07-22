@@ -136,15 +136,24 @@ impl Blackboard {
     }
 
     fn debug(&self, debug: &mut DebugLog, known: &Knowledge) {
+        let Blackboard { dirs, path, .. } = self;
+        let dirs = if dirs.kind != DirsKind::None {
+            format!(" (step {}/{})", dirs.step, dirs.dirs.len())
+        } else {
+            "".into()
+        };
+        let path = if path.kind != PathKind::None {
+            format!(" (step {}/{})", path.step, path.path.len())
+        } else {
+            "".into()
+        };
+
         debug.append("Blackboard:");
         debug.indent(1, |debug| {
             debug.append(format!("prev_turn: {}", known.debug_time(self.prev_time)));
             debug.append(format!("last_warning: {}", known.debug_time(self.last_warning)));
-            debug.append(format!("finding_food_: {}", self.finding_food_));
-            debug.append(format!("finding_water: {}", self.finding_water));
-            debug.append(format!("dirs: {:?} ({} items)",
-                                 self.dirs.kind, self.dirs.dirs.len()));
-            debug.append(format!("path: {:?}", self.path.kind));
+            debug.append(format!("dirs: {:?}{}", self.dirs.kind, dirs));
+            debug.append(format!("path: {:?}{}", self.path.kind, path));
             debug.newline();
         });
 
@@ -339,8 +348,6 @@ fn assess_directions(dirs: &[Point], turns: (i32, i32), rng: &mut RNG) -> Vec<Po
         let target = Point(rx as i32, ry as i32);
         for _ in 0..steps { result.push(target); }
     }
-
-    result.reverse();
     result
 }
 
@@ -608,12 +615,17 @@ enum DirsKind { Assess, Flight, Noises, Target, #[default] None }
 struct CachedDirs {
     kind: DirsKind,
     dirs: Vec<Point>,
+    step: usize,
     used: bool,
 }
 
 impl CachedDirs {
     fn clear(&mut self) {
         *self = Default::default();
+    }
+
+    fn steps_left(&self) -> usize {
+        self.dirs.len() - self.step
     }
 }
 
@@ -626,13 +638,16 @@ fn CleanupDirs(ctx: &mut Ctx) {
 fn FollowDirs(ctx: &mut Ctx, kind: DirsKind) -> Option<Action> {
     let (bb, rng) = (&mut *ctx.blackboard, &mut *ctx.env.rng);
     if bb.dirs.kind != kind { return None; }
-    let dir = bb.dirs.dirs.pop()?;
 
-    if bb.dirs.dirs.is_empty() {
+    let dirs = &mut bb.dirs;
+    let dir = *dirs.dirs.get(dirs.step)?;
+    dirs.step += 1;
+
+    if dirs.steps_left() == 0 {
         bb.assess.update(rng.random_range(ASSESS_GAIN));
         bb.assess.active = false;
     } else {
-        bb.dirs.used = true;
+        dirs.used = true;
     }
     Some(Action::Look { look: dir })
 }
@@ -643,7 +658,7 @@ fn Assess(ctx: &mut Ctx) -> Option<Action> {
 
     let kind = DirsKind::Assess;
     let dirs = assess_directions(&[ctx.dir], ASSESS_TURNS_WANDER, rng);
-    bb.dirs = CachedDirs { kind, dirs, used: false };
+    bb.dirs = CachedDirs { kind, dirs, step: 0, used: false };
     FollowDirs(ctx, kind)
 }
 
@@ -661,7 +676,7 @@ fn HeardUnknownNoise(ctx: &mut Ctx) -> bool {
         |x| x.pos != pos && CALL_VOLUME.contains(x.pos - pos));
     if !result { return false; }
 
-    if bb.dirs.kind == DirsKind::Noises && bb.dirs.dirs.len() == 1 {
+    if bb.dirs.kind == DirsKind::Noises && bb.dirs.steps_left() == 1 {
         for threat in &mut bb.threats.threats { threat.mark_scanned(); }
     }
     true
@@ -673,7 +688,7 @@ fn LookForLastTarget(ctx: &mut Ctx) -> Option<Action> {
 
     let kind = DirsKind::Target;
     let dirs = assess_directions(&[ctx.dir], ASSESS_TURNS_FLIGHT, rng);
-    bb.dirs = CachedDirs { kind, dirs, used: false };
+    bb.dirs = CachedDirs { kind, dirs, step: 0, used: false };
     FollowDirs(ctx, kind)
 }
 
@@ -689,7 +704,7 @@ fn LookForNoises(ctx: &mut Ctx) -> Option<Action> {
 
     let kind = DirsKind::Noises;
     let dirs = assess_directions(&dirs, ASSESS_TURNS_THREAT, rng);
-    ctx.blackboard.dirs = CachedDirs { kind, dirs, used: false };
+    ctx.blackboard.dirs = CachedDirs { kind, dirs, step: 0, used: false };
     FollowDirs(ctx, kind)
 }
 
@@ -1467,7 +1482,7 @@ fn UpdateFlightState(ctx: &mut Ctx) -> bool {
         bb.dirs.clear();
     }
 
-    if looking && !reset && bb.dirs.dirs.len() == 1 {
+    if looking && !reset && bb.dirs.steps_left() == 1 {
         bb.threats.mark_safe(ctx.known.time());
     } else {
         bb.flight = Some(flight);
@@ -1493,7 +1508,7 @@ fn LookForThreats(ctx: &mut Ctx) -> Option<Action> {
 
     let kind = DirsKind::Flight;
     let dirs = assess_directions(&dirs, ASSESS_TURNS_FLIGHT, rng);
-    ctx.blackboard.dirs = CachedDirs { kind, dirs, used: false };
+    ctx.blackboard.dirs = CachedDirs { kind, dirs, step: 0, used: false };
     FollowDirs(ctx, kind)
 }
 
@@ -2158,10 +2173,10 @@ fn Root() -> impl Bhv {
         InvestigateScents(),
         Wander(),
     ]
+    .on_tick(CleanupDirs)
     .on_tick(CleanupPath)
     .post_tick(CleanupChaseState)
     .post_tick(CleanupTarget)
-    .post_tick(CleanupDirs)
 }
 
 //////////////////////////////////////////////////////////////////////////////
