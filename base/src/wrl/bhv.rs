@@ -19,16 +19,18 @@ pub trait Bhv {
 
 // Node
 
+pub const fn label<T: Label>(_: &T) {}
+
 pub trait Label {
-    fn show(&self) -> Option<&'static str>;
+    fn show(&self) -> Option<(char, &'static str)>;
 }
 
 impl Label for () {
-    fn show(&self) -> Option<&'static str> { None }
+    fn show(&self) -> Option<(char, &'static str)> { None }
 }
 
-impl Label for &'static str {
-    fn show(&self) -> Option<&'static str> { Some(self) }
+impl Label for (char, &'static str) {
+    fn show(&self) -> Option<(char, &'static str)> { Some(*self) }
 }
 
 pub struct Node<S, T> {
@@ -65,7 +67,7 @@ impl<S: Label, T: Bhv> Node<S, T> {
 
 impl<S: Label, T: Bhv> Bhv for Node<S, T> {
     fn debug(&self, debug: &mut DebugLog) {
-        let Some(x) = self.label.show() else {
+        let Some((ch, name)) = self.label.show() else {
             return self.tree.debug(debug);
         };
         let color = match self.last {
@@ -74,7 +76,7 @@ impl<S: Label, T: Bhv> Bhv for Node<S, T> {
             Some(Result::Success) => 0xe0ffc0,
             None                  => 0x545454,
         };
-        debug.append(x);
+        debug.append(format!("{} {}", ch, name));
         if let Some(x) = debug.lines.last_mut() { x.color = color.into(); };
 
         if !debug.verbose && self.last.is_none() { return; }
@@ -333,7 +335,7 @@ impl<S: Policy, T: Bhv, U: Bhv> Bhv for Composite<S, T, U> {
 macro_rules! act {
     ($name:expr, $x:expr) => {{
         use super::bhv::{Act, Node};
-        Node::new(concat!("! ", $name), Act::new($x))
+        Node::new(('!', $name), Act::new($x))
     }};
 }
 
@@ -341,7 +343,7 @@ macro_rules! act {
 macro_rules! cb {
     ($name:expr, $x:expr) => {{
         use super::bhv::{Lambda, Node};
-        Node::new(concat!("\\ ", $name), Lambda::new($x))
+        Node::new(('\\', $name), Lambda::new($x))
     }};
 }
 
@@ -349,7 +351,7 @@ macro_rules! cb {
 macro_rules! cond {
     ($name:expr, $x:expr) => {{
         use super::bhv::{Cond, Node};
-        Node::new(concat!("= ", $name), Cond::new($x))
+        Node::new(('=', $name), Cond::new($x))
     }};
 }
 
@@ -358,36 +360,36 @@ macro_rules! util {
     ($name:expr $(,($x:expr, $y:expr))+ $(,)?) => {{
         use super::bhv::{Node, Utility, UtilityNode};
         let utility = Utility::new(vec![$(Box::new(UtilityNode::new($x, $y)),)+]);
-        Node::new(concat!("# ", $name), utility)
+        Node::new(('#', $name), utility)
     }};
 }
 
 #[macro_export]
 macro_rules! pri {
-    (@go $name:expr, $x:expr) => { { $name; $x } };
+    (@go $name:expr, $x:expr) => { { super::bhv::label(&$name); $x } };
     (@go $name:expr, $x:expr $(,$xs:expr)+) => {{
         use super::bhv::{Composite, Node, PriPolicy};
         Node::new($name, Composite::new(PriPolicy {}, $x, pri![@go () $(,$xs)+]))
     }};
-    ($name:expr $(,$xs:expr)+ $(,)?) => { pri![@go concat!("? ", $name) $(,$xs)+] };
+    ($name:expr $(,$xs:expr)+ $(,)?) => { pri![@go ('?', $name) $(,$xs)+] };
 }
 
 #[macro_export]
 macro_rules! run {
-    (@go $name:expr, $x:expr) => { { $name; $x } };
+    (@go $name:expr, $x:expr) => { { super::bhv::label(&$name); $x } };
     (@go $name:expr, $x:expr $(,$xs:expr)+) => {{
         use super::bhv::{Composite, Node, RunPolicy};
         Node::new($name, Composite::new(RunPolicy {}, $x, run![@go () $(,$xs)+]))
     }};
-    ($name:expr $(,$xs:expr)+ $(,)?) => { run![@go concat!("* ", $name) $(,$xs)+] };
+    ($name:expr $(,$xs:expr)+ $(,)?) => { run![@go ('*', $name) $(,$xs)+] };
 }
 
 #[macro_export]
 macro_rules! seq {
-    (@go $name:expr, $x:expr) => { { $name; $x } };
+    (@go $name:expr, $x:expr) => { { super::bhv::label(&$name); $x } };
     (@go $name:expr, $x:expr $(,$xs:expr)+) => {{
         use super::bhv::{Composite, Node, SeqPolicy};
         Node::new($name, Composite::new(SeqPolicy {}, $x, seq![@go () $(,$xs)+]))
     }};
-    ($name:expr $(,$xs:expr)+ $(,)?) => { seq![@go concat!("> ", $name) $(,$xs)+] };
+    ($name:expr $(,$xs:expr)+ $(,)?) => { seq![@go ('>', $name) $(,$xs)+] };
 }
