@@ -815,6 +815,8 @@ fn hit_entity(state: &mut State, eid: EID, attack: &Attack, logged: bool, tid: E
         if critted { log.log_append("A critical hit!"); }
         if fainted { log.log_append(format!("{} fainted!", upper)); }
     }
+
+    if fainted { state.record_remove(tid, pos); }
 }
 
 fn summon_entity(state: &mut State, eid: EID, target: Point, index: usize, team: usize) {
@@ -1503,7 +1505,7 @@ fn update_state(state: &mut State) {
 
         update = true;
         let action = plan(state, eid, leader);
-        state.record_trace(&action, eid);
+        state.record_action(&action, eid);
         let result = act(state, eid, action);
         if player && !result.success { break; }
 
@@ -1532,13 +1534,14 @@ fn update_state(state: &mut State) {
 // State
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-pub enum GameMode { Debug, Gym, Play, Sim, Test }
+pub enum GameMode { Gym, Play, Sim, Test }
 
 pub struct Env {
     // Used for in-place Entity state updates:
     ai: Box<AIState>,
     debug: Option<Box<DebugFile>>,
     known: Box<Knowledge>,
+    mode: GameMode,
 
     // Other update helpers:
     fov: FOV,
@@ -1556,16 +1559,15 @@ pub struct State {
 
 impl Default for State {
     fn default() -> Self {
-        Self::new(/*seed=*/None, GameMode::Play)
+        Self::new(/*seed=*/None, GameMode::Play, /*debug=*/false)
     }
 }
 
 impl State {
-    pub fn new(seed: Option<u64>, mode: GameMode) -> Self {
+    pub fn new(seed: Option<u64>, mode: GameMode, debug: bool) -> Self {
         let size = Point(WORLD_SIZE, WORLD_SIZE);
         let rng = seed.map(|x| RNG::seed_from_u64(x));
         let rng = rng.unwrap_or_else(|| RNG::from_os_rng());
-        let debug = matches!(mode, GameMode::Debug | GameMode::Sim);
 
         let mut board = Board::new(size, LIGHT);
         let mut pos = Point(size.0 / 2, size.1 / 2);
@@ -1590,6 +1592,7 @@ impl State {
             ai: Box::new(AIState::new(&mut rng)),
             debug: if debug { Some(Default::default()) } else { None },
             known: Default::default(),
+            mode,
             fov: Default::default(),
             ui: Default::default(),
             rng,
@@ -1688,13 +1691,27 @@ impl State {
 
     fn get_player(&self) -> &Entity { &self.board.entities[self.player] }
 
-    fn record_trace(&mut self, action: &Action, eid: EID) {
+    fn record_action(&mut self, action: &Action, eid: EID) {
         if matches!(action, Action::WaitForInput) { return; }
+
+        if self.env.mode == GameMode::Sim && eid != self.player {
+            let pos = self.board.entities[eid].pos;
+            let eid = unsafe { std::mem::transmute::<EID, u64>(eid) };
+            println!("  EID {:2} @ {:>2?}: {:?}", eid, pos, action);
+        }
+
         let Some(debug) = &mut self.env.debug else { return };
 
         let board = &self.board;
         let entity = &board.entities[eid];
         debug.record(action, board, entity);
+    }
+
+    fn record_remove(&mut self, eid: EID, pos: Point) {
+        if self.env.mode == GameMode::Sim && eid != self.player {
+            let eid = unsafe { std::mem::transmute::<EID, u64>(eid) };
+            println!("  EID {:2} @ {:>2?}: removed!", eid, pos);
+        }
     }
 
     // Animation:
@@ -1756,6 +1773,7 @@ mod tests {
     use super::*;
     extern crate test;
 
+    const DEBUG: bool = false;
     const BASE_SEED: u64 = 17;
     const NUM_SEEDS: u64 = 16;
     const NUM_STEPS: u64 = 1024;
@@ -1764,7 +1782,7 @@ mod tests {
     fn test_state_update() {
         let mut states = vec![];
         for i in 0..NUM_SEEDS {
-            states.push(State::new(Some(BASE_SEED + i), GameMode::Test));
+            states.push(State::new(Some(BASE_SEED + i), GameMode::Test, DEBUG));
         }
 
         for index in 0..(NUM_SEEDS * NUM_STEPS) {
@@ -1782,7 +1800,7 @@ mod tests {
         let mut index = 0;
         let mut states = vec![];
         for i in 0..NUM_SEEDS {
-            states.push(State::new(Some(BASE_SEED + i), GameMode::Test));
+            states.push(State::new(Some(BASE_SEED + i), GameMode::Test, DEBUG));
         }
 
         b.iter(|| {

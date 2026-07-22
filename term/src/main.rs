@@ -195,25 +195,40 @@ fn input(event: Event, screen: &Screen) -> Option<Input> {
 }
 
 fn main() {
-    let args: Vec<_> = std::env::args().collect();
-    let count = args.len();
+    let mut args = std::env::args().skip(1);
+    let usage = "Usage: wrl-term (--debug|--gym $COUNT|--sim $COUNT)? (--seed $SEED)?";
+    let req = |args: &mut dyn Iterator<Item=String>| args.next().expect(usage);
 
-    let mode = if count < 2 { GameMode::Play } else {
-        match args[1].as_str() {
-            "--debug" if count == 2 => GameMode::Debug,
-            "--gym"   if count == 3 => GameMode::Gym,
-            "--sim"   if count == 3 => GameMode::Sim,
-            _ => panic!("Usage: wrl-term (--debug|--gym $COUNT|--sim $COUNT)?"),
-        }
+    let mut turns = 0;
+    let mut debug = false;
+    let mut seed = None;
+    let mut mode = GameMode::Play;
+
+    let mut set_mode = |m: GameMode| {
+        if mode != GameMode::Play { panic!("{}", usage); }
+        mode = m;
     };
-    let game = State::new(/*seed=*/None, mode);
+
+    while let Some(x) = args.next() {
+        match x.as_str() {
+            "--debug" => debug = true,
+            "--seed" => seed = Some(req(&mut args).parse::<u64>().expect(usage)),
+            "--gym" => set_mode(GameMode::Gym),
+            "--sim" => {
+                turns = req(&mut args).parse::<usize>().expect(usage);
+                set_mode(GameMode::Sim);
+            },
+            _ => panic!("{}", usage),
+        }
+    }
+    let game = State::new(seed, mode, debug);
 
     if matches!(mode, GameMode::Gym | GameMode::Sim) {
         let mut game = game;
-        let turns = args[2].parse::<usize>().unwrap();
-        let gym = mode == GameMode::Gym;
+        let sim = mode == GameMode::Sim;
+        if sim { println!("Running with seed: {:?}", seed); }
         for i in 0..turns {
-            if !gym { println!("Iteration: {}", i); }
+            if sim { println!("Iteration {}:", i); }
             game.add_input(Input::Char('.'));
             game.update();
         }
