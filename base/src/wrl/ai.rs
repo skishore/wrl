@@ -846,7 +846,21 @@ fn AStarHelper(ctx: &mut Ctx, target: Point, kind: PathKind) -> Option<Vec<Point
     Some(path)
 }
 
-fn FindPath(ctx: &mut Ctx, kind: PathKind, target: Point) -> bool {
+// Helpers used to compute a new path:
+
+fn ClearFinishedPath(ctx: &mut Ctx) -> Result {
+    ctx.blackboard.path.clear();
+    Result::Failed
+}
+
+fn ChoosePathTarget(ctx: &mut Ctx, target: PathTargetSelector) -> bool {
+    ctx.blackboard.request = target(ctx);
+    ctx.blackboard.request.is_some()
+}
+
+fn FindPathToTarget(ctx: &mut Ctx, kind: PathKind) -> bool {
+    let Some(target) = ctx.blackboard.request.take() else { return false };
+
     ensure_vision(ctx);
     let path = AStarHelper(ctx, target, kind);
     let Some(path) = path else { return false };
@@ -866,23 +880,7 @@ fn FindPath(ctx: &mut Ctx, kind: PathKind, target: Point) -> bool {
     true
 }
 
-fn IssuePathRequest(ctx: &mut Ctx, target: PathTargetSelector) -> bool {
-    ctx.blackboard.request = target(ctx);
-    ctx.blackboard.request.is_some()
-}
-
-fn FulfillPathRequest(ctx: &mut Ctx, kind: PathKind) -> bool {
-    let Some(target) = ctx.blackboard.request.take() else { return false };
-    FindPath(ctx, kind, target)
-}
-
-fn TakePathStep(ctx: &mut Ctx) -> Option<Action> {
-    if FollowPath(ctx) != Result::Running {
-        ctx.blackboard.path.clear();
-        return None;
-    }
-    std::mem::take(&mut ctx.action)
-}
+// Path validity, broken down for debugging:
 
 fn CheckPathKind(ctx: &Ctx, kind: PathKind) -> bool {
     ctx.blackboard.path.kind == kind
@@ -912,6 +910,8 @@ fn CheckPathStepsHidden(ctx: &Ctx) -> bool {
     if path.kind != PathKind::Hide { return true; }
     path.path.iter().skip(path.step).all(|&x| is_hiding_place(ctx, x))
 }
+
+// Follow a valid path. Succeeds if we've made it to the end of the path.
 
 fn FollowPath(ctx: &mut Ctx) -> Result {
     let Ctx { pos, known, .. } = *ctx;
@@ -1164,19 +1164,24 @@ fn FindMatchingNeighbor(ctx: &mut Ctx, valid: CellPredicate) -> Option<Point> {
     best.1
 }
 
-fn FindNewPath(ctx: &mut Ctx, kind: PathKind, valid: CellPredicate) -> bool {
+fn FindMatchingCell(ctx: &mut Ctx, kind: PathKind, valid: CellPredicate) -> bool {
+    let success = |ctx: &mut Ctx, point: Point| {
+        ctx.blackboard.request = Some(point);
+        true
+    };
+
     if let Some(point) = FindMatchingNeighbor(ctx, valid) {
-        return FindPath(ctx, kind, point);
+        return success(ctx, point);
     }
 
     ensure_reachable(ctx);
     let n = &ctx.reachable.neighborhood;
     for &(point, _) in n.blocked.iter().chain(&n.visited) {
-        if valid(ctx, point) { return FindPath(ctx, kind, point); }
+        if valid(ctx, point) { return success(ctx, point); }
     }
 
     if let Some(point) = ctx.blackboard.last_seen.get(&kind).copied() {
-        return FindPath(ctx, kind, point);
+        return success(ctx, point);
     }
     false
 }
@@ -1853,7 +1858,8 @@ macro_rules! follow {
         seq![
             concat!("Follow(", $n, ")"),
             CheckPath($k, |_, _| true),
-            act!("TakePathStep", TakePathStep),
+            cb!("FollowPath", FollowPath),
+            cb!("ClearFinishedPath", ClearFinishedPath),
         ]
     };
 }
@@ -1862,9 +1868,10 @@ macro_rules! search {
     ($n:expr, $k:expr, $v:expr) => {
         seq![
             concat!("Search(", $n, ")"),
-            cond!("IssuePathRequest", |x| IssuePathRequest(x, $v)),
-            cond!("FulfillPathRequest", |x| FulfillPathRequest(x, $k)),
-            act!("TakePathStep", TakePathStep),
+            cond!("ChoosePathTarget", |x| ChoosePathTarget(x, $v)),
+            cond!("FindPathToTarget", |x| FindPathToTarget(x, $k)),
+            cb!("FollowPath", FollowPath),
+            cb!("ClearFinishedPath", ClearFinishedPath),
         ]
     };
 }
@@ -1873,21 +1880,21 @@ macro_rules! flight {
     ($n:expr, $k:expr, $v:expr) => {
         seq![
             concat!($n, "FromThreats"),
-            cond!("IssuePathRequest", |x| IssuePathRequest(x, $v)),
-            cond!("FulfillPathRequest", |x| FulfillPathRequest(x, $k)),
+            cond!("ChoosePathTarget", |x| ChoosePathTarget(x, $v)),
+            cond!("FindPathToTarget", |x| FindPathToTarget(x, $k)),
             cb!("FollowPath", FollowPath),
             act!("LookForThreats", LookForThreats),
         ]
     };
 }
 
-fn CheckPath(kind: PathKind, predicate: CellPredicate) -> impl Bhv {
+fn CheckPath(kind: PathKind, valid: CellPredicate) -> impl Bhv {
     seq![
         "CheckPath",
         cond!("CheckPathKind", move |x| CheckPathKind(x, kind)),
         seq![
-            "CheckPath",
-            cond!("CheckPathTarget", move |x| CheckPathTarget(x, predicate)),
+            "CheckPathValidity",
+            cond!("CheckPathTarget", move |x| CheckPathTarget(x, valid)),
             cond!("CheckPathStepsFree", |x| CheckPathStepsFree(x)),
             cond!("CheckPathStepsHidden", |x| CheckPathStepsHidden(x)),
         ]
@@ -1895,14 +1902,18 @@ fn CheckPath(kind: PathKind, predicate: CellPredicate) -> impl Bhv {
     ]
 }
 
-fn ComputePath(kind: PathKind, predicate: CellPredicate) -> impl Bhv {
+fn ComputePath(kind: PathKind, valid: CellPredicate) -> impl Bhv {
     seq![
         "ComputePath",
         cond!("CheckLastSeen", move |x| CheckLastSeen(x, kind)),
         pri![
-            "SelectOldOrNewPath",
-            CheckPath(kind, predicate),
-            cond!("FindNewPath", move |x| FindNewPath(x, kind, predicate)),
+            "TryOldOrNewPath",
+            CheckPath(kind, valid),
+            seq![
+                "FindNewPath",
+                cond!("FindMatchingCell", move |x| FindMatchingCell(x, kind, valid)),
+                cond!("FindPathToTarget", move |x| FindPathToTarget(x, kind)),
+            ],
         ]
         .on_fail(move |x| ClearLastSeen(x, kind)),
     ]
@@ -1916,7 +1927,8 @@ fn ForageForBerries() -> impl Bhv {
         pri![
             "AttackOrFollowPath",
             act!("AttackPathTarget", AttackPathTarget),
-            act!("TakePathStep", TakePathStep),
+            cb!("FollowPath", FollowPath),
+            cb!("ClearFinishedPath", ClearFinishedPath),
         ],
     ]
 }
