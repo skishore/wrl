@@ -939,7 +939,8 @@ fn FollowPath(ctx: &mut Ctx) -> Result {
     // Else, follow the path, look as far ahead as posisble without seeing
     // any obstructions, and update our current step.
     //
-    // Special case: don't let an enemy kite you around a one-tile obstacle.
+    // Special case: if we're moving next to a cell (including when we're
+    // chasing an enemy), try to combine the last Move and Look actions.
     let mut target = next;
     for &point in path.path.iter().skip(j).take(8) {
         let free = pos != point && {
@@ -948,7 +949,7 @@ fn FollowPath(ctx: &mut Ctx) -> Result {
         };
         if free { target = point; }
     }
-    if IsChasePathKind(kind) && n == j + 2 {
+    if (IsChasePathKind(kind) || path.skip > 0) && n == j + 2 {
         target = path.path[j + 1];
     }
     let (look, step) = (target - pos, next - pos);
