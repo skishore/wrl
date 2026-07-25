@@ -1742,16 +1742,9 @@ fn ClearAttackCommand(ctx: &mut Ctx) {
 }
 
 fn FollowSimpleCommand(ctx: &mut Ctx) -> Option<Action> {
-    let me = ctx.me;
-    let command = me.command.get()?;
-
-    match command {
-        Command::Attack(attack, target) => {
-            if target.eid.is_some() { return None; }
-            let action = AttackTarget(ctx, target.loc.pos, attack)?;
-            if matches!(action, Action::Attack { .. }) { me.command.take(); }
-            Some(action)
-        },
+    match ctx.me.command.get()? {
+        Command::Attack(_, AttackTarget { eid: Some(_), .. }) => None,
+        Command::Attack(attack, target) => AttackTarget(ctx, target.loc.pos, attack),
         Command::Return | Command::Switch(_) => PathToReturn(ctx, ctx.env.leader?.pos),
     }
 }
@@ -2111,13 +2104,20 @@ fn SummonRoot() -> impl Bhv {
         cond!("HasLeader", |x| x.env.leader.is_some()),
         pri![
             "SummonOptions",
-            act!("FollowSimpleCommand", FollowSimpleCommand),
             seq![
-                "FollowAttackCommand",
-                cond!("SelectAttackTarget", SelectAttackTarget),
-                HuntSelectedTarget(),
-            ]
-            .post_tick(ClearAttackCommand),
+                "FollowCommands",
+                cond!("HasCommand", |x| x.me.command.get().is_some()),
+                pri![
+                    "FollowCommand",
+                    act!("FollowSimpleCommand", FollowSimpleCommand),
+                    seq![
+                        "FollowAttackCommand",
+                        cond!("SelectAttackTarget", SelectAttackTarget),
+                        HuntSelectedTarget(),
+                    ],
+                ]
+                .post_tick(ClearAttackCommand),
+            ],
             seq![
                 "MaybeAttackRivals",
                 cond!("MoveReady", |x| move_ready(x.me)),
