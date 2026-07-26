@@ -15,7 +15,7 @@ use super::entity::{EID, Entity, Teammate};
 use super::event::{Event, EventData, Location, Sense, Sound, UID};
 use super::game::{MOVE_TIMER, Board, Cell, Item, Light, Tile};
 use super::list::{Handle, List};
-use super::time::{Timedelta, Timestamp, TurnTimer};
+use super::time::{Timestamp, TurnTimer};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -800,14 +800,12 @@ pub struct PointLookup<'a> {
 impl<'a> PointLookup<'a> {
     // Field lookups
 
-    pub fn time_since_seen(&self) -> Timedelta {
-        let time = self.cell().map_or_default(|x| x.last_seen);
-        self.root.time() - time
+    pub fn last_seen(&self) -> Timestamp {
+        self.cell().map_or_default(|x| x.last_seen)
     }
 
-    pub fn time_since_entity_visible(&self) -> Timedelta {
-        let time = self.cell().map_or_default(|x| x.last_see_entity_at);
-        self.root.time() - time
+    pub fn last_see_entity_at(&self) -> Timestamp {
+        self.cell().map_or_default(|x| x.last_see_entity_at)
     }
 
     pub fn items(&self) -> &[Item] {

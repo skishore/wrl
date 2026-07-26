@@ -417,7 +417,7 @@ fn select_explore_target(ctx: &mut Ctx) -> Option<Point> {
     let score = |p: Point, distance: i32| -> f64 {
         if distance == 0 { return 0.; }
 
-        let age = known.get(p).time_since_seen().seconds();
+        let age = known.time() - known.get(p).last_seen();
         let age_scale = 1. / (1 << 24) as f64;
 
         let delta = p - pos;
@@ -426,7 +426,7 @@ fn select_explore_target(ctx: &mut Ctx) -> Option<Point> {
         let unblocked_neighbors = dirs::ALL.iter().filter(
             |&&x| !known.get(p + x).blocked()).count();
 
-        let bonus0 = age_scale * (age as f64 + 1. / 16.);
+        let bonus0 = age_scale * (age.seconds() + 1. / 16.);
         let bonus1 = unblocked_neighbors == dirs::ALL.len();
         let bonus2 = unblocked_neighbors > 0;
 
@@ -448,9 +448,8 @@ fn select_chase_target(ctx: &mut Ctx) -> Option<Point> {
     let state = ctx.blackboard.chase.as_ref()?;
     let (bias, steps, target) = (state.bias, state.steps, &state.target);
 
-    let age = known.time() - target.time;
+    let Location { pos: center, time } = target.loc;
     let bias = if target.sense == Sense::Smell { Point(0, 0) } else { bias };
-    let center = target.pos;
 
     let inv_dir_l2 = safe_inv_l2(dir);
     let inv_bias_l2 = safe_inv_l2(bias);
@@ -462,7 +461,7 @@ fn select_chase_target(ctx: &mut Ctx) -> Option<Point> {
     let is_search_candidate = |p: Point| {
         if p == pos { return false; }
         let cell = known.get(p);
-        !cell.blocked() && cell.time_since_entity_visible() >= age
+        !cell.blocked() && cell.last_see_entity_at() <= time
     };
     if is_search_candidate(center) { return Some(center); }
 
