@@ -3,7 +3,7 @@ use std::cmp::{max, min};
 use rand::Rng;
 use rand::seq::SliceRandom;
 
-use crate::base::point::{LOS, Matrix, Point, dirs};
+use crate::base::point::{Delta, LOS, Matrix, Point, dirs};
 use crate::base::util::{HashMap, HashSet, RNG, sample};
 
 //////////////////////////////////////////////////////////////////////////////
@@ -68,7 +68,7 @@ fn count_neighbors(cave: &Matrix<char>, p: Point, v: char) -> i32 {
     for dx in -1..=1 {
         for dy in -1..=1 {
             if dx == 0 && dy == 0 { continue; }
-            if cave.get(p + Point(dx, dy)) == v { count += 1; }
+            if cave.get(p + Delta(dx, dy)) == v { count += 1; }
         }
     }
     count
@@ -115,7 +115,7 @@ fn build_cave(size: Point, config: &MapgenConfig, rng: &mut RNG) -> Matrix<char>
 
             for dx in -1..=1 {
                 for dy in -1..=1 {
-                    let q = p + Point(dx, dy);
+                    let q = p + Delta(dx, dy);
                     if result.get(q) == ' ' { result.set(q, '#'); }
                 }
             }
@@ -144,7 +144,7 @@ fn try_place_room(map: &mut Matrix<char>, room: &Matrix<char>, rng: &mut RNG) ->
 
     // Find all offsets at which at least one room wall and map wall align.
     let mut offsets = HashSet::default();
-    let Point(lx, ly) = map.size() - room.size();
+    let Delta(lx, ly) = map.size() - room.size();
     for &mw in &map_walls {
         for &rw in &room_walls {
             let p = mw - rw;
@@ -192,7 +192,7 @@ fn find_closest_pairs(r1: &[Point], r2: &[Point]) -> Vec<(Point, Point)> {
     result
 }
 
-fn find_components(map: &Matrix<char>, v: char, dirs: &[Point]) -> Vec<Vec<Point>> {
+fn find_components(map: &Matrix<char>, v: char, dirs: &[Delta]) -> Vec<Vec<Point>> {
     let mut result = vec![];
     let mut visited = HashSet::default();
 
@@ -237,7 +237,7 @@ fn generate_blue_noise(spacing: i32, options: &[Point], noise: &mut Matrix<f64>,
             for dx in -d..=d {
                 for dy in -d..=d {
                     if dx * dx + dy * dy >= spacing { continue; }
-                    if noise.get(point + Point(dx, dy)) == 0.0 { continue; }
+                    if noise.get(point + Delta(dx, dy)) == 0.0 { continue; }
                     return false;
                 }
             }
@@ -439,7 +439,7 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
         for ry in 0..dims.1 {
             let p = Point(rx, ry);
             let c = room.get(p);
-            if c != ' ' { map.set(p + Point(dx, dy), c); }
+            if c != ' ' { map.set(p + Delta(dx, dy), c); }
         }
     }
 
@@ -470,7 +470,7 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
                 map.set(p, '.');
                 for dx in l..r {
                     for dy in l..r {
-                        map.set(p + Point(dx, dy), '.');
+                        map.set(p + Delta(dx, dy), '.');
                     }
                 }
             }
@@ -527,13 +527,13 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
         for dx in -1..=width {
             for dy in -1..=width {
                 let center = 0 <= dx && dx < width && 0 <= dy && dy < width;
-                result += score_one(p + Point(dx, dy), center);
+                result += score_one(p + Delta(dx, dy), center);
             }
         }
         result
     };
     let edges = |p: Point| {
-        (-1..=1).flat_map(|x| (-1..=1).map(move |y| p + Point(x, y))).collect()
+        (-1..=1).flat_map(|x| (-1..=1).map(move |y| p + Delta(x, y))).collect()
     };
     let target = |p: Point| { map.get(p) == '~' };
     let sources: Vec<_> = (0..size.0).map(|x| Point(x, 0)).collect();
@@ -544,7 +544,7 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
     for &p in &path {
         for dx in -border..width + border {
             for dy in -border..width + border {
-                let q = p + Point(dx, dy);
+                let q = p + Delta(dx, dy);
                 if map.get(q) != '~' { map.set(q, 'S'); }
             }
         }
@@ -552,7 +552,7 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
     for &p in &path {
         for dx in 0..width {
             for dy in 0..width {
-                map.set(p + Point(dx, dy), 'W');
+                map.set(p + Delta(dx, dy), 'W');
             }
         }
     }
@@ -676,16 +676,16 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
         for dx in -1..=1 {
             for dy in -1..=1 {
                 let center = dx == 0 && dy == 0;
-                result += score_one(p + Point(dx, dy), center);
+                result += score_one(p + Delta(dx, dy), center);
             }
         }
         result
     };
     let edges = |p: Point| {
         let mut result: Vec<_> = (-1..=1).flat_map(
-            |x| (-1..=1).map(move |y| p + Point(x, y))).collect();
-        if map.get(p + Point(1, 0)) == 'W' && map.get(p + Point(2, 0)) == 'W' {
-            result.push(p + Point(3, 0));
+            |x| (-1..=1).map(move |y| p + Delta(x, y))).collect();
+        if map.get(p + Delta(1, 0)) == 'W' && map.get(p + Delta(2, 0)) == 'W' {
+            result.push(p + Delta(3, 0));
         }
         result
     };
@@ -728,12 +728,12 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
         };
         let edges = |p: Point| {
             let mut result: Vec<_> = (-1..=1).flat_map(
-                |x| (-1..=1).map(move |y| p + Point(x, y))).collect();
-            if map.get(p + Point(1, 0)) == 'W' && map.get(p + Point(2, 0)) == 'W' {
-                result.push(p + Point(3, 0));
+                |x| (-1..=1).map(move |y| p + Delta(x, y))).collect();
+            if map.get(p + Delta(1, 0)) == 'W' && map.get(p + Delta(2, 0)) == 'W' {
+                result.push(p + Delta(3, 0));
             }
-            if map.get(p + Point(-1, 0)) == 'W' && map.get(p + Point(-2, 0)) == 'W' {
-                result.push(p + Point(-3, 0));
+            if map.get(p + Delta(-1, 0)) == 'W' && map.get(p + Delta(-2, 0)) == 'W' {
+                result.push(p + Delta(-3, 0));
             }
             result
         };
@@ -806,7 +806,7 @@ pub fn legacy_mapgen_attempt(size: Point, rng: &mut RNG) -> Option<Matrix<char>>
                         for dx in -2_i32..=2 {
                             if dx == 0 && dy == 0 { continue; }
                             if min(dx.abs(), dy.abs()) == 2 { continue; }
-                            let next = point + Point(dx, dy);
+                            let next = point + Delta(dx, dy);
                             if !result.get(next) { continue; }
                             let distance = max(dx.abs(), dy.abs());
                             if distance <= 1 { adj1 += 1; }
@@ -835,11 +835,11 @@ pub fn legacy_mapgen_attempt(size: Point, rng: &mut RNG) -> Option<Matrix<char>>
         }
     }
 
-    let mut river = vec![Point::default()];
+    let mut river = vec![dirs::NONE];
     for i in 1..size.1 {
         let last = river.last().unwrap().0;
         let next = last + rng.random_range(-1..=1);
-        river.push(Point(next, i));
+        river.push(Delta(next, i));
     }
     let target = river[0] + *river.last().unwrap();
     let offset = Point((size - target).0 / 2, 0);

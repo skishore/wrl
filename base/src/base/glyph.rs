@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 
 use crate::static_assert_size;
-use super::point::{Matrix, Point};
+use super::point::{Delta, Matrix, Point};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -101,8 +101,8 @@ impl Glyph {
         Self((self.0 & 0x000000ffffffffff) | ((color.into().0 as u64) << 40))
     }
 
-    pub fn ray(delta: Point) -> char {
-        let Point(x, y) = delta;
+    pub fn ray(delta: Delta) -> char {
+        let Delta(x, y) = delta;
         let (ax, ay) = (x.abs(), y.abs());
         if ax > 2 * ay { return '-'; }
         if ay > 2 * ax { return '|'; }
@@ -137,34 +137,34 @@ pub struct Slice<'a> {
 
 impl<'a> From<&'a mut Buffer> for Slice<'a> {
     fn from(buffer: &'a mut Buffer) -> Slice<'a> {
-        let (root, size) = (Point::default(), buffer.size());
+        let (root, size) = (Point::ORIGIN, buffer.size());
         Slice::new(buffer, Rect { root, size })
     }
 }
 
 impl<'a> Slice<'a> {
     pub fn new(buffer: &'a mut Buffer, bounds: Rect) -> Self {
-        Self { buffer, bounds, cursor: Point::default(), fg: None, bg: None }
+        Self { buffer, bounds, cursor: Point::ORIGIN, fg: None, bg: None }
     }
 
     // Basic API
 
     pub fn get(&self, point: Point) -> Glyph {
         if !self.contains(point) { return *self.buffer.default(); }
-        self.buffer.get(self.bounds.root + point)
+        self.buffer.get(self.bounds.root.dir() + point)
     }
 
     pub fn set(&mut self, point: Point, glyph: Glyph) {
         if !self.contains(point) { return; }
         let glyph = self.fg.map_or(glyph, |x| glyph.with_fg(x));
         let glyph = self.bg.map_or(glyph, |x| glyph.with_bg(x));
-        self.buffer.set(self.bounds.root + point, glyph);
+        self.buffer.set(self.bounds.root.dir() + point, glyph);
     }
 
     pub fn fill(&mut self, glyph: Glyph) {
         for x in 0..self.bounds.size.0 {
             for y in 0..self.bounds.size.1 {
-                self.buffer.set(self.bounds.root + Point(x, y), glyph);
+                self.buffer.set(self.bounds.root + Delta(x, y), glyph);
             }
         }
     }

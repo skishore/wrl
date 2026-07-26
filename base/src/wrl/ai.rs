@@ -9,7 +9,7 @@ use rand_distr::{Distribution, Normal};
 use rand_distr::num_traits::Pow;
 
 use crate::base::pathing::{AStar, AStarHeuristic, Status};
-use crate::base::point::{Bound, LOS, Point, dirs};
+use crate::base::point::{Bound, Delta, LOS, Point, dirs};
 use crate::base::pathing::{Dijkstra, DijkstraLength, DijkstraMap, Neighborhood};
 use crate::base::util::{HashMap, HashSet, RNG, clamp, sample, sortable, weighted};
 use crate::base::vision::{INITIAL_VISIBILITY, Vision, VisionArgs};
@@ -233,7 +233,7 @@ pub struct Ctx<'a> {
     me: &'a Entity,
     known: &'a Knowledge,
     pos: Point,
-    dir: Point,
+    dir: Delta,
 
     // Computed during the turn:
     reachable: ScoredNeighborhood,
@@ -253,9 +253,9 @@ impl<'a> Ctx<'a> {
     }
 }
 
-fn safe_inv_l2(point: Point) -> f64 {
-    if point == Point::default() { return 0. };
-    (point.len_l2_squared() as f64).sqrt().recip()
+fn safe_inv_l2(dir: Delta) -> f64 {
+    if dir == dirs::NONE { return 0. };
+    (dir.len_l2_squared() as f64).sqrt().recip()
 }
 
 fn any_threat_awake(ctx: &Ctx) -> bool {
@@ -281,7 +281,7 @@ fn get_reach_check<'a>(ctx: &'a Ctx) -> impl Fn(Point) -> Status + use<'a> {
     let (fov, known, pos) = (&ctx.env.fov, ctx.known, ctx.pos);
     move |p: Point| match known.get(p).status() {
         Status::Occupied if (p - pos).len_l1() == 1 => Status::Blocked,
-        Status::Unknown if fov.can_see(p - pos) => Status::Free,
+        Status::Unknown if fov.can_see(p) => Status::Free,
         x => x,
     }
 }
@@ -319,17 +319,16 @@ fn ensure_vision(ctx: &mut Ctx) {
 
     let Ctx { known, pos, .. } = *ctx;
     let opacity_lookup = |p: Point| {
-        let blocked = known.get(p + pos).status() == Status::Blocked;
+        let blocked = known.get(p).status() == Status::Blocked;
         if blocked { INITIAL_VISIBILITY } else { 0 }
     };
-    let origin = Point::default();
-    let args = VisionArgs { pos: origin, dir: origin, opacity_lookup, };
+    let args = VisionArgs { pos, dir: dirs::NONE, opacity_lookup, };
 
     ctx.env.fov.compute(&args);
     ctx.ran_vision = true;
 }
 
-fn assess_directions(dirs: &[Point], turns: (i32, i32), rng: &mut RNG) -> Vec<Point> {
+fn assess_directions(dirs: &[Delta], turns: (i32, i32), rng: &mut RNG) -> Vec<Delta> {
     if dirs.is_empty() { return vec![]; }
 
     let mut result = vec![];
@@ -338,17 +337,17 @@ fn assess_directions(dirs: &[Point], turns: (i32, i32), rng: &mut RNG) -> Vec<Po
 
     for i in 0..steps {
         let dir = dirs[i as usize % dirs.len()];
-        if dir == Point::default() { continue; }
+        if dir == dirs::NONE { continue; }
 
         let scale = 100. / dir.len_l2();
         let steps = rng.random_range(0..turns) + 1;
         let angle = Normal::new(0., ASSESS_ANGLE).unwrap().sample(rng);
         let (sin, cos) = (angle.sin(), angle.cos());
 
-        let Point(dx, dy) = dir;
+        let Delta(dx, dy) = dir;
         let rx = (cos * scale * dx as f64) + (sin * scale * dy as f64);
         let ry = (cos * scale * dy as f64) - (sin * scale * dx as f64);
-        let target = Point(rx as i32, ry as i32);
+        let target = Delta(rx as i32, ry as i32);
         for _ in 0..steps { result.push(target); }
     }
     result
@@ -449,11 +448,11 @@ fn select_chase_target(ctx: &mut Ctx) -> Option<Point> {
     let (bias, steps, target) = (state.bias, state.steps, &state.target);
 
     let Location { pos: center, time } = target.loc;
-    let bias = if target.sense == Sense::Smell { Point(0, 0) } else { bias };
+    let bias = if target.sense == Sense::Smell { dirs::NONE } else { bias };
 
     let inv_dir_l2 = safe_inv_l2(dir);
     let inv_bias_l2 = safe_inv_l2(bias);
-    let scale = 1. / DijkstraLength(Point(1, 0)) as f64;
+    let scale = 1. / DijkstraLength(dirs::E) as f64;
 
     let k = 1.25 * MIN_SEARCH_TURNS as f64;
     let decay = k / (k + steps as f64);
@@ -492,12 +491,13 @@ fn select_chase_target(ctx: &mut Ctx) -> Option<Point> {
 fn select_flight_target(ctx: &mut Ctx, hiding: bool) -> Option<Point> {
     let Ctx { known, pos, .. } = *ctx;
 
-    let min_distance = DijkstraLength(Point(FOV_RADIUS_NPC, 0));
-    let scale = 1. / DijkstraLength(Point(1, 0)) as f64;
+    let scale = 1. / DijkstraLength(dirs::E) as f64;
+    let min_distance = DijkstraLength(dirs::E.scale(FOV_RADIUS_NPC));
     let threats = &ctx.blackboard.threats.menacing;
+    let first = threats.iter().next()?.pos;
 
     let score = |p: Point, source_distance: i32| -> (f64, bool) {
-        let mut threat = Point::default();
+        let mut threat = first;
         let mut threat_distance = std::i32::MAX;
         for x in threats {
             let z = DijkstraLength(p - x.pos);
@@ -637,7 +637,7 @@ enum DirsKind { Assess, Flight, Noises, Target, #[default] None }
 #[derive(Default)]
 struct CachedDirs {
     kind: DirsKind,
-    dirs: Vec<Point>,
+    dirs: Vec<Delta>,
     step: usize,
     used: bool,
 }
@@ -1046,7 +1046,7 @@ fn PathToTargetImpl(ctx: &mut Ctx, target: Point, range: Bound, flip: bool) -> O
 
     // Given a non-empty list of "good" directions (each of which brings us
     // close to attacking the target), choose one closest to our attack range.
-    let pick = |dirs: &[Point], rng: &mut RNG| {
+    let pick = |dirs: &[Delta], rng: &mut RNG| {
         let cell = known.get(target);
         let mut radius = range.radius;
 
@@ -1187,14 +1187,16 @@ fn FindMatchingCell(ctx: &mut Ctx, kind: PathKind, valid: CellPredicate) -> bool
 
 fn EatMeatNow(ctx: &mut Ctx) -> Option<Action> {
     let target = *ctx.blackboard.path.path.last()?;
+    let dir = target - ctx.pos;
 
     ctx.blackboard.hunger.update(MAX_HUNGER);
 
-    Some(Action::Eat { target, item: Some(Item::Corpse) })
+    Some(Action::Eat { dir, item: Some(Item::Corpse) })
 }
 
 fn EatBerryNow(ctx: &mut Ctx) -> Option<Action> {
     let target = *ctx.blackboard.path.path.last()?;
+    let dir = target - ctx.pos;
 
     let prev = ctx.blackboard.hunger.cur;
     let gain = ctx.env.rng.random_range(HUNGER_GAIN);
@@ -1205,16 +1207,17 @@ fn EatBerryNow(ctx: &mut Ctx) -> Option<Action> {
         ctx.blackboard.hunger.active = false;
     }
 
-    Some(Action::Eat { target, item: Some(Item::Berry) })
+    Some(Action::Eat { dir, item: Some(Item::Berry) })
 }
 
 fn DrinkWaterNow(ctx: &mut Ctx) -> Option<Action> {
     let target = *ctx.blackboard.path.path.last()?;
+    let dir = target - ctx.pos;
 
     let gain = ctx.env.rng.random_range(THIRST_GAIN);
     ctx.blackboard.thirst.update(gain);
 
-    Some(Action::Drink { target })
+    Some(Action::Drink { dir })
 }
 
 fn GetRestNow(ctx: &mut Ctx) -> Option<Action> {
@@ -1238,7 +1241,7 @@ struct Target {
 
 struct ChaseState {
     attack: Option<&'static Attack>,
-    bias: Point,
+    bias: Delta,
     fresh: bool,
     reset: bool,
     steps: i32,
@@ -1611,15 +1614,15 @@ pub fn ChooseDefenseSquare(leader: &Entity, source: Point) -> Option<Point> {
         let los = &los[1..los.len() - 1];
         if los.iter().any(|&x| known.get(x).blocked()) { continue; }
 
-        let Point(dx, dy) = rival - leader.pos;
+        let Delta(dx, dy) = rival - leader.pos;
         let vertical = dy.abs() > dx.abs();
         let sign = if vertical { dy.signum() } else { dx.signum() };
         assert!(sign != 0);
 
         let knight = dx * dx + dy * dy == 5;
         let bonus = if knight { 4. } else { 0. };
-        let shift = if vertical { Point(1, 0) } else { Point(0, 1) };
-        let shifts: [Point; 3] = [Point::default(), shift, Point::default() - shift];
+        let shift = if vertical { dirs::E } else { dirs::S };
+        let shifts: [Delta; 3] = [dirs::NONE, shift, dirs::NONE - shift];
 
         for shift in shifts {
             let mut defended = false;
@@ -1637,9 +1640,9 @@ pub fn ChooseDefenseSquare(leader: &Entity, source: Point) -> Option<Point> {
                 if !Bound::new(2).contains(delta) { continue; }
 
                 let score = (||{
-                    if shift == Point::default() { return 64. };
+                    if shift == dirs::NONE { return 64.; }
 
-                    let Point(px, py) = p - leader.pos;
+                    let Delta(px, py) = p - leader.pos;
                     let (a, b) = (px * dy * sign, py * dx * sign);
                     if a == b { return 6. }
 
@@ -1659,7 +1662,7 @@ pub fn ChooseDefenseSquare(leader: &Entity, source: Point) -> Option<Point> {
         for y in -2..=2 {
             if x == 0 && y == 0 { continue; }
 
-            let (d, p) = (Point(x, y), Point(x, y) + leader.pos);
+            let (d, p) = (Delta(x, y), Delta(x, y) + leader.pos);
             if !CheckFollowerSquare(leader, p, p == source) { continue; }
 
             let mut score = scores.get(&d).cloned().unwrap_or(f64::NEG_INFINITY);
@@ -1790,7 +1793,7 @@ fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
 
     let turns = FOLLOW_TURNS;
     let valid = |p: Point| CheckFollowerSquare(leader, p, p == source);
-    let step = |dir: Point| { Action::Move { look: dir, step: dir, turns } };
+    let step = |d: Delta| { Action::Move { look: d, step: d, turns } };
 
     if Bound::new(3).contains(source - target) {
         let mut moves: Vec<_> = dirs::ALL.iter().filter_map(

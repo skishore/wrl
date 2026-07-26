@@ -5,7 +5,7 @@ use rand::Rng;
 use thin_vec::ThinVec;
 
 use crate::flags;
-use crate::base::point::Point;
+use crate::base::point::{Delta, Point, dirs};
 use crate::base::util::{HashMap, HashSet, RNG, clamp};
 use crate::base::pathing::Status;
 use crate::base::vision::Vision;
@@ -103,7 +103,7 @@ type EF = EntityFlags;
 
 pub struct EntityKnowledge {
     pub eid: EID,
-    pub dir: Point,
+    pub dir: Delta,
     pub loc: Location,
     pub name: Option<Rc<str>>,
     pub flags: EntityFlags,
@@ -126,7 +126,7 @@ impl EntityKnowledge {
     fn new(eid: EID, species: &'static Species) -> Self {
         Self {
             eid,
-            dir: Default::default(),
+            dir: dirs::NONE,
             loc: Default::default(),
             name: Default::default(),
             flags: EF::Empty,

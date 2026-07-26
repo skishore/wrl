@@ -9,14 +9,14 @@ use termion::raw::{IntoRawMode, RawTerminal};
 use termion::screen::{ToAlternateScreen, ToMainScreen};
 
 use wrl_base::base::glyph::{Char, Color, Glyph};
-use wrl_base::base::point::{Matrix, Point};
+use wrl_base::base::point::{Delta, Matrix, Point};
 use wrl_base::wrl::game::{GameMode, Input, State};
 
 type RawMouseTerminal = MouseTerminal<RawTerminal<io::Stdout>>;
 
 struct Screen {
     extent: Point,
-    offset: Point,
+    offset: Delta,
     output: RawMouseTerminal,
     next: Matrix<Glyph>,
     prev: Matrix<Glyph>,
@@ -32,7 +32,7 @@ impl Screen {
         let output = io::stdout().into_raw_mode().unwrap().into();
         let (fg, bg) = (None, None);
         let extent = Point(x as i32, y as i32);
-        let offset = Point((extent - size).0 / 2 + 1, (extent - size).1 / 2 + 1);
+        let offset = Delta((extent - size).0 / 2 + 1, (extent - size).1 / 2 + 1);
         Self { extent, offset, output, next, prev, fg, bg }
     }
 

@@ -6,7 +6,7 @@ use std::num::NonZeroI32;
 use std::ops::{Index, IndexMut};
 
 use crate::static_assert_size;
-use super::point::{LOS, Point, dirs};
+use super::point::{Delta, LOS, Point, dirs};
 use super::util::HashMap;
 
 //////////////////////////////////////////////////////////////////////////////
@@ -172,8 +172,8 @@ const ASTAR_DIAGONAL_PENALTY: i32 = 6;
 const ASTAR_LOS_DIFF_PENALTY: i32 = 1;
 const ASTAR_OCCUPIED_PENALTY: i32 = 64;
 
-fn AStarLength(p: Point) -> i32 {
-    let (x, y) = (p.0.abs(), p.1.abs());
+fn AStarLength(d: Delta) -> i32 {
+    let (x, y) = (d.0.abs(), d.1.abs());
     ASTAR_UNIT_COST * max(x, y) + ASTAR_DIAGONAL_PENALTY * min(x, y)
 }
 
@@ -265,7 +265,7 @@ fn CachedDijkstra<F: Fn(Point) -> bool, G: Fn(Point) -> Status, H: Fn(Point) -> 
     let node = AStarNode::new(source, SOURCE_NODE, 0, score);
     map.insert(source, heap.push(node));
 
-    const STEPS: [(Point, i32); 8] = [
+    const STEPS: [(Delta, i32); 8] = [
         (dirs::N,  ASTAR_UNIT_COST),
         (dirs::S,  ASTAR_UNIT_COST),
         (dirs::E,  ASTAR_UNIT_COST),
@@ -385,8 +385,8 @@ pub struct Neighborhood {
 }
 
 // Expose a distance function for use in other heuristics.
-pub fn DijkstraLength(p: Point) -> i32 {
-    let (x, y) = (p.0.abs(), p.1.abs());
+pub fn DijkstraLength(d: Delta) -> i32 {
+    let (x, y) = (d.0.abs(), d.1.abs());
     DIJKSTRA_UNIT_COST * max(x, y) + DIJKSTRA_DIAGONAL_PENALTY * min(x, y)
 }
 
@@ -486,7 +486,7 @@ fn CachedDijkstraMap<F: Fn(Point) -> Status>(
     let (mut cur_index, mut cur_score) = (Some(index), 0);
     init(state, index, initial, 0, Status::Free);
 
-    const STEPS: [(Point, i32); 8] = [
+    const STEPS: [(Delta, i32); 8] = [
         (dirs::N,  DIJKSTRA_UNIT_COST),
         (dirs::S,  DIJKSTRA_UNIT_COST),
         (dirs::E,  DIJKSTRA_UNIT_COST),
@@ -551,7 +551,7 @@ mod tests {
         b.iter(|| {
             let done = |_: Point| { false };
             let check = |p: Point| { map.get(&p).copied().unwrap_or(Status::Free) };
-            Dijkstra(Point::default(), done, DIJKSTRA_CELLS, check, |_| 0);
+            Dijkstra(Point::ORIGIN, done, DIJKSTRA_CELLS, check, |_| 0);
         });
     }
 
@@ -560,7 +560,7 @@ mod tests {
         let map = generate_map(DIJKSTRA_LIMIT);
         b.iter(|| {
             let check = |p: Point| { map.get(&p).copied().unwrap_or(Status::Free) };
-            DijkstraMap(Point::default(), check, DIJKSTRA_CELLS, DIJKSTRA_LIMIT);
+            DijkstraMap(Point::ORIGIN, check, DIJKSTRA_CELLS, DIJKSTRA_LIMIT);
         });
     }
 

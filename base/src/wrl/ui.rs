@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use rand::Rng;
 
 use crate::base::glyph::{Buffer, Color, Glyph, Rect, Slice};
-use crate::base::point::{Bound, LOS, Matrix, Point, dirs};
+use crate::base::point::{Bound, Delta, DeltaLOS, LOS, Matrix, Point, dirs};
 use crate::base::pathing::Status;
 use crate::base::util::{HashMap, HashSet, RNG};
 use crate::base::vision::{Vision, VisionArgs};
@@ -62,7 +62,7 @@ const PARTY_KEYS: [char; 6] = ['a', 'b', 'c', 'd', 'e', 'f'];
 
 // Helpers
 
-fn get_direction(ch: char) -> Option<Point> {
+fn get_direction(ch: char) -> Option<Delta> {
     match ch {
         'h' => Some(dirs::W),
         'j' => Some(dirs::S),
@@ -102,7 +102,7 @@ fn rivals(me: &Entity) -> Vec<&EntityKnowledge> {
 
 fn within_map_bounds(ui: &UI, me: &Entity, point: Point) -> bool {
     let size = ui.get_map_size();
-    let Point(x, y) = point - ui.get_map_offset(me);
+    let Delta(x, y) = point - ui.get_map_offset(me);
     0 <= x && x < size.0 && 0 <= y && y < size.1
 }
 
@@ -197,9 +197,9 @@ struct RainDrop {
 
 struct Rainfall {
     ch: char,
-    delta: Point,
+    delta: Delta,
     drops: VecDeque<RainDrop>,
-    path: Vec<Point>,
+    path: Vec<Delta>,
     lightning: i32,
     thunder: i32,
 }
@@ -247,7 +247,7 @@ fn init_summon_target(me: &Entity, data: TargetData) -> Box<Target> {
         let mut best = (pos, std::i64::MAX);
         for dx in -2..=2 {
             for dy in -2..=2 {
-                let point = pos + Point(dx, dy);
+                let point = pos + Delta(dx, dy);
                 let score = (p - point).len_l2_squared();
                 if score >= best.1 || !okay(point, &mut target) { continue; }
                 best = (point, score)
@@ -354,7 +354,7 @@ fn select_valid_target(ui: &mut UI, me: &Entity) -> Option<EID> {
         &TargetData::Summon { team, .. } => {
             ui.action = Some(match summon {
                 Some(summon) => Action::Switch { summon, team, quiet: false, fallback: false },
-                None => Action::Summon { team, target: target.target },
+                None => Action::Summon { team, dir: target.target - me.pos },
             });
             ui.focus
         }
@@ -464,7 +464,7 @@ fn process_regular_input(ui: &mut UI, me: &mut Entity, input: Input) -> bool {
 
     let Some(dir) = get_direction(ch) else { return false };
 
-    if dir == Point::default() {
+    if dir == dirs::NONE {
         ui.action = Some(Action::Idle);
         return true;
     }
@@ -524,7 +524,7 @@ fn process_ui_input(ui: &mut UI, me: &mut Entity, input: Input) -> bool {
         let mut prev = target;
         for _ in 0..scale {
             let next = prev + dir;
-            if !within_map_bounds(ui, me, prev + dir) { break; }
+            if !within_map_bounds(ui, me, next) { break; }
             prev = next;
         }
         Some(prev)
@@ -779,7 +779,7 @@ impl UI {
     // Rendering entry point:
 
     pub fn render(&self, buffer: &mut Buffer, me: &Entity, effect: Option<&Effect>) {
-        if buffer.size() == Point::default() {
+        if buffer.size() == Point::ORIGIN {
             *buffer = Matrix::new(self.layout.bounds, ' '.into());
         }
         buffer.fill(*buffer.default());
@@ -813,12 +813,12 @@ impl UI {
         process_ui_input(self, me, input)
     }
 
-    pub fn start_rain(&mut self, delta: Point, count: usize) {
+    pub fn start_rain(&mut self, delta: Delta, count: usize) {
         let rainfall = Rainfall {
             ch: Glyph::ray(delta),
             delta,
             drops: VecDeque::with_capacity(count),
-            path: LOS(Point::default(), delta),
+            path: DeltaLOS(delta),
             lightning: -1,
             thunder: 0,
         };
@@ -882,7 +882,7 @@ impl UI {
             let x = rng.random_range(0..denom);
             let y = rng.random_range(0..denom);
             let target_frame = frame + r.path.len() - 1;
-            let target_point = Point(x - denom / 2, y - denom / 2) + pos;
+            let target_point = Delta(x - denom / 2, y - denom / 2) + pos;
             r.drops.push_back(RainDrop { frame: target_frame, point: target_point });
         }
 
@@ -915,7 +915,7 @@ impl UI {
         slice.fill(Glyph::wide(' '));
         for y in 0..size.1 {
             for x in 0..size.0 {
-                let point = Point(x, y) + offset;
+                let point = Delta(x, y) + offset;
                 let glyph = Self::render_tile(me, point, effect);
                 slice.set(Point(2 * x, y), glyph);
             }
@@ -1009,7 +1009,7 @@ impl UI {
                 };
                 for y in 0..size.1 {
                     for x in 0..size.0 {
-                        let point = Point(x, y) + offset;
+                        let point = Delta(x, y) + offset;
                         if range.contains(point - me.pos) { continue; }
                         gray_out(Point(2 * x + 0, y));
                         gray_out(Point(2 * x + 1, y));
@@ -1057,7 +1057,7 @@ impl UI {
             let (pos, dir) = (other.pos, other.dir);
             let mut ch = Glyph::ray(dir);
             let mut diff = dir.normalize(arrow_length as f64);
-            if other.asleep() { (ch, diff) = ('Z', Point(0, -sleep_length)); }
+            if other.asleep() { (ch, diff) = ('Z', Delta(0, -sleep_length)); }
             arrows.push((ch, LOS(pos, pos + diff)));
         }
 
@@ -1110,7 +1110,7 @@ impl UI {
             let cell = if ground { known.get(point) } else { known.default() };
             if ground && !cell.visible() { continue; }
 
-            let Point(x, y) = point - offset;
+            let Delta(x, y) = point - offset;
             let ch = if index == 0 { 'o' } else { rainfall.ch };
             let color = Self::apply_light(&cell, base, /*entity=*/false);
             let glyph = Glyph::wdfg(ch, color);
@@ -1132,7 +1132,7 @@ impl UI {
             let shift = (rainfall.thunder - 1) % 4;
             if shift % 2 == 0 {
                 let space = Glyph::char(' ');
-                let delta = Point(shift - 1, 0);
+                let delta = Delta(shift - 1, 0);
                 let limit = if delta.1 > 0 { -1 } else { 0 };
                 for y in 0..size.1 {
                     for x in 0..(size.0 + limit) {
@@ -1408,7 +1408,7 @@ impl UI {
 
     fn get_map_offset(&self, me: &Entity) -> Point {
         let size = self.get_map_size();
-        me.pos - Point(size.0 / 2, size.1 / 2)
+        me.pos - Delta(size.0 / 2, size.1 / 2)
     }
 
     fn render_bar(&self, value: f64, color: Color, width: i32, slice: &mut Slice) {
@@ -1424,20 +1424,20 @@ impl UI {
     fn render_box(&self, buffer: &mut Buffer, rect: &Rect) {
         let Point(w, h) = rect.size;
         let color: Color = UI_COLOR.into();
-        buffer.set(rect.root + Point(-1, -1), Glyph::chfg('┌', color));
-        buffer.set(rect.root + Point( w, -1), Glyph::chfg('┐', color));
-        buffer.set(rect.root + Point(-1,  h), Glyph::chfg('└', color));
-        buffer.set(rect.root + Point( w,  h), Glyph::chfg('┘', color));
+        buffer.set(rect.root + Delta(-1, -1), Glyph::chfg('┌', color));
+        buffer.set(rect.root + Delta( w, -1), Glyph::chfg('┐', color));
+        buffer.set(rect.root + Delta(-1,  h), Glyph::chfg('└', color));
+        buffer.set(rect.root + Delta( w,  h), Glyph::chfg('┘', color));
 
         let tall = Glyph::chfg('│', color);
         let flat = Glyph::chfg('─', color);
         for x in 0..w {
-            buffer.set(rect.root + Point(x, -1), flat);
-            buffer.set(rect.root + Point(x,  h), flat);
+            buffer.set(rect.root + Delta(x, -1), flat);
+            buffer.set(rect.root + Delta(x,  h), flat);
         }
         for y in 0..h {
-            buffer.set(rect.root + Point(-1, y), tall);
-            buffer.set(rect.root + Point( w, y), tall);
+            buffer.set(rect.root + Delta(-1, y), tall);
+            buffer.set(rect.root + Delta( w, y), tall);
         }
     }
 
@@ -1470,13 +1470,13 @@ impl UI {
         let prefix_width = shift + text.chars().count() as i32;
         assert!(prefix_width <= width);
         for x in 0..shift {
-            buffer.set(pos + Point(x, 0), dashes);
+            buffer.set(pos + Delta(x, 0), dashes);
         }
         for (i, c) in text.chars().enumerate() {
-            buffer.set(pos + Point(i as i32 + shift, 0), Glyph::chfg(c, color));
+            buffer.set(pos + Delta(i as i32 + shift, 0), Glyph::chfg(c, color));
         }
         for x in prefix_width..width {
-            buffer.set(pos + Point(x, 0), dashes);
+            buffer.set(pos + Delta(x, 0), dashes);
         }
     }
 

@@ -6,7 +6,7 @@ use std::ops::{Index, IndexMut};
 use std::rc::Rc;
 
 use crate::static_assert_size;
-use crate::base::point::{Point, dirs};
+use crate::base::point::{Delta, Point, dirs};
 use crate::base::util::{HashMap, RNG, sample};
 
 use super::ai::AIState;
@@ -72,7 +72,7 @@ pub struct Entity {
 
     // Location:
     pub pos: Point,
-    pub dir: Point,
+    pub dir: Delta,
     pub trail: VecDeque<Location>,
 
     // Team:
@@ -172,7 +172,7 @@ impl Entity {
 
     // Mutators:
 
-    pub fn face_direction(&mut self, dir: Point) {
+    pub fn face_direction(&mut self, dir: Delta) {
         if dir != dirs::NONE { self.dir = dir; }
     }
 }

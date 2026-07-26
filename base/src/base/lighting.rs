@@ -1,4 +1,4 @@
-use super::point::{Matrix, Point};
+use super::point::{Delta, Matrix, Point, dirs};
 use super::vision::{INITIAL_VISIBILITY, Vision, VisionArgs};
 
 //////////////////////////////////////////////////////////////////////////////
@@ -24,16 +24,16 @@ impl Iterator for OneBits {
 }
 
 impl LightSourceBitset {
-    fn sources(&self) -> impl Iterator<Item = Point> {
+    fn sources(&self) -> impl Iterator<Item = Delta> {
         self.words.iter().enumerate().flat_map(|(a, &x)| OneBits(x).map(move |b| {
             let i = (a * 64 + b as usize) as i32;
             let x = i % MAX_LIGHT_DIAMETER;
             let y = i / MAX_LIGHT_DIAMETER;
-            Point(x - MAX_LIGHT_RADIUS, y - MAX_LIGHT_RADIUS)
+            Delta(x - MAX_LIGHT_RADIUS, y - MAX_LIGHT_RADIUS)
         }))
     }
 
-    fn toggle(&mut self, delta: Point) {
+    fn toggle(&mut self, delta: Delta) {
         let x = delta.0 + MAX_LIGHT_RADIUS;
         let y = delta.1 + MAX_LIGHT_RADIUS;
         let i = (x + y * MAX_LIGHT_DIAMETER) as usize;
@@ -103,7 +103,7 @@ impl Lighting {
     fn update_light(&mut self, point: Point, light: i32, delta: i32) {
         if light < 0 { return; }
 
-        let (pos, dir) = (point, Point::default());
+        let (pos, dir) = (point, dirs::NONE);
         let opacity_lookup = |p: Point| { self.opacity.get(p) };
         let vision = &mut self.visions[light as usize];
         vision.compute(&VisionArgs { pos, dir, opacity_lookup });
@@ -214,9 +214,8 @@ mod tests {
             let light = lighting.light_radius.get(other);
             if !Bound::new(light).contains(other - point) { continue; }
 
-            let dir = Point::default();
             let opacity_lookup = |x| lighting.opacity.get(x);
-            let args = VisionArgs { pos: other, dir, opacity_lookup };
+            let args = VisionArgs { pos: other, dir: dirs::NONE, opacity_lookup };
             if vision.check_point(&args, point) { expected += 1; }
         }
 

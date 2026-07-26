@@ -20,8 +20,8 @@ impl Bound {
         Self { cutoff, radius: r }
     }
 
-    pub fn contains(&self, point: Point) -> bool {
-        point.len_l2_squared() < self.cutoff as i64
+    pub fn contains(&self, delta: Delta) -> bool {
+        delta.len_l2_squared() < self.cutoff as i64
     }
 
     pub fn is_empty(&self) -> bool {
@@ -31,14 +31,14 @@ impl Bound {
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Point:
+// Delta:
 
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
-pub struct Point(pub i32, pub i32);
-static_assert_size!(Point, 8);
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct Delta(pub i32, pub i32);
+static_assert_size!(Delta, 8);
 
-impl Point {
-    pub fn dot(&self, other: Point) -> i64 {
+impl Delta {
+    pub fn dot(&self, other: Delta) -> i64 {
         (self.0 as i64 * other.0 as i64) + (self.1 as i64 * other.1 as i64)
     }
 
@@ -64,47 +64,91 @@ impl Point {
         x * x + y * y
     }
 
-    pub fn normalize(&self, length: f64) -> Point {
+    pub fn normalize(&self, length: f64) -> Delta {
         let factor = length / self.len_l2();
         let x = (self.0 as f64 * factor).round() as i32;
         let y = (self.1 as f64 * factor).round() as i32;
-        Point(x, y)
+        Delta(x, y)
     }
 
-    pub fn scale(&self, scale: i32) -> Point {
-        Point(scale * self.0, scale * self.1)
+    pub fn scale(&self, scale: i32) -> Delta {
+        Delta(scale * self.0, scale * self.1)
     }
 }
 
-impl std::ops::Add for Point {
+pub mod dirs {
+    use super::Delta;
+
+    pub const NONE: Delta = Delta( 0,  0);
+    pub const N:    Delta = Delta( 0, -1);
+    pub const S:    Delta = Delta( 0,  1);
+    pub const E:    Delta = Delta( 1,  0);
+    pub const W:    Delta = Delta(-1,  0);
+    pub const NE:   Delta = Delta( 1, -1);
+    pub const NW:   Delta = Delta(-1, -1);
+    pub const SE:   Delta = Delta( 1,  1);
+    pub const SW:   Delta = Delta(-1,  1);
+
+    pub const ALL: [Delta; 8] = [N, S, E, W, NE, NW, SE, SW];
+    pub const CARDINAL: [Delta; 4] = [N, S, E, W];
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// Point:
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub struct Point(pub i32, pub i32);
+static_assert_size!(Point, 8);
+
+impl Point {
+    pub const ORIGIN: Point = Point(0, 0);
+
+    pub fn dir(self) -> Delta {
+        Delta(self.0, self.1)
+    }
+}
+
+impl std::ops::Add<Delta> for Delta {
+    type Output = Delta;
+    fn add(self, other: Delta) -> Delta {
+        Delta(self.0 + other.0, self.1 + other.1)
+    }
+}
+
+impl std::ops::Add<Point> for Delta {
     type Output = Point;
     fn add(self, other: Point) -> Point {
         Point(self.0 + other.0, self.1 + other.1)
     }
 }
 
-impl std::ops::Sub for Point {
+impl std::ops::Sub<Delta> for Delta {
+    type Output = Delta;
+    fn sub(self, other: Delta) -> Delta {
+        Delta(self.0 - other.0, self.1 - other.1)
+    }
+}
+
+impl std::ops::Add<Delta> for Point {
     type Output = Point;
-    fn sub(self, other: Point) -> Point {
+    fn add(self, other: Delta) -> Point {
+        Point(self.0 + other.0, self.1 + other.1)
+    }
+}
+
+impl std::ops::Sub<Delta> for Point {
+    type Output = Point;
+    fn sub(self, other: Delta) -> Point {
         Point(self.0 - other.0, self.1 - other.1)
     }
 }
 
-pub mod dirs {
-    use super::Point;
-
-    pub const NONE: Point = Point( 0,  0);
-    pub const N:    Point = Point( 0, -1);
-    pub const S:    Point = Point( 0,  1);
-    pub const E:    Point = Point( 1,  0);
-    pub const W:    Point = Point(-1,  0);
-    pub const NE:   Point = Point( 1, -1);
-    pub const NW:   Point = Point(-1, -1);
-    pub const SE:   Point = Point( 1,  1);
-    pub const SW:   Point = Point(-1,  1);
-
-    pub const ALL: [Point; 8] = [N, S, E, W, NE, NW, SE, SW];
-    pub const CARDINAL: [Point; 4] = [N, S, E, W];
+impl std::ops::Sub<Point> for Point {
+    type Output = Delta;
+    fn sub(self, other: Point) -> Delta {
+        Delta(self.0 - other.0, self.1 - other.1)
+    }
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -198,6 +242,12 @@ impl<T: Clone> Matrix<T> {
 // Bresenham digital line:
 
 #[allow(non_snake_case)]
+pub fn DeltaLOS(x: Delta) -> Vec<Delta> {
+    let origin = Point(0, 0);
+    LOS(origin, origin + x).into_iter().map(|x| x - origin).collect()
+}
+
+#[allow(non_snake_case)]
 pub fn LOS(a: Point, b: Point) -> Vec<Point> {
     let x_diff = (a.0 - b.0).abs();
     let y_diff = (a.1 - b.1).abs();
@@ -249,17 +299,17 @@ mod tests {
 
     #[test]
     fn test_bound_radius() {
-        let expected_bound_radius = |p: Point| {
-            for r in 0..=p.len_taxicab() {
-                if Bound::new(r).contains(p) { return r; }
+        let expected_bound_radius = |d: Delta| {
+            for r in 0..=d.len_taxicab() {
+                if Bound::new(r).contains(d) { return r; }
             }
-            panic!("Failed to get true bound_radius: {:?}", p);
+            panic!("Failed to get true bound_radius: {:?}", d);
         };
         let radius = 10;
         for x in -radius..=radius {
             for y in -radius..=radius {
-                let p = Point(x, y);
-                assert!(p.bound_radius() == expected_bound_radius(p));
+                let d = Delta(x, y);
+                assert!(d.bound_radius() == expected_bound_radius(d));
             }
         }
     }

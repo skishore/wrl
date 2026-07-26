@@ -9,7 +9,7 @@ use crate::flags;
 use crate::base::glyph::{Color, Glyph, Buffer};
 use crate::base::lighting::Lighting;
 use crate::base::pathing::Status;
-use crate::base::point::{Bound, LOS, Matrix, Point, dirs};
+use crate::base::point::{Bound, Delta, DeltaLOS, LOS, Matrix, Point, dirs};
 use crate::base::util::{HashMap, HashSet, RNG, sample, weighted};
 use crate::base::vision::{INITIAL_VISIBILITY, VISIBILITY_LOSSES, Vision, VisionArgs};
 
@@ -40,7 +40,7 @@ pub const FOV_RADIUS_PC_: i32 = 21;
 const FOV_RADIUS_IN_TALL_GRASS: usize = 4;
 const VISIBILITY_LOSS: i32 = VISIBILITY_LOSSES[FOV_RADIUS_IN_TALL_GRASS - 1];
 
-const LIGHT: Light = Light::Sun(Point(2, 0));
+const LIGHT: Light = Light::Sun(Delta(2, 0));
 const WEATHER: Weather = Weather::None;
 const NUM_PREDATORS: i32 = 2;
 const NUM_PREY: i32 = 18;
@@ -173,9 +173,9 @@ pub fn show_item(item: &Item) -> Glyph {
 
 // Environment
 
-pub enum Light { None, Sun(Point) }
+pub enum Light { None, Sun(Delta) }
 
-enum Weather { None, Rain(Point, usize) }
+enum Weather { None, Rain(Delta, usize) }
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -207,7 +207,7 @@ impl FOV {
         let vision = self.select_vision(me);
 
         let map = &board.map;
-        let dir = if player { Point::default() } else { dir };
+        let dir = if player { dirs::NONE } else { dir };
         let opacity_lookup = |x| map.entry_ref(x).tile.opacity();
         vision.check_point(&VisionArgs { pos, dir, opacity_lookup }, point)
     }
@@ -238,7 +238,7 @@ impl FOV {
             vision.clear();
         } else {
             let map = &board.map;
-            let dir = if player { Point::default() } else { dir };
+            let dir = if player { dirs::NONE } else { dir };
             let opacity_lookup = |x| map.entry_ref(x).tile.opacity();
             vision.compute(&VisionArgs { pos, dir, opacity_lookup });
         }
@@ -271,14 +271,14 @@ pub struct Board {
     // Lighting:
     light: Light,
     lighting: Lighting,
-    shadow: Vec<Point>,
+    shadow: Vec<Delta>,
 }
 
 impl Board {
     fn new(size: Point, light: Light) -> Self {
         let lighting = Lighting::new(size);
         let shadow = match light {
-            Light::Sun(x) => LOS(Point::default(), x).into_iter().skip(1).collect(),
+            Light::Sun(x) => DeltaLOS(x).into_iter().skip(1).collect(),
             Light::None => vec![],
         };
         let cell = Cell::default();
@@ -939,14 +939,14 @@ pub enum Action {
     Rest,
     WaitForInput,
     SniffAround,
-    Look { look: Point },
-    Drink { target: Point },
-    Eat { target: Point, item: Option<Item> },
-    Call { look: Point, call: Call },
-    Move { look: Point, step: Point, turns: f64 },
+    Look { look: Delta },
+    Drink { dir: Delta },
+    Eat { dir: Delta, item: Option<Item> },
+    Call { look: Delta, call: Call },
+    Move { look: Delta, step: Delta, turns: f64 },
     Attack { target: Point, attack: &'static Attack },
     Recall { summon: usize },
-    Summon { team: usize, target: Point },
+    Summon { team: usize, dir: Delta },
     Switch { summon: usize, team: usize, quiet: bool, fallback: bool },
     Shout { summon: usize, command: Command },
 }
@@ -1049,8 +1049,8 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             me.face_direction(look);
             ActionResult::success()
         }
-        Action::Drink { target } => {
-            let dir = target - source;
+        Action::Drink { dir } => {
+            let target = source + dir;
             if dir.len_l1() > 1 { return ActionResult::failure(); }
 
             me.face_direction(dir);
@@ -1061,8 +1061,8 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             state.add_effect(apply_flash(source, target, color, None));
             ActionResult::success()
         }
-        Action::Eat { target, item } => {
-            let dir = target - source;
+        Action::Eat { dir, item } => {
+            let target = source + dir;
             if dir.len_l1() > 1 { return ActionResult::failure(); }
 
             me.face_direction(dir);
@@ -1278,13 +1278,14 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             }
             ActionResult::success()
         }
-        Action::Summon { team, target } => {
+        Action::Summon { team, dir } => {
             let teammate = me.team.get(team);
             let Some(Teammate::In(x)) = teammate else { return ActionResult::failure() };
 
             let Individual { species, cur_hp } = *x;
             if cur_hp == 0 { return ActionResult::failure(); }
 
+            let target = source + dir;
             let status = state.board.get_status(target);
             if status != Status::Free { return ActionResult::failure(); }
 
@@ -1651,7 +1652,7 @@ impl State {
 
         let ui = &mut env.ui;
         let inputs = Default::default();
-        std::mem::drop(Weather::Rain(Point(0, 64), 32));
+        std::mem::drop(Weather::Rain(Delta(0, 64), 32));
         match WEATHER {
             Weather::Rain(angle, count) => ui.start_rain(angle, count),
             Weather::None => (),

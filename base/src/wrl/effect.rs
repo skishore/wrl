@@ -237,14 +237,6 @@ fn random_delay(n: i32, rng: &mut RNG) -> i32 {
     count
 }
 
-pub fn ray_character(delta: Point) -> char {
-    let Point(x, y) = delta;
-    let (ax, ay) = (x.abs(), y.abs());
-    if ax > 2 * ay { return '-'; }
-    if ay > 2 * ax { return '|'; }
-    if (x > 0) == (y > 0) { '\\' } else { '/' }
-}
-
 fn ExplosionEffect(point: Point) -> Effect {
     let glyph = |ch: char| Glyph::wdfg(ch, 0xff0000);
     let base = vec![
@@ -298,7 +290,7 @@ fn RayEffect(source: Point, target: Point, speed: i32) -> Effect {
     if line.len() <= 2 { return Effect::default(); }
 
     let mut result = Vec::new();
-    let glyph = Glyph::wdfg(ray_character(target - source), 0xff0000);
+    let glyph = Glyph::wdfg(Glyph::ray(target - source), 0xff0000);
     let denom = ((line.len() - 2 + speed as usize) % speed as usize) as i32;
     let start = if denom == 0 { speed } else { denom } as usize;
     for i in (start..line.len() - 1).step_by(speed as usize) {
@@ -385,7 +377,7 @@ pub fn EmberEffect(rng: &mut RNG, source: Point, target: Point) -> Effect {
 pub fn IceBeamEffect(_: &mut RNG, source: Point, target: Point) -> Effect {
     let mut effect = Effect::default();
     let line = LOS(source, target);
-    let ray = ray_character(target - source).to_string();
+    let ray = Glyph::ray(target - source).to_string();
     let ray = ray.as_str();
 
     let trail = [
@@ -416,7 +408,7 @@ pub fn IceBeamEffect(_: &mut RNG, source: Point, target: Point) -> Effect {
 
 pub fn BlizzardEffect(rng: &mut RNG, source: Point, target: Point) -> Effect {
     let mut effect = Effect::default();
-    let ray = ray_character(target - source).to_string();
+    let ray = Glyph::ray(target - source).to_string();
     let ray = ray.as_str();
 
     let mut points = vec![target];

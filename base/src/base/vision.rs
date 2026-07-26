@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use super::point::{Bound, Matrix, Point};
+use super::point::{Bound, Delta, Matrix, Point, dirs};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -47,11 +47,11 @@ const TRANSFORMS: [Transform; 4] = [
 const ROT_LEFT_: Transform = Transform([[33, 56], [-56, 33]]);
 const ROT_RIGHT: Transform = Transform([[33, -56], [56, 33]]);
 
-impl std::ops::Mul<Point> for Transform {
-    type Output = Point;
-    fn mul(self, rhs: Point) -> Self::Output {
+impl std::ops::Mul<Delta> for Transform {
+    type Output = Delta;
+    fn mul(self, rhs: Delta) -> Self::Output {
         let Transform([[a00, a01], [a10, a11]]) = self;
-        Point(rhs.0 * a00 + rhs.1 * a10, rhs.0 * a01 + rhs.1 * a11)
+        Delta(rhs.0 * a00 + rhs.1 * a10, rhs.0 * a01 + rhs.1 * a11)
     }
 }
 
@@ -116,14 +116,14 @@ struct SlopeRanges {
 
 pub struct VisionArgs<F: Fn(Point) -> i32> {
     pub pos: Point,
-    pub dir: Point,
+    pub dir: Delta,
     pub opacity_lookup: F,
 }
 
 pub struct Vision {
     range: Bound,
     initial_visibility: i32,
-    offset: Point,
+    offset: Delta,
     points_seen: Vec<Point>,
     visibility: Matrix<i32>,
 
@@ -143,7 +143,7 @@ impl Vision {
         Self {
             range: Bound::new(radius),
             initial_visibility,
-            offset: Point::default(),
+            offset: dirs::NONE,
             points_seen: vec![],
             visibility: Matrix::new(size, -1),
             prev: SlopeRanges::default(),
@@ -176,7 +176,7 @@ impl Vision {
             debug_assert!(self.visibility.raw_data().iter().all(|&x| x == -1));
         }
 
-        self.offset = Point::default();
+        self.offset = dirs::NONE;
         self.prev.depth = 1;
         self.next.depth = 2;
         self.prev.items.clear();
@@ -191,7 +191,7 @@ impl Vision {
         let delta = target - args.pos;
         if !self.range.contains(delta) { return false; }
 
-        let Point(x, y) = delta;
+        let Delta(x, y) = delta;
         let limit = std::cmp::max(x.abs(), y.abs());
 
         self.clear();
@@ -218,10 +218,10 @@ impl Vision {
         self.points_seen.push(pos);
     }
 
-    fn seed_ranges(&mut self, dir: Point, target: Option<Point>) {
+    fn seed_ranges(&mut self, dir: Delta, target: Option<Delta>) {
         let visibility = self.initial_visibility;
 
-        if dir == Point::default() {
+        if dir == dirs::NONE {
             for transform in &TRANSFORMS {
                 let (mut min, mut max) = (Slope::new(-1, 1), Slope::new(1, 1));
 
@@ -230,7 +230,7 @@ impl Vision {
                     let Transform([[a00, a01], [a10, a11]]) = *transform;
                     let inverse = Transform([[a00, -a01], [-a10, a11]]);
 
-                    let Point(x, y) = inverse * target;
+                    let Delta(x, y) = inverse * target;
                     if x == 0 || x < y.abs() { continue; }
                     min = std::cmp::max(min, Slope::new(2 * y - 1, 2 * x));
                     max = std::cmp::min(max, Slope::new(2 * y + 1, 2 * x));
@@ -245,9 +245,9 @@ impl Vision {
                 // Use the inverse to map dir into the right 90-degree quadrant.
                 let Transform([[a00, a01], [a10, a11]]) = *transform;
                 let inverse = Transform([[a00, -a01], [-a10, a11]]);
-                let Point(x, y) = inverse * dir;
-                let Point(lx, ly) = ROT_LEFT_ * Point(x, y);
-                let Point(rx, ry) = ROT_RIGHT * Point(x, y);
+                let Delta(x, y) = inverse * dir;
+                let Delta(lx, ly) = ROT_LEFT_ * Delta(x, y);
+                let Delta(rx, ry) = ROT_RIGHT * Delta(x, y);
                 debug_assert!(x != 0 || y != 0);
 
                 // Casework to figure out how the dir constrains slope ranges.
@@ -269,7 +269,7 @@ impl Vision {
 
                 // Skip this quadrant if the target outside it; else, filter.
                 if let Some(target) = target {
-                    let Point(x, y) = inverse * target;
+                    let Delta(x, y) = inverse * target;
                     if x == 0 || x < y.abs() { continue; }
                     min = std::cmp::max(min, Slope::new(2 * y - 1, 2 * x));
                     max = std::cmp::min(max, Slope::new(2 * y + 1, 2 * x));
@@ -307,7 +307,7 @@ impl Vision {
                 let limit = div_ceil(2 * max.num * depth - max.den, 2 * max.den);
 
                 for width in start..=limit {
-                    let source = Point(depth, width);
+                    let source = Delta(depth, width);
                     let nearby = self.range.contains(source);
                     let point = *transform * source;
 
@@ -367,7 +367,7 @@ mod tests {
     const DEBUG: bool = false;
     const VISIBILITY_LOSS: i32 = VISIBILITY_LOSSES[2];
 
-    fn run_fov(pos: Point, dir: Point, map: &Matrix<char>,
+    fn run_fov(pos: Point, dir: Delta, map: &Matrix<char>,
                radius: i32, check_point_lookups: bool) -> Matrix<bool> {
         // Wrapper around Vision to make it easier to test.
         let opacity_lookup = |p: Point| {
@@ -420,7 +420,7 @@ mod tests {
 
         // Get the FOV result and compare it to the expected value.
         let eye = eye.unwrap();
-        let dir = if let Some(x) = target { x - eye } else { Point::default() };
+        let dir = if let Some(x) = target { x - eye } else { dirs::NONE };
         let visible = run_fov(eye, dir, &map, map.size().0 + map.size().1, true);
         let result = show_fov(eye, &map, &visible);
         if expected != result {
@@ -811,7 +811,7 @@ mod tests {
     fn bench_fov_shadowcast(b: &mut test::Bencher) {
         let (eye, map) = generate_fov_input();
         b.iter(|| {
-            let visible = run_fov(eye, Point::default(), &map, eye.0, false);
+            let visible = run_fov(eye, dirs::NONE, &map, eye.0, false);
             debug_fov_output(eye, &map, &visible);
         });
     }
@@ -851,7 +851,7 @@ mod tests {
             if tile.limits_vision() { return VISIBILITY_LOSS; }
             0
         };
-        let dir = if directional { Point(1, 1) } else { Point::default() };
+        let dir = if directional { dirs::SE } else { dirs::NONE };
         let args = VisionArgs { pos, dir, opacity_lookup };
 
         let mut vision = Vision::new(pos.0);
