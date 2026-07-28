@@ -1411,7 +1411,7 @@ fn AttackEnemy(ctx: &mut Ctx) -> Option<Action> {
     let state = ctx.blackboard.chase.as_ref()?;
     let target = state.target.pos;
 
-    if state.target.sense == Sense::Smell { return None; }
+    if !state.target.sure { return None; }
     if state.target.time != ctx.known.time() { return None; }
     if !ctx.known.get(target).visible() { return None; }
 
