@@ -40,14 +40,14 @@ pub struct Threat {
     pub combat: Timestamp,
     pub species: Option<&'static Species>,
 
-    // Stats:
-    hp: f64,
-    delta: i32,
-
     // Flags:
     pub asleep: bool,
     pub rival: bool,
     pub seen: bool,
+
+    // Stats:
+    hp: f64,
+    delta: i32,
 
     // Danger penalty:
     penalty_score: f64,
@@ -74,14 +74,14 @@ impl Threat {
             combat: Default::default(),
             species: None,
 
-            // Stats:
-            hp: 0.,
-            delta: if timid(me) { 1 } else { -1 },
-
             // Flags:
             asleep: false,
             rival: false,
             seen: false,
+
+            // Stats:
+            hp: 0.,
+            delta: if timid(me) { 1 } else { -1 },
 
             // Danger penalty:
             penalty_score: Default::default(),

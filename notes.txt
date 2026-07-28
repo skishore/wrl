@@ -1,3 +1,11 @@
+AttackTarget paths:
+  - Enemy: from HuntSelectedTarget -> AttackEnemy
+  - Point: from ForageForBerries -> AttackPathTarget
+  - Point: from FollowSimpleCommand
+  - Enemy: from AttackRivals
+
+Also a partially-shared code path, "PathToReturn", from FollowSimpleCommand.
+
 Win rates:
 20 predators, 0 prey, no resting, always hungry, speed 1.0 @ 3c08a1bbcd988075d4b07c871a2d8b86553fe95a: 1/10
 20 predators, 0 prey, with rest,  always hungry  speed 1.0 @ 3c08a1bbcd988075d4b07c871a2d8b86553fe95a: 0/2
