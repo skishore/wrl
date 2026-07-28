@@ -75,9 +75,12 @@ const WANDER_TURNS: f64 = 2.0;
 struct Blackboard {
     dirs: CachedDirs,
     path: CachedPath,
-    request: Option<Point>,
     threats: ThreatState,
     flight: Option<FlightState>,
+
+    // Per-tick pathfinding requests:
+    attack: Option<AttackRequest>,
+    move_near: Option<Point>,
 
     // Per-tick chase state:
     chase: Option<ChaseState>,
@@ -107,9 +110,12 @@ impl Blackboard {
         let mut result = Self {
             dirs: Default::default(),
             path: Default::default(),
-            request: None,
             threats: Default::default(),
             flight: None,
+
+            // Per-tick pathfinding requests:
+            attack: None,
+            move_near: None,
 
             // Per-tick chase state:
             chase: None,
@@ -763,6 +769,8 @@ type CellPredicate = fn(&Ctx, Point) -> bool;
 
 type PathTargetSelector = fn(&mut Ctx) -> Option<Point>;
 
+type AttackTargetSelector = fn(&mut Ctx) -> Option<AttackRequest>;
+
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 enum PathKind {
     // High-priority actions:
@@ -858,12 +866,12 @@ fn ClearFinishedPath(ctx: &mut Ctx) -> Result {
 }
 
 fn ChoosePathTarget(ctx: &mut Ctx, target: PathTargetSelector) -> bool {
-    ctx.blackboard.request = target(ctx);
-    ctx.blackboard.request.is_some()
+    ctx.blackboard.move_near = target(ctx);
+    ctx.blackboard.move_near.is_some()
 }
 
 fn FindPathToTarget(ctx: &mut Ctx, kind: PathKind) -> bool {
-    let Some(target) = ctx.blackboard.request.take() else { return false };
+    let Some(target) = ctx.blackboard.move_near.take() else { return false };
 
     ensure_vision(ctx);
     let path = AStarHelper(ctx, target, kind);
@@ -978,12 +986,57 @@ fn FollowPath(ctx: &mut Ctx) -> Result {
 
 // Attacking:
 
-fn AttackPathTarget(ctx: &mut Ctx) -> Option<Action> {
+enum Choice { Attack(&'static Attack), Return }
+
+struct AttackRequest { choice: Choice, target: Point }
+
+// Target selection:
+
+fn AttackEnemy(ctx: &mut Ctx) -> Option<AttackRequest> {
+    let state = ctx.blackboard.chase.as_ref()?;
+    let target = state.target.pos;
+
+    if !state.target.sure { return None; }
+    if state.target.time != ctx.known.time() { return None; }
+    if !ctx.known.get(target).visible() { return None; }
+
+    let attack = state.attack.or_else(|| choose_random_attack(ctx))?;
+    Some(AttackRequest { choice: Choice::Attack(attack), target })
+}
+
+fn AttackRival(ctx: &mut Ctx) -> Option<AttackRequest> {
+    for other in &ctx.known.entities {
+        if !other.visible() { break; }
+        if !other.rival() { continue; }
+
+        let target = other.pos;
+        let attack = choose_random_attack(ctx)?;
+        return Some(AttackRequest { choice: Choice::Attack(attack), target });
+    }
+    None
+}
+
+fn AttackPathTarget(ctx: &mut Ctx) -> Option<AttackRequest> {
     let target = *ctx.blackboard.path.path.last()?;
     if !ctx.known.get(target).visible() { return None; }
 
     let attack = choose_random_attack(ctx)?;
-    AttackTarget(ctx, target, attack)
+    Some(AttackRequest { choice: Choice::Attack(attack), target })
+}
+
+// Attack execution:
+
+fn ChooseAttackTarget(ctx: &mut Ctx, target: AttackTargetSelector) -> bool {
+    ctx.blackboard.attack = target(ctx);
+    ctx.blackboard.attack.is_some()
+}
+
+fn AttackChosenTarget(ctx: &mut Ctx) -> Option<Action> {
+    let AttackRequest { choice, target } = ctx.blackboard.attack.take()?;
+    match choice {
+        Choice::Attack(attack) => AttackTarget(ctx, target, attack),
+        Choice::Return => PathToTarget(ctx, target, SUMMON_RANGE, /*flip=*/true),
+    }
 }
 
 fn AttackTarget(ctx: &mut Ctx, target: Point, attack: &'static Attack) -> Option<Action> {
@@ -996,7 +1049,7 @@ fn AttackTarget(ctx: &mut Ctx, target: Point, attack: &'static Attack) -> Option
     if ready {
         Some(Action::Attack { target, attack })
     } else {
-        PathToTarget(ctx, target, range)
+        PathToTarget(ctx, target, range, /*flip=*/false)
     }
 }
 
@@ -1010,15 +1063,7 @@ fn PathIsFree(known: &Knowledge, path: &[Point]) -> bool {
     path.iter().skip(1).rev().skip(1).all(|&p| known.get(p).status() == Status::Free)
 }
 
-fn PathToReturn(ctx: &mut Ctx, target: Point) -> Option<Action> {
-    PathToTargetImpl(ctx, target, SUMMON_RANGE, /*flip=*/true)
-}
-
-fn PathToTarget(ctx: &mut Ctx, target: Point, range: Bound) -> Option<Action> {
-    PathToTargetImpl(ctx, target, range, /*flip=*/false)
-}
-
-fn PathToTargetImpl(ctx: &mut Ctx, target: Point, range: Bound, flip: bool) -> Option<Action> {
+fn PathToTarget(ctx: &mut Ctx, target: Point, range: Bound, flip: bool) -> Option<Action> {
     let Ctx { known, pos, .. } = *ctx;
     let rng = &mut ctx.env.rng;
     let step = |dir| {
@@ -1165,7 +1210,7 @@ fn FindMatchingNeighbor(ctx: &mut Ctx, valid: CellPredicate) -> Option<Point> {
 
 fn FindMatchingCell(ctx: &mut Ctx, kind: PathKind, valid: CellPredicate) -> bool {
     let success = |ctx: &mut Ctx, point: Point| {
-        ctx.blackboard.request = Some(point);
+        ctx.blackboard.move_near = Some(point);
         true
     };
 
@@ -1385,11 +1430,11 @@ fn SelectBestTarget(ctx: &mut Ctx) -> bool {
     };
 
     let target = *targets.select_nth_unstable_by_key(0, |x| sortable(score(x))).1;
-    UpdateChaseTarget(ctx, target, None);
+    SetChaseTarget(ctx, target, None);
     true
 }
 
-fn UpdateChaseTarget(ctx: &mut Ctx, target: Target, attack: Option<&'static Attack>) {
+fn SetChaseTarget(ctx: &mut Ctx, target: Target, attack: Option<&'static Attack>) {
     let (pos, prev) = (ctx.pos, &ctx.blackboard.chase);
     let recent = target.time > ctx.blackboard.prev_time;
     let change = if let Some(x) = prev { target.pos != x.target.pos } else { true };
@@ -1405,18 +1450,6 @@ fn UpdateChaseTarget(ctx: &mut Ctx, target: Target, attack: Option<&'static Atta
         (target.pos - pos, 0)
     };
     ctx.blackboard.chase = Some(ChaseState { attack, bias, fresh, reset, steps, target });
-}
-
-fn AttackEnemy(ctx: &mut Ctx) -> Option<Action> {
-    let state = ctx.blackboard.chase.as_ref()?;
-    let target = state.target.pos;
-
-    if !state.target.sure { return None; }
-    if state.target.time != ctx.known.time() { return None; }
-    if !ctx.known.get(target).visible() { return None; }
-
-    let attack = state.attack.or_else(|| choose_random_attack(ctx))?;
-    AttackTarget(ctx, target, attack)
 }
 
 fn TrackEnemyByScent(ctx: &mut Ctx) -> Option<Action> {
@@ -1735,7 +1768,7 @@ fn SelectAttackTarget(ctx: &mut Ctx) -> bool {
     }
 
     let target = Target { loc, sense, slow: false, sure: other.is_some() };
-    UpdateChaseTarget(ctx, target, Some(attack));
+    SetChaseTarget(ctx, target, Some(attack));
     true
 }
 
@@ -1743,27 +1776,19 @@ fn ClearAttackCommand(ctx: &mut Ctx) {
     if matches!(ctx.action, Some(Action::Attack { .. })) { ctx.me.command.take(); }
 }
 
-fn FollowSimpleCommand(ctx: &mut Ctx) -> Option<Action> {
+fn FollowSimpleCommand(ctx: &mut Ctx) -> Option<AttackRequest> {
     match ctx.me.command.get()? {
-        Command::Attack(_, AttackTarget { eid: Some(_), .. }) => None,
-        Command::Attack(attack, target) => AttackTarget(ctx, target.loc.pos, attack),
-        Command::Return | Command::Switch(_) => PathToReturn(ctx, ctx.env.leader?.pos),
+        Command::Attack(attack, AttackTarget { eid, loc, .. }) => {
+            if eid.is_some() { return None; }
+            Some(AttackRequest { choice: Choice::Attack(attack), target: loc.pos })
+        }
+        Command::Return | Command::Switch(_) => {
+            Some(AttackRequest { choice: Choice::Return, target: ctx.env.leader?.pos })
+        }
     }
 }
 
-fn AttackRivals(ctx: &mut Ctx) -> Option<Action> {
-    for other in &ctx.known.entities {
-        if !other.visible() { break; }
-        if !other.rival() { continue; }
-
-        let attack = choose_random_attack(ctx)?;
-        let result = AttackTarget(ctx, other.pos, attack);
-        if result.is_some() { return result; }
-    }
-    None
-}
-
-fn LeaderHasRivals(ctx: &mut Ctx) -> bool {
+fn LeaderHasRivals(ctx: &Ctx) -> bool {
     let Some(leader) = ctx.env.leader else { return false };
     let rivals = dangers(leader);
     !rivals.is_empty()
@@ -1841,6 +1866,14 @@ macro_rules! path {
     };
 }
 
+fn Attack(name: &'static str, target: AttackTargetSelector) -> impl Bhv {
+    seq![
+        name,
+        cond!("ChooseAttackTarget", move |x| ChooseAttackTarget(x, target)),
+        act!("AttackChosenTarget", move |x| AttackChosenTarget(x)),
+    ]
+}
+
 fn Follow(name: &'static str, kind: PathKind) -> impl Bhv {
     seq![
         name,
@@ -1907,8 +1940,8 @@ fn ForageForBerries() -> impl Bhv {
         "ForageForBerries",
         ComputePath(KIND, HasBerryTree),
         pri![
-            "AttackOrFollowPath",
-            act!("AttackPathTarget", AttackPathTarget),
+            "AttackBerryTree",
+            Attack("AttackPathTarget", AttackPathTarget),
             cb!("FollowPath", FollowPath),
             cb!("ClearFinishedPath", ClearFinishedPath),
         ],
@@ -2008,7 +2041,7 @@ fn ChaseDownTarget() -> impl Bhv {
 fn HuntSelectedTarget() -> impl Bhv {
     pri![
         "HuntSelectedTarget",
-        act!("AttackEnemy", AttackEnemy),
+        Attack("AttackEnemy", AttackEnemy),
         act!("TrackPreyByScent", TrackEnemyByScent),
         ChaseDownTarget(),
     ]
@@ -2111,7 +2144,7 @@ fn SummonRoot() -> impl Bhv {
                 cond!("HasCommand", |x| x.me.command.get().is_some()),
                 pri![
                     "FollowCommand",
-                    act!("FollowSimpleCommand", FollowSimpleCommand),
+                    Attack("FollowSimpleCommand", FollowSimpleCommand),
                     seq![
                         "FollowAttackCommand",
                         cond!("SelectAttackTarget", SelectAttackTarget),
@@ -2121,13 +2154,13 @@ fn SummonRoot() -> impl Bhv {
                 .post_tick(ClearAttackCommand),
             ],
             seq![
-                "MaybeAttackRivals",
+                "AttackRivals",
                 cond!("MoveReady", |x| move_ready(x.me)),
-                act!("AttackRivals", AttackRivals),
+                Attack("AttackRival", AttackRival),
             ],
             seq![
                 "MaybeDefendLeader",
-                cond!("LeaderHasRivals", LeaderHasRivals),
+                cond!("LeaderHasRivals", |x| LeaderHasRivals(x)),
                 act!("DefendLeader", DefendLeader),
             ],
             act!("FollowLeader", FollowLeader),
