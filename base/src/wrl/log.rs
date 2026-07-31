@@ -15,16 +15,20 @@ use crate::base::util::HashMap;
 
 // Off-thread logging helper:
 
+#[derive(Clone, Copy, Hash, Eq, PartialEq)]
+struct Handle(usize);
+
 enum Action {
-    Open(usize, Box<str>, Compression),
-    Write(usize, Box<[u8]>),
-    Close(usize),
+    Open(Handle, Box<str>, Compression),
+    Write(Handle, Box<[u8]>),
+    Flush(Handle),
+    Close(Handle),
     Shutdown,
 }
 
 struct LogWorker {
     ops: Arc<Mutex<VecDeque<Action>>>,
-    files: HashMap<usize, Box<dyn Write>>,
+    files: HashMap<Handle, Box<dyn Write>>,
 }
 
 impl LogWorker {
@@ -40,6 +44,7 @@ impl LogWorker {
             match x {
                 Action::Open(handle, path, compression) => self.open(handle, &path, compression),
                 Action::Write(handle, data) => self.write(handle, &data),
+                Action::Flush(handle) => self.flush(handle),
                 Action::Close(handle) => self.close(handle),
                 Action::Shutdown => return false,
             }
@@ -47,7 +52,7 @@ impl LogWorker {
         true
     }
 
-    fn open(&mut self, handle: usize, filename: &str, compression: Compression) {
+    fn open(&mut self, handle: Handle, filename: &str, compression: Compression) {
         let file = BufWriter::new(File::create(filename).unwrap());
         let file: Box<dyn Write> = if compression != Compression::none() {
             Box::new(GzEncoder::new(file, compression))
@@ -58,14 +63,16 @@ impl LogWorker {
         assert!(okay.is_none());
     }
 
-    fn write(&mut self, handle: usize, data: &[u8]) {
-        let file = self.files.get_mut(&handle).unwrap();
-        file.write_all(data).unwrap();
+    fn write(&mut self, handle: Handle, data: &[u8]) {
+        self.files.get_mut(&handle).unwrap().write_all(data).unwrap()
     }
 
-    fn close(&mut self, handle: usize) {
-        let mut file = self.files.remove(&handle).unwrap();
-        file.flush().unwrap();
+    fn flush(&mut self, handle: Handle) {
+        self.files.get_mut(&handle).unwrap().flush().unwrap()
+    }
+
+    fn close(&mut self, handle: Handle) {
+        self.files.remove(&handle).unwrap().flush().unwrap()
     }
 }
 
@@ -104,7 +111,7 @@ impl Logger {
     }
 
     fn open_with(&self, filename: &str, compression: Compression) -> LogFile {
-        let handle = self.next_handle.replace(self.next_handle.get() + 1);
+        let handle = Handle(self.next_handle.replace(self.next_handle.get() + 1));
         let open = Some((format!("{}/{}", self.dir, filename), compression));
         LogFile { ops: Arc::clone(&self.ops), open, buffer: vec![], handle }
     }
@@ -118,7 +125,7 @@ pub struct LogFile {
     ops: Arc<Mutex<VecDeque<Action>>>,
     open: Option<(String, Compression)>,
     buffer: Vec<u8>,
-    handle: usize,
+    handle: Handle,
 }
 
 impl LogFile {
@@ -149,6 +156,7 @@ impl Write for LogFile {
             let data = std::mem::take(&mut self.buffer).into_boxed_slice();
             self.push(Action::Write(self.handle, data));
         }
+        self.push(Action::Flush(self.handle));
         Ok(())
     }
 }
