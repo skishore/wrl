@@ -6,6 +6,7 @@ use crate::base::point::{Bound, Point};
 use crate::base::util::{HashMap, RNG};
 
 use super::effect::{Effect, self};
+use super::game::{TF, TileFlags};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -60,6 +61,7 @@ pub struct Species {
     pub name: &'static str,
     pub attacks: Vec<&'static Attack>,
     pub flags: SpeciesFlags,
+    pub moves: TileFlags,
     pub glyph: Glyph,
     pub light: Bound,
     pub scent: f64,
@@ -93,18 +95,20 @@ impl PartialEq for &'static Species {
 }
 
 static SPECIES: LazyLock<HashMap<&'static str, Species>> = LazyLock::new(|| {
+    let walks = TF::CanWalkOn;
+    let flies = TF::CanWalkOn | TF::CanFlyOver;
     let items = vec![
-        ("Human",      0xffffff, 0, 0, 0.000, 0.9, 3,   vec![]),
-        ("Pidgey",     0xd0a070, 0, 0, 0.125, 1.0, 200, vec![]),
-        ("Rattata",    0xa060ff, 1, 0, 1.000, 1.0, 200, vec!["Headbutt"]),
-        ("Bulbasaur",  0x408020, 0, 0, 0.250, 1.0, 300, vec![]),
-        ("Charmander", 0xea8b24, 1, 4, 0.500, 1.0, 200, vec!["Ember"]),
-        ("Squirtle",   0x80c0ff, 0, 0, 0.250, 1.0, 200, vec!["Ice Beam"]),
-        ("Pikachu",    0xffff00, 0, 4, 0.500, 1.1, 200, vec![]),
-        ("Eevee",      0xd0a070, 0, 0, 1.000, 1.0, 200, vec!["Headbutt"]),
+        ("Human",      0xffffff, walks, 0, 0, 0.000, 0.9, 3,   vec![]),
+        ("Pidgey",     0xd0a070, flies, 0, 0, 0.125, 1.0, 200, vec![]),
+        ("Rattata",    0xa060ff, walks, 1, 0, 1.000, 1.0, 200, vec!["Headbutt"]),
+        ("Bulbasaur",  0x408020, walks, 0, 0, 0.250, 1.0, 300, vec![]),
+        ("Charmander", 0xea8b24, walks, 1, 4, 0.500, 1.0, 200, vec!["Ember"]),
+        ("Squirtle",   0x80c0ff, walks, 0, 0, 0.250, 1.0, 200, vec!["Ice Beam"]),
+        ("Pikachu",    0xffff00, walks, 0, 4, 0.500, 1.1, 200, vec![]),
+        ("Eevee",      0xd0a070, walks, 0, 0, 1.000, 1.0, 200, vec!["Headbutt"]),
     ];
     let mut result = HashMap::default();
-    for (name, color, predator, light, scent, speed, hp, attacks) in items {
+    for (name, color, moves, predator, light, scent, speed, hp, attacks) in items {
         let human = name == "Human";
         let ch = if human { '@' } else { name.chars().next().unwrap() };
         let f0 = if human { SF::Human } else { SF::Empty };
@@ -118,7 +122,7 @@ static SPECIES: LazyLock<HashMap<&'static str, Species>> = LazyLock::new(|| {
         let glyph = Glyph::wdfg(ch, color);
         let light = Bound::new(if light == 0 { -1 } else { light });
         result.insert(name, Species {
-            name, attacks, flags, glyph, light, scent, speed, hp });
+            name, attacks, flags, moves, glyph, light, scent, speed, hp });
     }
     result
 });

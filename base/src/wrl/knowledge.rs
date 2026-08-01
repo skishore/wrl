@@ -13,7 +13,7 @@ use crate::base::vision::Vision;
 use super::dex::Species;
 use super::entity::{EID, Entity, Teammate};
 use super::event::{Event, EventData, Location, Sense, Sound, UID};
-use super::game::{MOVE_TIMER, Board, Cell, Item, Light, Tile};
+use super::game::{MOVE_TIMER, Board, Cell, Item, Light, Tile, TileFlags};
 use super::list::{Handle, List};
 use super::time::{Timestamp, TurnTimer};
 
@@ -293,6 +293,7 @@ pub struct Knowledge {
     // Events. Recent events come last, unlike the other lists.
     pub events: Vec<Event>,
 
+    moves: TileFlags,
     timer: TurnTimer,
     eid_index: HashMap<EID, EIDEntry>,
     pos_index: HashMap<Point, PointEntry>,
@@ -382,6 +383,8 @@ impl Knowledge {
 
         let (pos, time) = (me.pos, board.time);
         let unlit = matches!(board.get_light(), Light::None);
+        let moves = me.species.moves;
+        self.moves = moves;
 
         // Detect entities that were recently nearby by scent.
         self.populate_scents(me, board, rng);
@@ -470,7 +473,7 @@ impl Knowledge {
             if see_all_entities && entity.is_none() { entry.occupant = None; }
 
             // Update the cell's pathfinding status.
-            entry.status = if tile.blocks_movement() {
+            entry.status = if !tile.can_move_to(moves) {
                 Status::Blocked
             } else if entry.occupant.is_some() {
                 Status::Occupied
@@ -770,7 +773,7 @@ impl Knowledge {
             if let Some(OH::Entity(x)) = occupant { assert!(self.entities[x].pos == pos); }
             if let Some(OH::Source(x)) = occupant { assert!(self.sources[x].pos == pos); }
 
-            let actual = if let Some(x) = cell && self.cells[x].tile.blocks_movement() {
+            let actual = if let Some(x) = cell && !self.cells[x].tile.can_move_to(self.moves) {
                 Status::Blocked
             } else if occupant.is_some() {
                 Status::Occupied
@@ -798,7 +801,7 @@ pub struct PointLookup<'a> {
 }
 
 impl<'a> PointLookup<'a> {
-    // Field lookups
+    // Field lookups:
 
     pub fn last_seen(&self) -> Timestamp {
         self.cell().map_or_default(|x| x.last_seen)
@@ -828,7 +831,7 @@ impl<'a> PointLookup<'a> {
         self.cell().map_or(-1, |x| x.visibility)
     }
 
-    // Derived fields
+    // Derived fields:
 
     pub fn cell(&self) -> Option<&'a CellKnowledge> {
         Some(&self.root.cells[self.spot?.cell?])
@@ -848,10 +851,10 @@ impl<'a> PointLookup<'a> {
         self.spot.map_or(Status::Unknown, |x| x.status)
     }
 
-    // Predicates
+    // Predicates:
 
     pub fn occupied(&self) -> bool {
-        self.spot.map_or(false, |x| x.status == Status::Occupied)
+        self.spot.map_or(false, |x| x.occupant.is_some())
     }
 
     pub fn blocked(&self) -> bool {
@@ -859,7 +862,7 @@ impl<'a> PointLookup<'a> {
     }
 
     pub fn unblocked(&self) -> bool {
-        self.cell().map_or(false, |x| !x.tile.blocks_movement())
+        self.spot.map_or(false, |x| x.status != Status::Blocked)
     }
 
     pub fn unknown(&self) -> bool {

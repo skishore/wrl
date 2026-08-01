@@ -71,22 +71,30 @@ pub enum Input { Escape, BackTab, Char(char), Click(Point) }
 
 flags! {
     pub TileFlags(u32) {
-        BlocksMovement,
+        // Movement:
+        CanWalkOn,
+        CanSwimOn,
+        CanFlyOver,
+
+        // Vision:
         BlocksVision,
         LimitsVision,
+
+        // Resources:
         DropsBerries,
         CanDrink,
         CanEat,
 
         /// Deriving:
-        Blocked = BlocksMovement | BlocksVision,
-        FreshWater = BlocksMovement | CanDrink,
-        BerryTree = BlocksMovement | LimitsVision | DropsBerries,
-        TallGrass = LimitsVision,
+        Blocked = BlocksVision,
+        FreshWater = CanSwimOn | CanFlyOver | CanDrink,
+        BerryTree = LimitsVision | DropsBerries,
+        TallGrass = CanWalkOn | CanFlyOver | LimitsVision,
+        Free = CanWalkOn | CanFlyOver,
     }
 }
 
-type TF = TileFlags;
+pub type TF = TileFlags;
 
 pub struct Tile {
     pub flags: TileFlags,
@@ -102,16 +110,17 @@ impl Tile {
 
     pub fn can_eat(&self) -> bool { self.flags.any(TF::CanEat) }
     pub fn can_drink(&self) -> bool { self.flags.any(TF::CanDrink) }
+    pub fn drops_berries(&self) -> bool { self.flags.any(TF::DropsBerries) }
     pub fn blocks_vision(&self) -> bool { self.flags.any(TF::BlocksVision) }
     pub fn limits_vision(&self) -> bool { self.flags.any(TF::LimitsVision) }
-    pub fn blocks_movement(&self) -> bool { self.flags.any(TF::BlocksMovement) }
-    pub fn drops_berries(&self) -> bool { self.flags.any(TF::DropsBerries) }
 
     // Derived predicates:
 
+    pub fn can_move_to(&self, moves: TileFlags) -> bool { self.flags.any(moves) }
+
     pub fn casts_shadow(&self) -> bool { self.blocks_vision() }
 
-    pub fn is_cover(&self) -> bool { self.limits_vision() && !self.blocks_movement() }
+    pub fn is_cover(&self) -> bool { self.limits_vision() }
 
     pub fn opacity(&self) -> i32 {
         if self.blocks_vision() { return INITIAL_VISIBILITY; }
@@ -137,15 +146,15 @@ static DEFAULT_TILE: LazyLock<&'static Tile> = LazyLock::new(|| TILES.get(&'#').
 static TILES: LazyLock<HashMap<char, Tile>> = LazyLock::new(|| {
     let items = [
         ('#', TF::Blocked,    ('#', 0x106000), "a tree"),
-        ('.', TF::Empty,      ('.', 0xe0ffc0), "grass"),
-        (',', TF::Empty,      ('`', 0x60c060), "weeds"),
+        ('.', TF::Free,       ('.', 0xe0ffc0), "grass"),
+        (',', TF::Free,       ('`', 0x60c060), "weeds"),
         ('"', TF::TallGrass,  ('"', 0x60c000), "tall grass"),
         ('|', TF::TallGrass,  ('|', 0x60c000), "reeds"),
-        ('+', TF::Empty,      ('+', 0xff6060), "a flower"),
+        ('+', TF::Free,       ('+', 0xff6060), "a flower"),
         ('~', TF::FreshWater, ('~', 0x0080ff), "water"),
         ('B', TF::BerryTree,  ('#', 0xc08000), "a berry tree"),
-        ('=', TF::Empty,      ('=', 0xff8000), "a bridge"),
-        ('R', TF::Empty,      ('.', 0xff8000), "a path"),
+        ('=', TF::Free,       ('=', 0xff8000), "a bridge"),
+        ('R', TF::Free,       ('.', 0xff8000), "a path"),
     ];
     let mut result = HashMap::default();
     for (ch, flags, glyph, description) in items {
@@ -419,9 +428,9 @@ impl Board {
 
     pub fn get_size(&self) -> Point { self.map.size() }
 
-    pub fn get_status(&self, p: Point) -> Status {
+    pub fn get_status(&self, p: Point, moves: TileFlags) -> Status {
         let Cell { eid, tile, .. } = self.get_cell(p);
-        if tile.blocks_movement() { return Status::Blocked; }
+        if !tile.can_move_to(moves)  { return Status::Blocked; }
         if eid.is_some() { Status::Occupied } else { Status::Free }
     }
 
@@ -765,8 +774,9 @@ fn hit_tile(state: &mut State, eid: EID, target: Point) {
     let State { board, env, .. } = state;
     if !board.get_tile(target).drops_berries() { return; }
 
+    let moves = TF::CanWalkOn | TF::CanSwimOn;
     let options: Vec<_> = dirs::ALL.clone().into_iter().filter(
-        |&x| board.get_status(target + x) != Status::Blocked).collect();
+        |&x| board.get_status(target + x, moves) != Status::Blocked).collect();
     if options.is_empty() { return; }
 
     let rng = &mut env.rng;
@@ -965,6 +975,7 @@ impl ActionResult {
 }
 
 fn can_attack(board: &Board, me: &Entity, target: Point, range: Bound) -> bool {
+    let moves = me.species.moves;
     let (known, source) = (&me.known, me.pos);
 
     if source == target { return false; }
@@ -972,11 +983,14 @@ fn can_attack(board: &Board, me: &Entity, target: Point, range: Bound) -> bool {
     if !range.contains(source - target) { return false; }
 
     let los = LOS(source, target);
-    los[1..los.len() - 1].iter().all(
-        |&p| known.get(p).status() == Status::Free && board.get_status(p) == Status::Free)
+    los[1..los.len() - 1].iter().all(|&p| {
+        known.get(p).status() == Status::Free &&
+        board.get_status(p, moves) == Status::Free
+    })
 }
 
 fn can_summon(board: &Board, me: &Entity, target: Point) -> bool {
+    let moves = me.species.moves;
     let (known, range, source) = (&me.known, SUMMON_RANGE, me.pos);
 
     if source == target { return false; }
@@ -986,7 +1000,7 @@ fn can_summon(board: &Board, me: &Entity, target: Point) -> bool {
     let los = LOS(source, target);
     los[1..los.len() - 1].iter().all(|&p| {
         if known.get(p).status() != Status::Free { return false; }
-        let status = board.get_status(p);
+        let status = board.get_status(p, moves);
         status == Status::Free || status == Status::Occupied
     })
 }
@@ -1127,6 +1141,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
             // Moving diagonally is slower. Moving quickly is noisier.
             let noisy = turns <= 1.;
+            let moves = me.species.moves;
             let turns = step.len_l2() * turns;
             let color = me.species.glyph.fg();
             let player = me.player;
@@ -1137,7 +1152,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let cell = board.get_cell(target);
             let swap = cell.eid.is_some();
 
-            if cell.tile.blocks_movement() {
+            if !cell.tile.can_move_to(moves) {
                 board.entities[eid].face_direction(step);
                 return ActionResult::failure();
             }
@@ -1286,7 +1301,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             if cur_hp == 0 { return ActionResult::failure(); }
 
             let target = source + dir;
-            let status = state.board.get_status(target);
+            let status = state.board.get_status(target, species.moves);
             if status != Status::Free { return ActionResult::failure(); }
 
             let me = &state.board.entities[eid];
@@ -1569,6 +1584,7 @@ impl State {
         let size = Point(WORLD_SIZE, WORLD_SIZE);
         let rng = seed.map(|x| RNG::seed_from_u64(x));
         let rng = rng.unwrap_or_else(|| RNG::from_os_rng());
+        let species = Species::get("Human");
 
         let mut board = Board::new(size, LIGHT);
         let mut pos = Point(size.0 / 2, size.1 / 2);
@@ -1586,7 +1602,7 @@ impl State {
                 let p = Point(0, y);
                 if result.get(p) == 'R' { pos = p; }
             }
-            if !board.get_tile(pos).blocks_movement() { break; }
+            if board.get_status(pos, species.moves) == Status::Free { break; }
         }
 
         let mut env = Env {
@@ -1600,7 +1616,6 @@ impl State {
         };
 
         let input = Action::WaitForInput;
-        let species = Species::get("Human");
         let (name, leader, player) = (Some("skishore".into()), None, true);
         let args = EntityArgs { name, pos, player, leader, species };
         let player = board.add_entity(&args, &mut env);
@@ -1614,27 +1629,27 @@ impl State {
             me.pos = Point(-9999, -9999);
         }
 
-        let pos = |board: &Board, rng: &mut RNG| {
+        let pos = |board: &Board, moves: TileFlags, rng: &mut RNG| {
             for _ in 0..100 {
                 let Point(x, y) = size;
                 let p = Point(rng.random_range(0..x), rng.random_range(0..y));
-                if let Status::Free = board.get_status(p) { return Some(p); }
+                if let Status::Free = board.get_status(p, moves) { return Some(p); }
             }
             None
         };
         for i in 0..(NUM_PREDATORS + NUM_PREY) {
-            if let Some(x) = pos(&board, &mut env.rng) {
-                let predator = i < NUM_PREDATORS;
-                let species = match (predator, i % 2) {
-                    (true, 0)  => "Rattata",
-                    (true, _)  => "Charmander",
-                    (false, _) => "Pidgey",
-                };
-                let species = Species::get(species);
-                let (name, leader, player) = (None, None, false);
-                let args = EntityArgs { name, pos: x, player, leader, species };
-                board.add_entity(&args, &mut env);
-            }
+            let predator = i < NUM_PREDATORS;
+            let species = match (predator, i % 2) {
+                (true, 0)  => "Rattata",
+                (true, _)  => "Charmander",
+                (false, _) => "Pidgey",
+            };
+            let species = Species::get(species);
+            let Some(x) = pos(&board, species.moves, &mut env.rng) else { continue };
+
+            let (name, leader, player) = (None, None, false);
+            let args = EntityArgs { name, pos: x, player, leader, species };
+            board.add_entity(&args, &mut env);
         }
 
         let teammate = |name: &str| {
