@@ -357,8 +357,7 @@ impl Vision {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::util::{HashMap, RNG};
-    use crate::wrl::game::Tile;
+    use super::super::util::RNG;
 
     use rand::{Rng, SeedableRng};
 
@@ -366,6 +365,15 @@ mod tests {
 
     const DEBUG: bool = false;
     const VISIBILITY_LOSS: i32 = VISIBILITY_LOSSES[2];
+
+    #[derive(Clone, Copy)]
+    struct Tile(char);
+
+    impl Tile {
+        fn get(ch: char) -> Self { Self(ch) }
+        fn blocks_vision(&self) -> bool { self.0 == '#' }
+        fn limits_vision(&self) -> bool { self.0 == ',' }
+    }
 
     fn run_fov(pos: Point, dir: Delta, map: &Matrix<char>,
                radius: i32, check_point_lookups: bool) -> Matrix<bool> {
@@ -838,13 +846,8 @@ mod tests {
 
     fn run_vision_benchmark(b: &mut test::Bencher, directional: bool, point_lookups: bool) {
         let (pos, map) = generate_fov_input();
-        let mapping: HashMap<_, _> =
-                [('.', '.'), ('#', '#'), (',', '"')].into_iter().collect();
         let mut tiles = Matrix::new(map.size(), Tile::get('#'));
-        for (p, x) in tiles.iter_mut() {
-            let c = *mapping.get(&map.get(p)).unwrap();
-            *x = Tile::get(c);
-        }
+        for (p, x) in tiles.iter_mut() { *x = Tile::get(map.get(p)); }
         let opacity_lookup = |p: Point| {
             let tile = tiles.get(p);
             if tile.blocks_vision() { return INITIAL_VISIBILITY; }
