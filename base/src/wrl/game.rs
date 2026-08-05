@@ -1672,12 +1672,18 @@ impl State {
             Weather::Rain(angle, count) => ui.start_rain(angle, count),
             Weather::None => (),
         }
-        ui.log.log("Welcome to WildsRL! Use vikeys (h/j/k/l/y/u/b/n) to move.");
+        ui.log.log("Welcome to WildsRL! Use the numpad or vikeys (h/j/k/l/y/u/b/n) to move.");
 
         Self { board, input, inputs, player, env }
     }
 
-    pub fn add_input(&mut self, input: Input) { self.inputs.push(input) }
+    pub fn add_input(&mut self, mut input: Input) {
+        if let Input::Char(ch) = input && '1' <= ch && ch <= '9' {
+            let mapping = ['b', 'j', 'n', 'h', '.', 'l', 'y', 'k', 'u'];
+            input = Input::Char(mapping[ch as usize - '1' as usize]);
+        }
+        self.inputs.push(input)
+    }
 
     pub fn update(&mut self) { update_state(self); }
 
