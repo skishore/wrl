@@ -28,7 +28,7 @@ use super::time::Timestamp;
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Constants
+// Constants:
 
 const ASTAR_CELLS_ATTACK: i32 = 256;
 const ASTAR_CELLS_WANDER: i32 = 1024;
@@ -70,29 +70,46 @@ const WANDER_TURNS: f64 = 2.0;
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Blackboard
+// Timer:
+
+struct Timer {
+    active: bool,
+    cur: i32,
+    max: i32,
+}
+
+impl Timer {
+    fn new(rng: &mut RNG, max: i32) -> Self {
+        Self { active: false, cur: rng.random_range(0..=max), max }
+    }
+
+    fn percent(&self) -> i64 {
+        (100 * (self.max - self.cur) / max(self.max, 1)) as i64
+    }
+
+    fn update(&mut self, delta: i32) {
+        self.cur = clamp(self.cur + delta, 0, self.max);
+        if self.cur == self.max { self.active = false; }
+        if self.cur == 0 { self.active = true; }
+    }
+}
+
+
+//////////////////////////////////////////////////////////////////////////////
+
+// Blackboard (i.e. persistent state):
 
 struct Blackboard {
     dirs: CachedDirs,
     path: CachedPath,
-    flight: Option<FlightState>,
     threats: ThreatState,
-    menacing: Vec<Point>,
-
-    // Per-tick pathfinding requests:
-    attack: Option<AttackRequest>,
-    move_near: Option<Point>,
-
-    // Per-tick chase state:
-    chase: Option<ChaseState>,
-    targets: Vec<Target>,
-    had_target: bool,
+    flight: Option<FlightState>,
+    target: Option<ChaseState>,
 
     prev_time: Timestamp,
     turn_time: Timestamp,
     last_warning: Timestamp,
 
-    // Timers:
     assess: Timer,
     hunger: Timer,
     thirst: Timer,
@@ -111,24 +128,14 @@ impl Blackboard {
         let mut result = Self {
             dirs: Default::default(),
             path: Default::default(),
-            flight: None,
             threats: Default::default(),
-            menacing: vec![],
-
-            // Per-tick pathfinding requests:
-            attack: None,
-            move_near: None,
-
-            // Per-tick chase state:
-            chase: None,
-            targets: vec![],
-            had_target: false,
+            flight: None,
+            target: None,
 
             prev_time: Timestamp::default(),
             turn_time: Timestamp::default(),
             last_warning: Timestamp::default(),
 
-            // Basic needs:
             assess: Timer::new(rng, MAX_ASSESS),
             hunger: Timer::new(rng, MAX_HUNGER),
             thirst: Timer::new(rng, MAX_THIRST),
@@ -204,8 +211,8 @@ impl Blackboard {
             debug.newline();
         }
 
-        if let Some(x) = &self.chase {
-            debug.append("Chase:");
+        if let Some(x) = &self.target {
+            debug.append("Target:");
             debug.indent(1, |debug| {
                 let Target { loc, sense, .. } = x.target;
                 debug.append(format!("age: {}", known.debug_time(loc.time)));
@@ -223,7 +230,7 @@ impl Blackboard {
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Ctx
+// Ctx (i.e. temporary state):
 
 #[derive(Default)]
 struct ScoredNeighborhood {
@@ -236,6 +243,20 @@ impl std::ops::Deref for ScoredNeighborhood {
     fn deref(&self) -> &Self::Target { &self.neighborhood }
 }
 
+#[derive(Default)]
+struct PerTickState {
+    attack_request: Option<AttackRequest>,
+    path_request: Option<Point>,
+
+    reachable: ScoredNeighborhood,
+    sneakable: ScoredNeighborhood,
+    ran_vision: bool,
+
+    threats: Vec<Point>,
+    targets: Vec<Target>,
+    had_target: bool,
+}
+
 pub struct Ctx<'a> {
     // Derived from the entity:
     me: &'a Entity,
@@ -243,15 +264,11 @@ pub struct Ctx<'a> {
     pos: Point,
     dir: Delta,
 
-    // Computed during the turn:
-    reachable: ScoredNeighborhood,
-    sneakable: ScoredNeighborhood,
-    ran_vision: bool,
-
     // Mutable outputs:
     action: Option<Action>,
     blackboard: &'a mut Blackboard,
     env: &'a mut AIEnv<'a>,
+    tmp: PerTickState,
 }
 
 impl<'a> Ctx<'a> {
@@ -276,7 +293,7 @@ fn choose_random_attack(ctx: &mut Ctx) -> Option<&'static Attack> {
 }
 
 fn is_hiding_place(ctx: &Ctx, point: Point) -> bool {
-    is_hidden_from(ctx, point, &ctx.blackboard.menacing)
+    is_hidden_from(ctx, point, &ctx.tmp.threats)
 }
 
 fn is_hidden_from(ctx: &Ctx, point: Point, threats: &[Point]) -> bool {
@@ -308,34 +325,31 @@ fn get_sneak_check<'a, 'b>(ctx: &'a Ctx<'b>) -> impl Fn(Point) -> Status + use<'
 }
 
 fn ensure_reachable(ctx: &mut Ctx) {
-    if !ctx.reachable.visited.is_empty() { return; }
+    if !ctx.tmp.reachable.visited.is_empty() { return; }
 
     ensure_vision(ctx);
     let (pos, check) = (ctx.pos, get_reach_check(ctx));
-    ctx.reachable.neighborhood = DijkstraMap(pos, check, SEARCH_CELLS, SEARCH_LIMIT);
+    ctx.tmp.reachable.neighborhood = DijkstraMap(pos, check, SEARCH_CELLS, SEARCH_LIMIT);
 
-    if let Some(x) = &mut ctx.env.debug { x.record_neighborhood(&ctx.reachable); }
+    if let Some(x) = &mut ctx.env.debug { x.record_neighborhood(&ctx.tmp.reachable); }
 }
 
 fn ensure_sneakable(ctx: &mut Ctx) {
-    if !ctx.sneakable.visited.is_empty() { return; }
+    if !ctx.tmp.sneakable.visited.is_empty() { return; }
 
     let (pos, check) = (ctx.pos, get_sneak_check(ctx));
-    ctx.sneakable.neighborhood = DijkstraMap(pos, check, HIDING_CELLS, HIDING_LIMIT);
+    ctx.tmp.sneakable.neighborhood = DijkstraMap(pos, check, HIDING_CELLS, HIDING_LIMIT);
 }
 
 fn ensure_vision(ctx: &mut Ctx) {
-    if ctx.ran_vision { return; }
+    if ctx.tmp.ran_vision { return; }
 
     let Ctx { known, pos, .. } = *ctx;
-    let opacity_lookup = |p: Point| {
-        let blocked = known.get(p).status() == Status::Blocked;
-        if blocked { INITIAL_VISIBILITY } else { 0 }
-    };
+    let opacity_lookup = |x| if known.get(x).blocked() { INITIAL_VISIBILITY } else { 0 };
     let args = VisionArgs { pos, dir: dirs::NONE, opacity_lookup, };
 
     ctx.env.fov.compute(&args);
-    ctx.ran_vision = true;
+    ctx.tmp.ran_vision = true;
 }
 
 fn assess_directions(dirs: &[Delta], turns: (i32, i32), rng: &mut RNG) -> Vec<Delta> {
@@ -447,14 +461,14 @@ fn select_explore_target(ctx: &mut Ctx) -> Option<Point> {
 
     ensure_reachable(ctx);
 
-    let scores: Vec<_> = ctx.reachable.visited.iter().map(
+    let scores: Vec<_> = ctx.tmp.reachable.visited.iter().map(
         |&(p, distance)| (p, score(p, distance))).collect();
     select_target_linear(&scores, ctx.env)
 }
 
 fn select_chase_target(ctx: &mut Ctx) -> Option<Point> {
     let Ctx { known, pos, dir, .. } = *ctx;
-    let state = ctx.blackboard.chase.as_ref()?;
+    let state = ctx.blackboard.target.as_ref()?;
     let (bias, steps, target) = (state.bias, state.steps, &state.target);
 
     let Location { pos: center, time } = target.loc;
@@ -492,7 +506,7 @@ fn select_chase_target(ctx: &mut Ctx) -> Option<Point> {
 
     ensure_reachable(ctx);
 
-    let n = &ctx.reachable.neighborhood;
+    let n = &ctx.tmp.reachable.neighborhood;
     let scores: Vec<_> = n.blocked.iter().chain(&n.visited).filter_map(
         |&(p, distance)| Some((p, score(p, distance)?))).collect();
     select_target_softmax(&scores, ctx.env, 4.)
@@ -534,7 +548,7 @@ fn select_flight_target(ctx: &mut Ctx, hiding: bool) -> Option<Point> {
     };
 
     let min_score = score(pos, 0).0;
-    let n = if hiding { &ctx.sneakable.visited } else { &ctx.reachable.visited };
+    let n = if hiding { &ctx.tmp.sneakable.visited } else { &ctx.tmp.reachable.visited };
     let scores: Vec<_> = n.iter().filter_map(|&(p, distance)| {
         let (score, valid) = score(p, distance);
         if valid && score >= min_score { Some((p, score)) } else { None }
@@ -544,7 +558,7 @@ fn select_flight_target(ctx: &mut Ctx, hiding: bool) -> Option<Point> {
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Basic state updates
+// Basic state updates:
 
 fn TickBasicNeeds(ctx: &mut Ctx) -> Result {
     let (bb, me) = (&mut *ctx.blackboard, ctx.me);
@@ -563,7 +577,10 @@ fn TickBasicNeeds(ctx: &mut Ctx) -> Result {
 fn RunCombatAnalysis(ctx: &mut Ctx) -> Result {
     let (bb, me) = (&mut *ctx.blackboard, ctx.me);
     bb.threats.update(me);
-    bb.menacing = bb.threats.menacing.iter().map(|x| x.pos).collect();
+
+    let threats = &bb.threats.menacing;
+    ctx.tmp.threats = threats.iter().map(|x| x.pos).collect();
+
     Result::Failed
 }
 
@@ -610,32 +627,6 @@ fn UpdateLastSeen(ctx: &mut Ctx, kind: PathKind, valid: CellPredicate) -> Result
 
     ctx.blackboard.last_seen.remove(&kind);
     Result::Failed
-}
-
-//////////////////////////////////////////////////////////////////////////////
-
-// Timer:
-
-struct Timer {
-    active: bool,
-    cur: i32,
-    max: i32,
-}
-
-impl Timer {
-    fn new(rng: &mut RNG, max: i32) -> Self {
-        Self { active: false, cur: rng.random_range(0..=max), max }
-    }
-
-    fn percent(&self) -> i64 {
-        (100 * (self.max - self.cur) / max(self.max, 1)) as i64
-    }
-
-    fn update(&mut self, delta: i32) {
-        self.cur = clamp(self.cur + delta, 0, self.max);
-        if self.cur == self.max { self.active = false; }
-        if self.cur == 0 { self.active = true; }
-    }
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -712,7 +703,7 @@ fn HeardUnknownNoise(ctx: &mut Ctx) -> bool {
 
 fn LookForLastTarget(ctx: &mut Ctx) -> Option<Action> {
     let (bb, rng) = (&mut *ctx.blackboard, &mut *ctx.env.rng);
-    if !bb.had_target { return None; }
+    if !ctx.tmp.had_target { return None; }
 
     let kind = DirsKind::Target;
     let dirs = assess_directions(&[ctx.dir], ASSESS_TURNS_FLIGHT, rng);
@@ -834,7 +825,7 @@ fn AStarHelper(ctx: &mut Ctx, target: Point, kind: PathKind) -> Option<Vec<Point
     }
 
     // If that fails, recover a path from the Dijkstra neighborhood:
-    let cells = if hiding { &mut ctx.sneakable } else { &mut ctx.reachable };
+    let cells = if hiding { &mut ctx.tmp.sneakable } else { &mut ctx.tmp.reachable };
     if cells.visited.is_empty() { return None; }
 
     // Lazily construct a table of neighborhood's scores:
@@ -871,12 +862,12 @@ fn ClearFinishedPath(ctx: &mut Ctx) -> Result {
 }
 
 fn ChoosePathTarget(ctx: &mut Ctx, target: PathTargetSelector) -> bool {
-    ctx.blackboard.move_near = target(ctx);
-    ctx.blackboard.move_near.is_some()
+    ctx.tmp.path_request = target(ctx);
+    ctx.tmp.path_request.is_some()
 }
 
 fn FindPathToTarget(ctx: &mut Ctx, kind: PathKind) -> bool {
-    let Some(target) = ctx.blackboard.move_near.take() else { return false };
+    let Some(target) = ctx.tmp.path_request.take() else { return false };
 
     ensure_vision(ctx);
     let path = AStarHelper(ctx, target, kind);
@@ -974,7 +965,7 @@ fn FollowPath(ctx: &mut Ctx) -> Result {
     // Determine how fast to move on the path. Only move quickly (and noisily)
     // when fleeing from an enemy, chasing one down, or returning to a leader.
     let mut turns = WANDER_TURNS;
-    if IsChasePathKind(kind) && let Some(x) = &ctx.blackboard.chase {
+    if IsChasePathKind(kind) && let Some(x) = &ctx.blackboard.target {
         let limit = ctx.known.time_at_turn(MIN_SEARCH_TURNS);
         if x.target.time > limit && !x.target.slow { turns = 1. };
     } else if kind == PathKind::Flee && any_threat_awake(ctx) {
@@ -998,7 +989,7 @@ struct AttackRequest { choice: Choice, target: Point }
 // Target selection:
 
 fn AttackEnemy(ctx: &mut Ctx) -> Option<AttackRequest> {
-    let state = ctx.blackboard.chase.as_ref()?;
+    let state = ctx.blackboard.target.as_ref()?;
     let target = state.target.pos;
 
     if !state.target.sure { return None; }
@@ -1032,12 +1023,12 @@ fn AttackPathTarget(ctx: &mut Ctx) -> Option<AttackRequest> {
 // Attack execution:
 
 fn ChooseAttackTarget(ctx: &mut Ctx, target: AttackTargetSelector) -> bool {
-    ctx.blackboard.attack = target(ctx);
-    ctx.blackboard.attack.is_some()
+    ctx.tmp.attack_request = target(ctx);
+    ctx.tmp.attack_request.is_some()
 }
 
 fn AttackChosenTarget(ctx: &mut Ctx) -> Option<Action> {
-    let AttackRequest { choice, target } = ctx.blackboard.attack.take()?;
+    let AttackRequest { choice, target } = ctx.tmp.attack_request.take()?;
     match choice {
         Choice::Attack(attack) => AttackTarget(ctx, target, attack),
         Choice::Return => PathToTarget(ctx, target, SUMMON_RANGE, /*flip=*/true),
@@ -1209,7 +1200,7 @@ fn FindMatchingNeighbor(ctx: &mut Ctx, valid: CellPredicate) -> Option<Point> {
 
 fn FindMatchingCell(ctx: &mut Ctx, kind: PathKind, valid: CellPredicate) -> bool {
     let success = |ctx: &mut Ctx, point: Point| {
-        ctx.blackboard.move_near = Some(point);
+        ctx.tmp.path_request = Some(point);
         true
     };
 
@@ -1218,7 +1209,7 @@ fn FindMatchingCell(ctx: &mut Ctx, kind: PathKind, valid: CellPredicate) -> bool
     }
 
     ensure_reachable(ctx);
-    let n = &ctx.reachable.neighborhood;
+    let n = &ctx.tmp.reachable.neighborhood;
     for &(point, _) in n.blocked.iter().chain(&n.visited) {
         if valid(ctx, point) { return success(ctx, point); }
     }
@@ -1302,19 +1293,15 @@ fn CleanupChaseState(ctx: &mut Ctx) {
     if std::mem::take(&mut bb.chasing_enemy) { return; }
 
     if IsChasePathKind(bb.path.kind) { bb.path.clear(); }
-    bb.chase = None;
-}
-
-fn CleanupTarget(ctx: &mut Ctx) {
-    ctx.blackboard.had_target = false;
+    bb.target = None;
 }
 
 fn ClearTargets(ctx: &mut Ctx) {
-    ctx.blackboard.targets.clear();
+    ctx.tmp.targets.clear();
 }
 
 fn ChaseTargetUnchanged(ctx: &Ctx) -> bool {
-    ctx.blackboard.chase.as_ref().map_or(false, |x| !x.reset)
+    ctx.blackboard.target.as_ref().map_or(false, |x| !x.reset)
 }
 
 fn IsChasePathKind(kind: PathKind) -> bool {
@@ -1322,7 +1309,7 @@ fn IsChasePathKind(kind: PathKind) -> bool {
 }
 
 fn MarkSafeIfLostView(ctx: &mut Ctx) -> bool {
-    if !ctx.blackboard.targets.is_empty() { return false; }
+    if !ctx.tmp.targets.is_empty() { return false; }
     ctx.blackboard.threats.mark_safe(ctx.known.time());
     true
 }
@@ -1331,95 +1318,89 @@ macro_rules! check_time {
     ($ctx:ident, $time:expr, $limit:expr) => {{
         let l0 = $ctx.known.time_at_turn($limit + 0);
         let l1 = $ctx.known.time_at_turn($limit + 1);
-        if $time > l1 { $ctx.blackboard.had_target = true; }
+        if $time > l1 { $ctx.tmp.had_target = true; }
         $time > l0
     }}
 }
 
-fn ListThreatsBySight(ctx: &mut Ctx) -> bool {
-    let initial = ctx.blackboard.targets.len();
+fn List<T: Fn(&mut Ctx)>(t: T) -> impl Fn(&mut Ctx) -> bool {
+    move |x| { let n = x.tmp.targets.len(); t(x); x.tmp.targets.len() > n }
+}
+
+fn ListThreatsBySight(ctx: &mut Ctx) {
     for other in &ctx.blackboard.threats.hostile {
         if !check_time!(ctx, other.time, MIN_SEARCH_TURNS) { break; }
 
         let (loc, sense) = (other.loc, other.sense);
         let target = Target { loc, sense, slow: false, sure: other.hostile() };
-        ctx.blackboard.targets.push(target);
+        ctx.tmp.targets.push(target);
     }
-    ctx.blackboard.targets.len() > initial
 }
 
-fn ListThreatsByScent(ctx: &mut Ctx) -> bool {
+fn ListThreatsByScent(ctx: &mut Ctx) {
     let hostile = &ctx.blackboard.threats.hostile;
     let threats: HashSet<_> = hostile.iter().filter_map(
         |x| x.species.map(|x| x as *const Species)).collect();
     ListTargetsByScent(ctx, |x| threats.contains(&(x.species as *const Species)))
 }
 
-fn ListPreyBySight(ctx: &mut Ctx) -> bool {
-    let initial = ctx.blackboard.targets.len();
+fn ListPreyBySight(ctx: &mut Ctx) {
     for other in &ctx.known.entities {
         if other.delta >= 0 { continue; }
         if !check_time!(ctx, other.time, MAX_SEARCH_TURNS) { break; }
 
         let (loc, sense) = (other.loc, other.sense);
         let target = Target { loc, sense, slow: false, sure: true };
-        ctx.blackboard.targets.push(target);
+        ctx.tmp.targets.push(target);
     }
-    ctx.blackboard.targets.len() > initial
 }
 
-fn ListPreyBySound(ctx: &mut Ctx) -> bool {
-    let initial = ctx.blackboard.targets.len();
+fn ListPreyBySound(ctx: &mut Ctx) {
     for other in &ctx.known.sources {
         if !check_time!(ctx, other.time, MAX_SEARCH_TURNS) { break; }
 
         let (loc, sense) = (other.loc, other.sense);
         let target = Target { loc, sense, slow: false, sure: false };
-        ctx.blackboard.targets.push(target);
+        ctx.tmp.targets.push(target);
     }
-    ctx.blackboard.targets.len() > initial
 }
 
-fn ListPreyByScent(ctx: &mut Ctx) -> bool {
+fn ListPreyByScent(ctx: &mut Ctx) {
     ListTargetsByScent(ctx, |x| x.delta < 0)
 }
 
-fn ListHumansBySound(ctx: &mut Ctx) -> bool {
-    let initial = ctx.blackboard.targets.len();
+fn ListHumansBySound(ctx: &mut Ctx) {
     let threats = &ctx.blackboard.threats;
     for other in threats.uncertain.iter().chain(threats.unknown.iter()) {
         if !check_time!(ctx, other.time, MAX_SEARCH_TURNS) { break; }
 
         let (loc, sense) = (other.loc, other.sense);
         let target = Target { loc, sense, slow: true, sure: false };
-        ctx.blackboard.targets.push(target);
+        ctx.tmp.targets.push(target);
     }
-    ctx.blackboard.targets.len() > initial
 }
 
-fn ListHumansByScent(ctx: &mut Ctx) -> bool {
+fn ListHumansByScent(ctx: &mut Ctx) {
     ListTargetsByScent(ctx, |x| x.species.human())
 }
 
-fn ListTargetsByScent<F: Fn(&ScentKnowledge) -> bool>(ctx: &mut Ctx, f: F) -> bool {
-    let initial = ctx.blackboard.targets.len();
+fn ListTargetsByScent<F: Fn(&ScentKnowledge) -> bool>(ctx: &mut Ctx, f: F) {
     for scent in &ctx.known.scents {
         if !f(scent) { continue; }
         if !check_time!(ctx, scent.time, MAX_TRACKING_TURNS) { break; }
 
         let (loc, sense) = (scent.loc, Sense::Smell);
         let target = Target { loc, sense, slow: true, sure: false };
-        ctx.blackboard.targets.push(target);
+        ctx.tmp.targets.push(target);
     }
-    ctx.blackboard.targets.len() > initial
 }
 
 fn SelectBestTarget(ctx: &mut Ctx) -> bool {
-    let targets = &mut ctx.blackboard.targets;
+    let targets = &mut ctx.tmp.targets;
     if targets.is_empty() { return false; }
 
     let Ctx { known, pos, .. } = *ctx;
-    let prev = ctx.blackboard.chase.as_ref();
+    let prev = ctx.blackboard.target.as_ref();
     let score = |target: &Target| {
         let age = known.time_to_turn(target.time);
         let bonus = target.sure as i32 as f64;
@@ -1434,7 +1415,7 @@ fn SelectBestTarget(ctx: &mut Ctx) -> bool {
 }
 
 fn SetChaseTarget(ctx: &mut Ctx, target: Target, attack: Option<&'static Attack>) {
-    let (pos, prev) = (ctx.pos, &ctx.blackboard.chase);
+    let (pos, prev) = (ctx.pos, &ctx.blackboard.target);
     let recent = target.time > ctx.blackboard.prev_time;
     let change = if let Some(x) = prev { target.pos != x.target.pos } else { true };
     let fresh = change || (recent && target.sense != Sense::Smell);
@@ -1448,11 +1429,11 @@ fn SetChaseTarget(ctx: &mut Ctx, target: Target, attack: Option<&'static Attack>
     } else {
         (target.pos - pos, 0)
     };
-    ctx.blackboard.chase = Some(ChaseState { attack, bias, fresh, reset, steps, target });
+    ctx.blackboard.target = Some(ChaseState { attack, bias, fresh, reset, steps, target });
 }
 
 fn TrackEnemyByScent(ctx: &mut Ctx) -> Option<Action> {
-    let state = ctx.blackboard.chase.as_ref()?;
+    let state = ctx.blackboard.target.as_ref()?;
     if !state.fresh || state.target.sense != Sense::Smell { return None; }
     Some(Action::SniffAround)
 }
@@ -1999,8 +1980,8 @@ fn InvestigateScents() -> impl Bhv {
         "InvestigateScents",
         run![
             "SelectRecentScent",
-            cond!("ListHumansBySound", ListHumansBySound),
-            cond!("ListHumansByScent", ListHumansByScent),
+            cond!("ListHumansBySound", List(ListHumansBySound)),
+            cond!("ListHumansByScent", List(ListHumansByScent)),
             cond!("SelectBestTarget", SelectBestTarget),
         ],
         HuntSelectedTarget(),
@@ -2047,7 +2028,7 @@ fn HuntSelectedTarget() -> impl Bhv {
     pri![
         "HuntSelectedTarget",
         Attack("AttackEnemy", AttackEnemy),
-        act!("TrackPreyByScent", TrackEnemyByScent),
+        act!("TrackEnemyByScent", TrackEnemyByScent),
         ChaseDownTarget(),
     ]
     .on_running(|x| x.blackboard.chasing_enemy = true)
@@ -2065,9 +2046,9 @@ fn HuntForMeat() -> impl Bhv {
                 "HuntForPrey",
                 run![
                     "SelectPreyTarget",
-                    cond!("ListPreyBySight", ListPreyBySight),
-                    cond!("ListPreyBySound", ListPreyBySound),
-                    cond!("ListPreyByScent", ListPreyByScent),
+                    cond!("ListPreyBySight", List(ListPreyBySight)),
+                    cond!("ListPreyBySound", List(ListPreyBySound)),
+                    cond!("ListPreyByScent", List(ListPreyByScent)),
                     cond!("SelectBestTarget", SelectBestTarget),
                 ],
                 HuntSelectedTarget(),
@@ -2082,8 +2063,8 @@ fn FightAgainstThreats() -> impl Bhv {
         "FightAgainstThreats",
         run![
             "SelectThreatTarget",
-            cond!("ListThreatsBySight", ListThreatsBySight),
-            cond!("ListThreatsByScent", ListThreatsByScent),
+            cond!("ListThreatsBySight", List(ListThreatsBySight)),
+            cond!("ListThreatsByScent", List(ListThreatsByScent)),
             cond!("MarkSafeIfLostView", MarkSafeIfLostView),
             cond!("SelectBestTarget", SelectBestTarget),
         ],
@@ -2202,7 +2183,6 @@ fn Root() -> impl Bhv {
     .on_tick(CleanupDirs)
     .on_tick(CleanupPath)
     .post_tick(CleanupChaseState)
-    .post_tick(CleanupTarget)
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -2256,15 +2236,11 @@ impl AIState {
             pos: me.pos,
             dir: me.dir,
 
-            // Computed during the turn:
-            reachable: Default::default(),
-            sneakable: Default::default(),
-            ran_vision: false,
-
             // Mutable outputs:
             action: None,
             blackboard,
             env: &mut env,
+            tmp: Default::default(),
         };
         self.tree.tick(&mut ctx);
         ctx.action.take().unwrap_or(Action::Idle)
