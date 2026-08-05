@@ -75,8 +75,9 @@ const WANDER_TURNS: f64 = 2.0;
 struct Blackboard {
     dirs: CachedDirs,
     path: CachedPath,
-    threats: ThreatState,
     flight: Option<FlightState>,
+    threats: ThreatState,
+    menacing: Vec<Point>,
 
     // Per-tick pathfinding requests:
     attack: Option<AttackRequest>,
@@ -110,8 +111,9 @@ impl Blackboard {
         let mut result = Self {
             dirs: Default::default(),
             path: Default::default(),
-            threats: Default::default(),
             flight: None,
+            threats: Default::default(),
+            menacing: vec![],
 
             // Per-tick pathfinding requests:
             attack: None,
@@ -274,13 +276,15 @@ fn choose_random_attack(ctx: &mut Ctx) -> Option<&'static Attack> {
 }
 
 fn is_hiding_place(ctx: &Ctx, point: Point) -> bool {
-    if ctx.blackboard.threats.menacing.iter().any(
-        |x| (x.pos - point).len_l1() <= 1) { return false; }
+    is_hidden_from(ctx, point, &ctx.blackboard.menacing)
+}
+
+fn is_hidden_from(ctx: &Ctx, point: Point, threats: &[Point]) -> bool {
+    if threats.iter().any(|&x| (x - point).len_l1() <= 1) { return false; }
 
     let cell = ctx.known.get(point);
-    if matches!(cell.tile(), Some(x) if x.is_cover()) { return true; }
-
-    cell.is_shadow_cover() && ctx.me.species.light.is_empty()
+    let light = !ctx.me.species.light.is_empty();
+    cell.is_cover() || !(light || !cell.is_shadow_cover())
 }
 
 fn get_reach_check<'a>(ctx: &'a Ctx) -> impl Fn(Point) -> Status + use<'a> {
@@ -559,6 +563,7 @@ fn TickBasicNeeds(ctx: &mut Ctx) -> Result {
 fn RunCombatAnalysis(ctx: &mut Ctx) -> Result {
     let (bb, me) = (&mut *ctx.blackboard, ctx.me);
     bb.threats.update(me);
+    bb.menacing = bb.threats.menacing.iter().map(|x| x.pos).collect();
     Result::Failed
 }
 
@@ -1065,7 +1070,9 @@ fn PathIsFree(known: &Knowledge, path: &[Point]) -> bool {
 
 fn PathToTarget(ctx: &mut Ctx, target: Point, range: Bound, flip: bool) -> Option<Action> {
     let Ctx { known, pos, .. } = *ctx;
-    let rng = &mut ctx.env.rng;
+    let update = ctx.blackboard.path.path.last().cloned() == Some(target);
+
+    // Slight tweaks on get_reach_check, etc. to better handle small crowds.
     let step = |dir| {
         let look = target - pos - dir;
         Action::Move { step: dir, look, turns: 1. }
@@ -1081,16 +1088,11 @@ fn PathToTarget(ctx: &mut Ctx, target: Point, range: Bound, flip: bool) -> Optio
         let (a, b) = if flip { (target, p) } else { (p, target) };
         if !CanAttackFrom(known, a, b, range) { return false; }
 
-        if !flip { return true; }
-        if (p - target).len_l1() <= 1 { return true; }
-
-        let light = ctx.me.species.light.radius;
-        let cover = matches!(cell.tile(), Some(x) if x.is_cover());
-        !cover && (light > 0 || !cell.is_shadow_cover())
+        !flip || !is_hidden_from(ctx, p, &[target])
     };
 
-    // Given a non-empty list of "good" directions (each of which brings us
-    // close to attacking the target), choose one closest to our attack range.
+    // Given a non-empty list of "good" directions (each of which maintains
+    // line-of-sight to the target), choose one closest to our attack range.
     let pick = |dirs: &[Delta], rng: &mut RNG| {
         let cell = known.get(target);
         let mut radius = range.radius;
@@ -1099,8 +1101,8 @@ fn PathToTarget(ctx: &mut Ctx, target: Point, range: Bound, flip: bool) -> Optio
         // These reasons don't apply to cells, because cells don't move.
         if cell.occupied() {
             let shade = cell.shade();
+            let cover = cell.is_cover();
             let light = ctx.me.species.light.radius;
-            let cover = cell.tile().map_or(false, |x| x.is_cover());
 
             radius = min(radius, FOLLOW_RANGE.radius);
             if shade { radius = min(radius, max(light - 1, 1)); }
@@ -1116,15 +1118,12 @@ fn PathToTarget(ctx: &mut Ctx, target: Point, range: Bound, flip: bool) -> Optio
         dirs[*sample(&opts, rng)]
     };
 
-    let cached = &mut ctx.blackboard.path;
-    let update = cached.path.last().cloned() == Some(target);
-
     // If we could already attack the target, don't move out of view.
     if valid(pos) {
         let dirs: Vec<_> = [dirs::NONE].iter().chain(
             dirs::ALL.iter().filter(|&&x| valid(pos + x))).copied().collect();
-        let dir = pick(&dirs, rng);
-        if update { cached.replace(LOS(pos + dir, target)); }
+        let dir = pick(&dirs, ctx.env.rng);
+        if update { ctx.blackboard.path.replace(LOS(pos + dir, target)); }
         return Some(step(dir))
     }
 
@@ -1139,7 +1138,7 @@ fn PathToTarget(ctx: &mut Ctx, target: Point, range: Bound, flip: bool) -> Optio
     if update {
         let (s, t) = (source, target);
         if s != t { path.extend(LOS(s, t).into_iter().skip(1)); }
-        cached.replace(path);
+        ctx.blackboard.path.replace(path);
     }
     Some(step(dir))
 }

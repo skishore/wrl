@@ -877,6 +877,10 @@ impl<'a> PointLookup<'a> {
         self.cell().map_or(false, |x| x.see_entity_at())
     }
 
+    pub fn is_cover(&self) -> bool {
+        self.cell().map_or(false, |x| x.tile.is_cover())
+    }
+
     pub fn is_shadow_cover(&self) -> bool {
         self.cell().map_or(false, |x| x.shade() && !x.light())
     }
