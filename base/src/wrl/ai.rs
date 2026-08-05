@@ -1814,22 +1814,28 @@ fn DefendLeader(ctx: &mut Ctx) -> Option<Action> {
 
 fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
     let leader = ctx.env.leader?;
-    let (known, source, target) = (ctx.known, ctx.pos, leader.pos);
+    let (source, target) = (ctx.pos, leader.pos);
+    if !Bound::new(3).contains(source - target) { return None; }
 
-    let turns = FOLLOW_TURNS;
     let valid = |p: Point| CheckFollowerSquare(leader, p, p == source);
-    let step = |d: Delta| { Action::Move { look: d, step: d, turns } };
 
-    if Bound::new(3).contains(source - target) {
-        let mut moves: Vec<_> = dirs::ALL.iter().filter_map(
-            |&x| if valid(source + x) { Some((1, x)) } else { None }).collect();
-        if valid(source) { moves.push((16, dirs::NONE)); }
-        if !moves.is_empty() { return Some(step(*weighted(&moves, ctx.env.rng))); }
-    }
+    let mut moves: Vec<_> = dirs::ALL.iter().filter_map(
+        |&x| if valid(source + x) { Some((1, x)) } else { None }).collect();
+    if valid(source) { moves.push((16, dirs::NONE)); }
+    if moves.is_empty() { return None; }
+
+    let step = *weighted(&moves, ctx.env.rng);
+    Some(Action::Move { look: step, step, turns: FOLLOW_TURNS })
+}
+
+fn MoveToLeader(ctx: &mut Ctx) -> Option<Action> {
+    let leader = ctx.env.leader?;
+    let (known, source, target) = (ctx.known, ctx.pos, leader.pos);
 
     let check = |p: Point| known.get(p).status();
     let path = AStar(source, target, ASTAR_CELLS_ATTACK, check)?;
-    Some(step(*path.first()? - source))
+    let step = *path.first()? - source;
+    Some(Action::Move { look: step, step, turns: FOLLOW_TURNS })
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -2164,6 +2170,7 @@ fn SummonRoot() -> impl Bhv {
                 act!("DefendLeader", DefendLeader),
             ],
             act!("FollowLeader", FollowLeader),
+            act!("MoveToLeader", MoveToLeader),
             ReturnToLeader(),
             act!("Idle", |_| Some(Action::Idle)),
         ],
