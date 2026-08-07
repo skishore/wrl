@@ -143,6 +143,10 @@ impl Threat {
         self.confidence == Confidence::Zero
     }
 
+    pub fn warned(&self) -> bool {
+        self.warnings > 0
+    }
+
     pub fn mark_warned(&mut self, me: &Entity, rng: &mut RNG) {
         if !self.uncertain() { return; }
 

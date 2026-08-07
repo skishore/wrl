@@ -54,7 +54,7 @@ const HUNGER_GAIN: RangeInclusive<i32> = (MAX_HUNGER / 4)..=(MAX_HUNGER / 2);
 const THIRST_GAIN: RangeInclusive<i32> = (MAX_THIRST / 4)..=(MAX_THIRST / 2);
 const RESTED_GAIN: RangeInclusive<i32> = 1..=2;
 
-const WARNING_LIMIT_TURNS: i32 = 16;
+const WARNING_LIMIT_TURNS: i32 = 8;
 const WARNING_RETRY_TURNS: i32 = 2;
 
 const MIN_SEARCH_TURNS: i32 = 16;
@@ -727,34 +727,31 @@ fn LookForNoises(ctx: &mut Ctx) -> Option<Action> {
     FollowDirs(ctx, kind)
 }
 
-fn WarnOffThreats(ctx: &mut Ctx) -> Option<Action> {
+fn WarnRecentThreats(ctx: &mut Ctx) -> Option<Action> {
     let bb = &mut ctx.blackboard;
-    let (known, pos) = (ctx.known, ctx.pos);
-    let (rng, threats) = (&mut *ctx.env.rng, &mut bb.threats);
+    let Ctx { known, pos, .. } = *ctx;
     let stare = bb.last_warning > known.time_at_turn(WARNING_RETRY_TURNS);
     let limit = known.time_at_turn(WARNING_LIMIT_TURNS);
-    let mut result = None;
+    let (mut call, mut scan) = (None, None);
 
-    for threat in &mut threats.threats {
+    for threat in &mut bb.threats.threats {
         if threat.time <= limit { break; }
 
         if !threat.uncertain() { continue; }
         if !CALL_VOLUME.contains(threat.pos - pos) { continue; }
 
-        let warn = !stare && threat.time > bb.last_warning;
-        if warn { threat.mark_warned(ctx.me, rng); }
-
-        if result.is_some() { continue; }
-
         let look = threat.pos - pos;
+        let warn = !stare && (!threat.warned() || threat.time == known.time());
+
         if warn {
-            result = Some(Action::Call { look, call: Call::Warning });
-            bb.last_warning = known.time();
+            call.get_or_insert(Action::Call { look, call: Call::Warning });
         } else if stare {
-            result = Some(Action::Look { look });
-        };
+            scan.get_or_insert(Action::Look { look });
+        }
+        if warn { threat.mark_warned(ctx.me, &mut ctx.env.rng); }
+        if warn { bb.last_warning = known.time(); }
     }
-    result
+    call.or(scan)
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -922,7 +919,7 @@ fn CheckPathStepsHidden(ctx: &Ctx) -> bool {
 // Follow a valid path. Succeeds if we've made it to the end of the path.
 
 fn FollowPath(ctx: &mut Ctx) -> Result {
-    let Ctx { pos, known, .. } = *ctx;
+    let Ctx { known, pos, .. } = *ctx;
     let path = &ctx.blackboard.path;
     let kind = path.kind;
 
@@ -1036,7 +1033,7 @@ fn AttackChosenTarget(ctx: &mut Ctx) -> Option<Action> {
 }
 
 fn AttackTarget(ctx: &mut Ctx, target: Point, attack: &'static Attack) -> Option<Action> {
-    let Ctx { me, known, pos, .. } = *ctx;
+    let Ctx { known, me, pos, .. } = *ctx;
 
     let range = attack.range;
     let ready = move_ready(me) && known.get(target).visible() &&
@@ -1842,9 +1839,6 @@ fn MoveToLeader(ctx: &mut Ctx) -> Option<Action> {
 //    against it instead.
 //
 //  - Only run InvestigateNoises for recent unknown sources.
-//
-//  - Only warn seen-but-unknown-valence sources. As is, we can have long
-//    chains of warnings over nothing. Investigate unseen sources instead.
 
 macro_rules! path {
     ($n:expr, $k:expr, $v:expr, $f:expr) => {
@@ -1999,6 +1993,10 @@ fn InvestigateNoises() -> impl Bhv {
             act!("Search(Noises)", LookForNoises),
         ],
     ]
+}
+
+fn WarnOffThreats() -> impl Bhv {
+    act!("WarnOffThreats", WarnRecentThreats)
 }
 
 fn LookForTarget() -> impl Bhv {
@@ -2175,7 +2173,7 @@ fn Root() -> impl Bhv {
         FightOrFlight(),
         HuntForMeat(),
         LookForTarget(),
-        act!("WarnOffThreats", WarnOffThreats),
+        WarnOffThreats(),
         InvestigateNoises(),
         InvestigateScents(),
         Wander(),
