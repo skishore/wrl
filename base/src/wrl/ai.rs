@@ -108,6 +108,7 @@ struct Blackboard {
 
     prev_time: Timestamp,
     turn_time: Timestamp,
+    last_scan: Timestamp,
     last_warning: Timestamp,
 
     assess: Timer,
@@ -134,6 +135,7 @@ impl Blackboard {
 
             prev_time: Timestamp::default(),
             turn_time: Timestamp::default(),
+            last_scan: Timestamp::default(),
             last_warning: Timestamp::default(),
 
             assess: Timer::new(rng, MAX_ASSESS),
@@ -690,9 +692,11 @@ fn Assess(ctx: &mut Ctx) -> Option<Action> {
 fn HeardUnknownNoise(ctx: &mut Ctx) -> bool {
     let bb = &mut ctx.blackboard;
     let (pos, threats) = (ctx.pos, &bb.threats);
+    let scanning = bb.dirs.kind == DirsKind::Noises;
+    let limit = if scanning { bb.last_scan } else { bb.prev_time };
 
     let result = threats.unknown.iter().any(
-        |x| x.pos != pos && CALL_VOLUME.contains(x.pos - pos));
+        |x| x.time > limit && x.pos != pos && CALL_VOLUME.contains(x.pos - pos));
     if !result { return false; }
 
     if bb.dirs.kind == DirsKind::Noises && bb.dirs.steps_left() == 1 {
@@ -714,11 +718,11 @@ fn LookForLastTarget(ctx: &mut Ctx) -> Option<Action> {
 fn LookForNoises(ctx: &mut Ctx) -> Option<Action> {
     let threats = &ctx.blackboard.threats;
     let (pos, rng) = (ctx.pos, &mut ctx.env.rng);
+    let limit = ctx.blackboard.prev_time;
 
-    let dirs: Vec<_> = threats.unknown.iter().filter_map(|x| {
-        let okay = x.pos != pos && CALL_VOLUME.contains(x.pos - pos);
-        if okay { Some(x.pos - pos) } else { None }
-    }).collect();
+    let dirs = threats.unknown.iter().filter(
+        |x| x.time > limit && x.pos != pos && CALL_VOLUME.contains(x.pos - pos));
+    let dirs = dirs.map(|x| x.pos - pos).collect::<Vec<_>>();
     let dirs = if dirs.is_empty() { &[ctx.dir] } else { dirs.as_slice() };
 
     let kind = DirsKind::Noises;
@@ -1837,8 +1841,6 @@ fn MoveToLeader(ctx: &mut Ctx) -> Option<Action> {
 //    mark that noise source Menacing. Then, if we win the battle, we'll
 //    immediately switch to running away from the noise. We should fight back
 //    against it instead.
-//
-//  - Only run InvestigateNoises for recent unknown sources.
 
 macro_rules! path {
     ($n:expr, $k:expr, $v:expr, $f:expr) => {
