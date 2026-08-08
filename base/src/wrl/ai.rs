@@ -1842,13 +1842,6 @@ fn MoveToLeader(ctx: &mut Ctx) -> Option<Action> {
 //    target" cases, and drop the first bullet above.
 //
 //  - Make the our-team-strength logic quadratic in team size.
-//
-//  - We may learn about new Menacing-not-Hostile threats while we're fighting
-//    against a threat. For instance, if we're a prey, we fight back against a
-//    predator, and something warns us (because they heard our attack), we'll
-//    mark that noise source Menacing. Then, if we win the battle, we'll
-//    immediately switch to running away from the noise. We should fight back
-//    against it instead.
 
 macro_rules! path {
     ($n:expr, $k:expr, $v:expr, $f:expr) => {
@@ -2101,6 +2094,7 @@ fn EscapeFromThreats() -> impl Bhv {
                 "TryHiding",
                 cond!("AnyThreatsAwake", |x| any_threat_awake(x)),
                 cond!("CurrentlyHidden", |x| is_hiding_place(x, x.pos)),
+                cond!("NotPanicking", |x| !x.blackboard.threats.panicking),
                 Flight("HideFromThreats", PathKind::Hide, SelectHideTarget),
             ],
             seq![
