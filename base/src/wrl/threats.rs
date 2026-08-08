@@ -22,7 +22,7 @@ pub const ACTIVE_THREAT_TURNS: i32 = 72;
 pub const CALL_LIMIT_TURNS: i32 = 4;
 pub const CALL_RETRY_TURNS: i32 = 16;
 
-const PENALTY_DECAY: f64 = 0.1;
+const PENALTY_DECAY: f64 = 0.5;
 const PENALTY_RANGE: Range<f64> = 2.0..4.0;
 
 fn timid(me: &Entity) -> bool { !me.species.predator() }
@@ -178,11 +178,10 @@ impl Threat {
 
         if sample > 0.5 {
             self.merge_status(Confidence::Mid, Valence::Hostile);
-
-            if timid(me) {
-                self.penalty_score = rng.random_range(PENALTY_RANGE);
-                self.penalty_start = me.known.time();
-            }
+        }
+        if timid(me) {
+            self.penalty_score = rng.random_range(PENALTY_RANGE);
+            self.penalty_start = me.known.time();
         }
         self.warnings += 1;
     }
@@ -345,6 +344,7 @@ pub struct ThreatState {
     // Fight-or-flight.
     pub state: FightOrFlight,
     pub last_safe: Timestamp,
+    pub panicking: bool,
 
     // Calling for help.
     pub call_for_help: bool,
@@ -359,6 +359,7 @@ impl ThreatState {
             debug.append(format!("call_for_help: {}", self.call_for_help));
             debug.append(format!("last_call: {}", known.debug_time(self.last_call)));
             debug.append(format!("last_safe: {}", known.debug_time(self.last_safe)));
+            debug.append(format!("panicking: {}", self.panicking));
         });
         debug.newline();
 
@@ -367,8 +368,11 @@ impl ThreatState {
 
     pub fn mark_safe(&mut self, time: Timestamp) {
         if self.state == FightOrFlight::Safe { return; }
+
+        if !self.panicking { self.last_safe = time; }
+
         self.state = FightOrFlight::Safe;
-        self.last_safe = time;
+        self.panicking = false;
     }
 
     pub fn on_call_for_help(&mut self, point: Point, time: Timestamp) {
@@ -411,6 +415,7 @@ impl ThreatState {
 
         let mut hidden_hostile = 0;
         let mut seen_hostile = 0;
+        let mut panic = false;
 
         // List known enemies ("hostile") and potential enemies ("unknown").
         //
@@ -429,6 +434,22 @@ impl ThreatState {
 
             if foe && !x.seen { hidden_hostile += 1; }
             if foe && x.seen { seen_hostile += 1; }
+
+            panic |= x.uncertain() && x.penalty_strength(&decay) > 0.;
+        }
+
+        // Special case: flee from targets if we've just been scared by them.
+        if panic && self.menacing.is_empty() {
+            self.menacing.extend_from_slice(&self.uncertain);
+            self.menacing.extend_from_slice(&self.unknown);
+            self.menacing.sort_by_key(|x| time - x.time);
+
+            self.state = FightOrFlight::Flight;
+            self.call_for_help = false;
+            self.panicking = true;
+
+            debug_assert!(self.check_invariants());
+            return;
         }
 
         // Start fight-or-flight if we have an active known enemy. Stop when
@@ -486,6 +507,7 @@ impl ThreatState {
         } else {
             self.mark_safe(time);
         }
+        self.panicking = false;
 
         self.call_for_help = false;
         if self.state == FightOrFlight::Flight && q > 0.6 && self.last_call <= call_retry {
