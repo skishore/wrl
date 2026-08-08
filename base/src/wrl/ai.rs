@@ -59,6 +59,7 @@ const WARNING_RETRY_TURNS: i32 = 2;
 
 const MIN_SEARCH_TURNS: i32 = 16;
 const MAX_SEARCH_TURNS: i32 = 32;
+const MIN_TRACKING_TURNS: i32 = 24;
 const MAX_TRACKING_TURNS: i32 = 48;
 
 const FLIGHT_PATH_TURNS: i32 = 8;
@@ -1328,6 +1329,8 @@ fn List<T: Fn(&mut Ctx)>(t: T) -> impl Fn(&mut Ctx) -> bool {
     move |x| { let n = x.tmp.targets.len(); t(x); x.tmp.targets.len() > n }
 }
 
+// Motivation: self-defense => persistence: low
+
 fn ListThreatsBySight(ctx: &mut Ctx) {
     for other in &ctx.blackboard.threats.hostile {
         if !check_time!(ctx, other.time, MIN_SEARCH_TURNS) { break; }
@@ -1342,8 +1345,11 @@ fn ListThreatsByScent(ctx: &mut Ctx) {
     let hostile = &ctx.blackboard.threats.hostile;
     let threats: HashSet<_> = hostile.iter().filter_map(
         |x| x.species.map(|x| x as *const Species)).collect();
-    ListTargetsByScent(ctx, |x| threats.contains(&(x.species as *const Species)))
+    let valid = |x: &ScentKnowledge| threats.contains(&(x.species as *const Species));
+    ListTargetsByScent(ctx, valid, MIN_TRACKING_TURNS)
 }
+
+// Motivation: hunger => persistence: high
 
 fn ListPreyBySight(ctx: &mut Ctx) {
     for other in &ctx.known.entities {
@@ -1367,13 +1373,15 @@ fn ListPreyBySound(ctx: &mut Ctx) {
 }
 
 fn ListPreyByScent(ctx: &mut Ctx) {
-    ListTargetsByScent(ctx, |x| x.delta < 0)
+    ListTargetsByScent(ctx, |x| x.delta < 0, MAX_TRACKING_TURNS)
 }
+
+// Motivation: curiosity => persistence: low
 
 fn ListHumansBySound(ctx: &mut Ctx) {
     let threats = &ctx.blackboard.threats;
     for other in threats.uncertain.iter().chain(threats.unknown.iter()) {
-        if !check_time!(ctx, other.time, MAX_SEARCH_TURNS) { break; }
+        if !check_time!(ctx, other.time, MIN_SEARCH_TURNS) { break; }
 
         let (loc, sense) = (other.loc, other.sense);
         let target = Target { loc, sense, slow: true, sure: false };
@@ -1382,13 +1390,13 @@ fn ListHumansBySound(ctx: &mut Ctx) {
 }
 
 fn ListHumansByScent(ctx: &mut Ctx) {
-    ListTargetsByScent(ctx, |x| x.species.human())
+    ListTargetsByScent(ctx, |x| x.species.human(), MIN_TRACKING_TURNS)
 }
 
-fn ListTargetsByScent<F: Fn(&ScentKnowledge) -> bool>(ctx: &mut Ctx, f: F) {
+fn ListTargetsByScent<F: Fn(&ScentKnowledge) -> bool>(ctx: &mut Ctx, f: F, turns: i32) {
     for scent in &ctx.known.scents {
         if !f(scent) { continue; }
-        if !check_time!(ctx, scent.time, MAX_TRACKING_TURNS) { break; }
+        if !check_time!(ctx, scent.time, turns) { break; }
 
         let (loc, sense) = (scent.loc, Sense::Smell);
         let target = Target { loc, sense, slow: true, sure: false };
