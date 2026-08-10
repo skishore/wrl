@@ -1,4 +1,5 @@
 use std::cmp::max;
+use std::ops::Range;
 
 use rand::Rng;
 
@@ -21,7 +22,29 @@ pub const ACTIVE_THREAT_TURNS: i32 = 72;
 pub const CALL_LIMIT_TURNS: i32 = 4;
 pub const CALL_RETRY_TURNS: i32 = 16;
 
+const PENALTY_DECAY: f64 = 0.1;
+const PENALTY_RANGE: Range<f64> = 2.0..4.0;
+
 fn timid(me: &Entity) -> bool { !me.species.predator() }
+
+struct TimeDecay {
+    current: Timestamp,
+    timeout: Timestamp,
+    turns: i32,
+}
+
+impl TimeDecay {
+    fn new(me: &Entity, turns: i32) -> Self {
+        let known = &*me.known;
+        Self { current: known.time(), timeout: known.time_at_turn(turns), turns }
+    }
+
+    fn ratio(&self, time: Timestamp) -> f64 {
+        let num = self.current - time;
+        let den = self.current - self.timeout;
+        num.nsec() as f64 / max(den.nsec(), 1) as f64
+    }
+}
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -157,7 +180,7 @@ impl Threat {
             self.merge_status(Confidence::Mid, Valence::Hostile);
 
             if timid(me) {
-                self.penalty_score = rng.random_range(2.0..4.0);
+                self.penalty_score = rng.random_range(PENALTY_RANGE);
                 self.penalty_start = me.known.time();
             }
         }
@@ -185,6 +208,28 @@ impl Threat {
     //   - When an entity is in combat it should prioritize threats that can
     //     hurt it (right now a predator may attack us even when it's under
     //     attack by prey, or vice-versa).
+
+    // Threat scoring:
+
+    fn strength(&self, decay: &TimeDecay) -> f64 {
+        self.base_strength() + self.penalty_strength(decay)
+    }
+
+    fn base_strength(&self) -> f64 {
+        if let Some(x) = self.species && x.human() { return 0.; }
+        let delta = 1.75f64.powi(self.delta.signum());
+        let rival = if self.rival { 0.25 } else { 1. };
+        delta * rival * self.hp
+    }
+
+    fn penalty_strength(&self, decay: &TimeDecay) -> f64 {
+        if self.penalty_score <= 0. { return 0.; }
+        if self.penalty_start <= decay.timeout { return 0.; }
+
+        let ratio = decay.ratio(self.penalty_start);
+        let value = self.penalty_score - PENALTY_DECAY * ratio * decay.turns as f64;
+        value.max(0.)
+    }
 
     // State updates:
 
@@ -360,7 +405,7 @@ impl ThreatState {
         self.hostile.clear();
         self.unknown.clear();
 
-        let limit = me.known.time_at_turn(ACTIVE_THREAT_TURNS);
+        let decay = TimeDecay::new(me, ACTIVE_THREAT_TURNS);
         let call_limit = me.known.time_at_turn(CALL_LIMIT_TURNS);
         let call_retry = me.known.time_at_turn(CALL_RETRY_TURNS);
 
@@ -372,7 +417,7 @@ impl ThreatState {
         // Every time we successfully flee from or fight back against all
         // known threats, we end an "epoch" by updating `last_safe`.
         for x in &self.threats {
-            if x.time <= limit { break; }
+            if x.time <= decay.timeout { break; }
             if x.time <= self.last_safe { break; }
 
             let foe = x.hostile() || x.menacing();
@@ -407,46 +452,26 @@ impl ThreatState {
             self.hostile.sort_by_key(|x| time - x.time);
         }
 
-        // Compute a strength. For some entities that start by responding to
-        // threats by fleeing from them, we'll add an additive penalty.
-        let base_strength = |x: &Threat| {
-            if let Some(x) = x.species && x.human() { return 0.; }
-            let factor = if x.rival { 0.25 } else { 1. };
-            factor * 1.75f64.powi(x.delta.signum()) * x.hp
-        };
-        let strength = |x: &Threat| {
-            let base = base_strength(x);
-            if x.penalty_score <= 0. || x.penalty_start < limit { return base; }
-
-            let denom = time - limit;
-            let delay = time - x.penalty_start;
-            let ratio = delay.nsec() as f64 / max(denom.nsec(), 1) as f64;
-            let bonus = x.penalty_score - 0.1 * ratio * ACTIVE_THREAT_TURNS as f64;
-            base + bonus.max(0.)
-        };
         let mut hidden_count = max(hidden_hostile - seen_hostile, 0);
         let mut team_strength = me.hp_fraction();
         let mut call_strength = team_strength;
         let mut foes_strength = 0.;
 
         for x in &self.threats {
-            if x.time <= limit { break; }
+            if x.time <= decay.timeout { break; }
 
             if (x.hostile() || x.menacing()) && x.time > self.last_safe {
                 if !x.seen && hidden_count == 0 { continue; }
                 if !x.seen { hidden_count -= 1; }
-                foes_strength += strength(x);
+                foes_strength += x.strength(&decay);
             } else if x.friendly() {
-                let base = strength(x);
-                let denom = time - limit;
-                let delay = time - x.combat;
-                let ratio = delay.nsec() as f64 / max(denom.nsec(), 1) as f64;
-                let decay = 1. - ratio.min(1.);
-                team_strength += base * decay;
+                let value = x.strength(&decay);
+                let decay = (1. - decay.ratio(x.combat)).max(0.);
+                team_strength += decay * value;
 
                 let recent = x.time > call_limit;
                 let nearby = CALL_VOLUME.contains(me.pos - x.pos);
-                call_strength += if nearby && recent { base } else { base * decay };
+                call_strength += if nearby && recent { value } else { decay * value };
             }
         }
 
