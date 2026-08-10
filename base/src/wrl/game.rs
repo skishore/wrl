@@ -793,10 +793,11 @@ fn hit_entity(state: &mut State, eid: EID, attack: &Attack, logged: bool, tid: E
 
     let (pos, lower, upper) = (target.pos, target.lower(), target.upper());
 
+    let species = target.species;
     let critted = env.rng.random_range(0..16) == 0;
     let factor = if critted { 1.5 } else { 1. } * env.rng.random_range(0.85..=1.);
     let damage = (factor * attack.damage as f64).round() as i32;
-    let damage = if target.species.name == "Human" { 1 } else { damage };
+    let damage = if species.human() { 1 } else { damage };
 
     target.cur_hp = std::cmp::max(target.cur_hp - damage, 0);
     let fainted = target.cur_hp == 0;
