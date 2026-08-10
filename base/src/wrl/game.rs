@@ -1252,6 +1252,8 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 hit_tile(state, eid, target);
                 let Some(tid) = tid else { return; };
 
+                // TODO: When we animate the HP bar, execute hit_entity now
+                // and only defer remove_entity to the post-damage callback.
                 let cb: CB = Box::new(move |x| { hit_entity(x, eid, attack, logged, tid); });
                 state.add_effect(apply_damage(target, cb));
             });
@@ -1501,7 +1503,7 @@ fn update_state(state: &mut State) {
         false
     };
 
-    let mut update = false;
+    let mut update = animated;
     while !state.inputs.is_empty() && !stage_input(state) {
         let input = state.inputs.remove(0);
         process_input(state, input);
