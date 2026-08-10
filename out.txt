@@ -12927,7 +12927,7 @@ Turn 999:
   EID  7 @ Point(29, 46): Rest
   EID 12 @ Point(71, 69): Move { look: Delta(5, -1), step: Delta(1, 0), turns: 2.0 }
   EID 10 @ Point(44, 93): Look { look: Delta(99, -13) }
-  EID 20 @ Point(64, 48): Move { look: Delta(1, 0), step: Delta(1, 0), turns: 2.0 }
+  EID 20 @ Point(64, 48): Move { look: Delta(1, -1), step: Delta(1, -1), turns: 2.0 }
   EID 18 @ Point(28, 46): Rest
 Turn 1000:
   EID 13 @ Point(59, 58): Rest
