@@ -15,7 +15,7 @@ use super::effect::{Frame, ParticleData, RenderData};
 use super::entity::{AttackTarget, Command, EID, Entity, Teammate};
 use super::event::{Call, Location, Sound};
 use super::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_, SUMMON_RANGE};
-use super::game::{Action, Input, Tile, show_item};
+use super::game::{Action, Input, Tile, TileFlags, show_item};
 use super::knowledge::{EntityKnowledge, Knowledge, PointLookup};
 
 //////////////////////////////////////////////////////////////////////////////
@@ -234,12 +234,12 @@ fn init_target(data: TargetData, source: Point, target: Point) -> Box<Target> {
 }
 
 fn init_summon_target(me: &Entity, data: TargetData) -> Box<Target> {
-    let (known, pos, dir) = (&*me.known, me.pos, me.dir);
+    let Entity { pos, dir, .. } = *me;
     let mut target = init_target(data, pos, pos);
 
     let okay = |p: Point, target: &mut Target| {
         if !CheckFollowerSquare(me, p, /*ignore_occupant=*/false) { return false; }
-        update_target(known, target, p);
+        update_target(me, target, p);
         target.error.is_empty()
     };
 
@@ -254,7 +254,7 @@ fn init_summon_target(me: &Entity, data: TargetData) -> Box<Target> {
             }
         }
         let update = best.0;
-        update_target(known, &mut target, update);
+        update_target(me, &mut target, update);
         target
     };
 
@@ -273,7 +273,8 @@ fn init_summon_target(me: &Entity, data: TargetData) -> Box<Target> {
     closest(best, target)
 }
 
-fn update_target(known: &Knowledge, target: &mut Target, update: Point) {
+fn update_target(me: &Entity, target: &mut Target, update: Point) {
+    let known = &*me.known;
     let los = LOS(target.source, update);
 
     target.error.clear();
@@ -300,7 +301,11 @@ fn update_target(known: &Knowledge, target: &mut Target, update: Point) {
             let okay = target.error.is_empty();
             target.okay_until = if okay { target.path.len() } else { 0 };
         }
-        TargetData::Summon { range, .. } => {
+        TargetData::Summon { team, range } => {
+            let moves = match me.team.get(*team) {
+                Some(Teammate::In(x)) => x.species.moves,
+                _ => TileFlags::Empty,
+            };
             if target.path.is_empty() {
                 target.error = "There's something in the way.".into();
             }
@@ -308,8 +313,9 @@ fn update_target(known: &Knowledge, target: &mut Target, update: Point) {
                 let cell = known.get(x);
                 let last = i + 1 == target.path.len();
                 let friend = cell.entity().map_or(false, |x| x.friend());
+                let moves = if last { moves } else { TileFlags::CanFlyOver };
 
-                let free = match cell.status() {
+                let free = match cell.status_for(moves) {
                     Status::Blocked => false,
                     Status::Occupied => friend && last,
                     Status::Free | Status::Unknown => true,
@@ -536,7 +542,7 @@ fn process_ui_input(ui: &mut UI, me: &mut Entity, input: Input) -> bool {
         let update = get_updated_target(x.target);
         if let Some(update) = update && update != x.target {
             let mut target = ui.target.take();
-            target.as_mut().map(|x| update_target(known, x, update));
+            target.as_mut().map(|x| update_target(me, x, update));
             ui.target = target;
         } else if enter {
             if x.error.is_empty() {
@@ -601,7 +607,7 @@ fn process_ui_input(ui: &mut UI, me: &mut Entity, input: Input) -> bool {
                 let attack = summon.species.attacks[chosen as usize];
                 let data = TargetData::Attack { summon: x.summon as usize, attack };
                 let mut target = init_target(data, summon.pos, update);
-                update_target(known, &mut target, update);
+                update_target(me, &mut target, update);
                 ui.log.log_neutral("Use the movement keys to select a target:");
                 ui.target = Some(target);
                 ui.menu = None;
@@ -627,7 +633,7 @@ fn process_ui_input(ui: &mut UI, me: &mut Entity, input: Input) -> bool {
         let source = me.pos;
         let update = get_initial_target(source);
         let mut target = init_target(TargetData::FarLook, source, update);
-        update_target(known, &mut target, update);
+        update_target(me, &mut target, update);
         ui.log.log_neutral("Use the movement keys to examine a location:");
         ui.target = Some(target);
         return true;
