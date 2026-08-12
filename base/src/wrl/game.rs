@@ -34,12 +34,6 @@ pub const MOVE_TIMER: i32 = 960;
 pub const TURN_TIMER: i32 = 120;
 pub const WORLD_SIZE: i32 = 100;
 
-pub const FOV_RADIUS_NPC: i32 = 12;
-pub const FOV_RADIUS_PC_: i32 = 21;
-
-const FOV_RADIUS_IN_TALL_GRASS: usize = 4;
-const VISIBILITY_LOSS: i32 = VISIBILITY_LOSSES[FOV_RADIUS_IN_TALL_GRASS - 1];
-
 const LIGHT: Light = Light::Sun(Delta(2, 0));
 const WEATHER: Weather = Weather::None;
 const NUM_PREDATORS: i32 = 2;
@@ -52,15 +46,24 @@ const UI_DAMAGE_TICKS: i32 = 6;
 
 const SLOWED_TURNS: f64 = 1.5;
 
-pub const ATTACK_VOLUME: Bound = Bound::new(FOV_RADIUS_NPC);
-pub const CALL_VOLUME: Bound = Bound::new(FOV_RADIUS_NPC);
-pub const MOVE_VOLUME: Bound = Bound::new(8);
-pub const SNEAK_VOLUME: Bound = Bound::new(1);
-pub const SNIFF_VOLUME: Bound = Bound::new(8);
-pub const SHOUT_VOLUME: Bound = Bound::new(12);
+// Sight and sound distances:
 
-pub const FOLLOW_RANGE: Bound = Bound::new(4);
-pub const SUMMON_RANGE: Bound = Bound::new(12);
+pub const FOV_RADIUS_NPC: i32 = 12;
+pub const FOV_RADIUS_PC_: i32 = 21;
+
+const FOV_IN_TALL_GRASS: usize = 4;
+const VISIBILITY_LOSS: i32 = VISIBILITY_LOSSES[FOV_IN_TALL_GRASS - 1];
+
+pub const ATTACK_VOLUME: Bound = Bound::new(12);
+pub const CALL_VOLUME:   Bound = Bound::new(12);
+pub const MOVE_VOLUME:   Bound = Bound::new(8);
+pub const SNEAK_VOLUME:  Bound = Bound::new(1);
+pub const SNIFF_VOLUME:  Bound = Bound::new(8);
+
+pub const FOLLOW_RANGE:  Bound = Bound::new(4);
+pub const SUMMON_RANGE:  Bound = Bound::new(12);
+
+// Miscellaneous types:
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Input { Escape, BackTab, Char(char), Click(Point) }
@@ -744,7 +747,7 @@ fn get_sightings(board: &Board, noise: &Noise, env: &mut Env) -> Vec<Sighting> {
 fn shout(state: &mut State, eid: EID, shout: &str, suffix: &str) {
     let board = &mut state.board;
     let Entity { pos: source, player, species, .. } = board.entities[eid];
-    let noise = Noise::from_eid(eid, source, SHOUT_VOLUME);
+    let noise = Noise::from_eid(eid, source, CALL_VOLUME);
     let sightings = get_sightings(board, &noise, &mut state.env);
 
     let log = &mut state.env.ui.log;
@@ -1342,7 +1345,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 ActionResult::success()
             };
 
-            if !SHOUT_VOLUME.contains(summon.pos - source) {
+            if !CALL_VOLUME.contains(summon.pos - source) {
                 let suffix = format!(", but {} is too far away to hear.", name);
                 return succeed(state, &suffix);
             }
