@@ -9,7 +9,7 @@ use crate::base::pathing::Status;
 use crate::base::util::{HashMap, HashSet, RNG};
 use crate::base::vision::{Vision, VisionArgs};
 
-use super::ai::{CheckFollowerSquare, ChooseDefenseSquare};
+use super::ai::{ChooseDefenseSquare, CheckFollowerSquare, Follower};
 use super::dex::{Attack, Species};
 use super::effect::{Frame, ParticleData, RenderData};
 use super::entity::{AttackTarget, Command, EID, Entity, Teammate};
@@ -233,12 +233,18 @@ fn init_target(data: TargetData, source: Point, target: Point) -> Box<Target> {
     Box::new(Target { data, error, frame, okay_until, path, source, target })
 }
 
-fn init_summon_target(me: &Entity, data: TargetData) -> Box<Target> {
+fn init_summon_target(me: &Entity, team: usize) -> Box<Target> {
     let Entity { pos, dir, .. } = *me;
+    let moves = match me.team.get(team) {
+        Some(Teammate::In(x)) => x.species.moves,
+        _ => TileFlags::Empty,
+    };
+    let follower = Follower { pos, moves };
+    let data = TargetData::Summon { team, range: SUMMON_RANGE };
     let mut target = init_target(data, pos, pos);
 
     let okay = |p: Point, target: &mut Target| {
-        if !CheckFollowerSquare(me, p, /*ignore_occupant=*/false) { return false; }
+        if p == pos || !CheckFollowerSquare(me, &follower, pos) { return false; }
         update_target(me, target, p);
         target.error.is_empty()
     };
@@ -258,7 +264,7 @@ fn init_summon_target(me: &Entity, data: TargetData) -> Box<Target> {
         target
     };
 
-    if let Some(x) = ChooseDefenseSquare(me, pos) {
+    if let Some(x) = ChooseDefenseSquare(me, &follower) {
         let line = LOS(pos, x);
         for &p in line.iter().skip(1).rev() {
             if okay(p, &mut target) { return target; }
@@ -441,8 +447,7 @@ fn process_summon_input(ui: &mut UI, me: &Entity, input: Input) {
         return;
     }
 
-    let data = TargetData::Summon { team: chosen, range: SUMMON_RANGE };
-    let target = init_summon_target(me, data);
+    let target = init_summon_target(me, chosen);
     let message = format!("Choose where to summon {}:", teammate.species.name);
     ui.log.log_neutral(message);
     ui.target = Some(target);

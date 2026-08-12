@@ -20,7 +20,7 @@ use super::debug::{DebugFile, DebugLine, DebugLog};
 use super::dex::{Attack, Species};
 use super::entity::{AttackTarget, Command, Entity};
 use super::event::{Call, Location, Sense};
-use super::game::{Action, Item, move_ready};
+use super::game::{Action, Item, TileFlags, move_ready};
 use super::game::{FOV_RADIUS_NPC, CALL_VOLUME, FOLLOW_RANGE, SUMMON_RANGE};
 use super::knowledge::{Knowledge, ScentKnowledge};
 use super::threats::{FightOrFlight, ThreatState};
@@ -1581,6 +1581,8 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
 
 // Follower AI:
 
+pub struct Follower { pub pos: Point, pub moves: TileFlags }
+
 pub fn dangers(me: &Entity) -> Vec<Point> {
     let mut result = HashSet::default();
     for other in &me.known.entities {
@@ -1597,15 +1599,15 @@ pub fn dangers(me: &Entity) -> Vec<Point> {
 }
 
 // Check if `point` is a valid cell for a follower of the `leader`.
-pub fn CheckFollowerSquare(leader: &Entity, point: Point, ignore_occupant: bool) -> bool {
+pub fn CheckFollowerSquare(leader: &Entity, follower: &Follower, point: Point) -> bool {
     let delta = leader.pos - point;
     if !Bound::new(2).contains(delta) { return false; }
 
     let known = &*leader.known;
     let cell = known.get(point);
-    let free = match cell.status() {
+    let free = match cell.status_for(follower.moves) {
         Status::Free => true,
-        Status::Occupied => ignore_occupant,
+        Status::Occupied => point == follower.pos,
         Status::Blocked | Status::Unknown => false,
     };
     if !free { return false }
@@ -1617,10 +1619,11 @@ pub fn CheckFollowerSquare(leader: &Entity, point: Point, ignore_occupant: bool)
 
 // Choose the best cell from which to defend `leader`, starting from `source`.
 // This choice may fail, e.g. if there are no spots free near `leader`.
-pub fn ChooseDefenseSquare(leader: &Entity, source: Point) -> Option<Point> {
-    let known = &*leader.known;
+pub fn ChooseDefenseSquare(leader: &Entity, follower: &Follower) -> Option<Point> {
     let rivals = dangers(leader);
     if rivals.is_empty() { return None; }
+
+    let (source, known) = (follower.pos, &*leader.known);
 
     // Score each point in a 5x5 cell centered on the leader based on how many
     // rivals' line-of-sights to the player we'd block from that cell.
@@ -1685,7 +1688,7 @@ pub fn ChooseDefenseSquare(leader: &Entity, source: Point) -> Option<Point> {
             if x == 0 && y == 0 { continue; }
 
             let (d, p) = (Delta(x, y), Delta(x, y) + leader.pos);
-            if !CheckFollowerSquare(leader, p, p == source) { continue; }
+            if !CheckFollowerSquare(leader, follower, p) { continue; }
 
             let mut score = scores.get(&d).cloned().unwrap_or(f64::NEG_INFINITY);
             if score == f64::NEG_INFINITY { continue; }
@@ -1786,7 +1789,8 @@ fn LeaderHasRivals(ctx: &Ctx) -> bool {
 fn DefendLeader(ctx: &mut Ctx) -> Option<Action> {
     let source = ctx.pos;
     let leader = ctx.env.leader?;
-    let target = ChooseDefenseSquare(leader, source)?;
+    let follower = Follower { pos: ctx.pos, moves: ctx.me.species.moves };
+    let target = ChooseDefenseSquare(leader, &follower)?;
 
     let turns = FOLLOW_TURNS;
     let check = |p: Point| ctx.known.get(p).status();
@@ -1806,7 +1810,9 @@ fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
     let (source, target) = (ctx.pos, leader.pos);
     if !Bound::new(3).contains(source - target) { return None; }
 
-    let valid = |p: Point| CheckFollowerSquare(leader, p, p == source);
+    let moves = ctx.me.species.moves;
+    let follower = Follower { pos: ctx.pos, moves };
+    let valid = |p: Point| CheckFollowerSquare(leader, &follower, p);
 
     let mut moves: Vec<_> = dirs::ALL.iter().filter_map(
         |&x| if valid(source + x) { Some((1, x)) } else { None }).collect();
