@@ -767,11 +767,16 @@ impl Knowledge {
 
         // Check that the indices are consistent and minimal:
         type OH = OccupantHandle;
-        for (&pos, &PointEntry { cell, occupant, status }) in &self.pos_index {
+        for (&pos, point) in &self.pos_index {
+            let PointEntry { cell, occupant, status } = *point;
             assert!(cell.is_some() || occupant.is_some());
+
             if let Some(x) = cell { assert!(self.cells[x].point == pos); }
             if let Some(OH::Entity(x)) = occupant { assert!(self.entities[x].pos == pos); }
             if let Some(OH::Source(x)) = occupant { assert!(self.sources[x].pos == pos); }
+
+            let lookup = PointLookup { root: self, spot: Some(point) };
+            assert!(status == lookup.status_for(self.moves));
 
             let actual = if let Some(x) = cell && !self.cells[x].tile.can_move_to(self.moves) {
                 Status::Blocked
@@ -849,6 +854,13 @@ impl<'a> PointLookup<'a> {
 
     pub fn status(&self) -> Status {
         self.spot.map_or(Status::Unknown, |x| x.status)
+    }
+
+    pub fn status_for(&self, moves: TileFlags) -> Status {
+        if let Some(x) = self.tile() && !x.can_move_to(moves) { return Status::Blocked; }
+        if self.occupied() { return Status::Occupied; }
+        if self.spot.is_some() { return Status::Free; }
+        Status::Unknown
     }
 
     // Predicates:

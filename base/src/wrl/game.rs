@@ -890,6 +890,9 @@ fn try_switch(state: &mut State, eid: EID, oid: EID, team: usize, quiet: bool) -
     let Individual { species, cur_hp } = *x;
     if cur_hp == 0 { return false; }
 
+    let tile = state.board.get_tile(target);
+    if !tile.can_move_to(species.moves) { return false; }
+
     if !quiet {
         let name = summon.species.name;
         shout(state, eid, &format!("{}, return! Go, {}!", name, species.name), "");
@@ -988,13 +991,13 @@ fn can_attack(board: &Board, me: &Entity, target: Point, range: Bound) -> bool {
 
     let los = LOS(source, target);
     los[1..los.len() - 1].iter().all(|&p| {
-        known.get(p).status() == Status::Free &&
-        board.get_status(p, moves) == Status::Free
+        matches!(known.get(p).status(), Status::Free) &&
+        matches!(board.get_status(p, moves), Status::Free)
     })
 }
 
 fn can_summon(board: &Board, me: &Entity, target: Point) -> bool {
-    let moves = me.species.moves;
+    let moves = TileFlags::CanFlyOver;
     let (known, range, source) = (&me.known, SUMMON_RANGE, me.pos);
 
     if source == target { return false; }
@@ -1003,9 +1006,8 @@ fn can_summon(board: &Board, me: &Entity, target: Point) -> bool {
 
     let los = LOS(source, target);
     los[1..los.len() - 1].iter().all(|&p| {
-        if known.get(p).status() != Status::Free { return false; }
-        let status = board.get_status(p, moves);
-        status == Status::Free || status == Status::Occupied
+        matches!(known.get(p).status_for(moves), Status::Free) &&
+        matches!(board.get_status(p, moves), Status::Free | Status::Occupied)
     })
 }
 
@@ -1668,7 +1670,7 @@ impl State {
         me.team.push(teammate("Charmander"));
         me.team.push(teammate("Squirtle"));
         me.team.push(teammate("Pikachu"));
-        me.team.push(teammate("Eevee"));
+        me.team.push(teammate("Pidgey"));
         board.update_known(player, &mut env);
 
         let ui = &mut env.ui;
