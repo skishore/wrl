@@ -1583,18 +1583,20 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
 
 pub struct Follower { pub pos: Point, pub moves: TileFlags }
 
-pub fn dangers(me: &Entity) -> Vec<Point> {
-    let mut result = HashSet::default();
+pub fn rivals(me: &Entity) -> Vec<Follower> {
+    let mut result = HashMap::default();
     for other in &me.known.entities {
         if !other.visible() { break; }
-        if !other.friend() { result.insert(other.pos); }
+        if other.friend() { continue; }
+        *result.entry(other.pos).or_default() |= other.species.moves;
     }
     for sound in &me.known.sources {
-        result.insert(sound.pos);
+        result.entry(sound.pos).or_insert(TileFlags::AllMoves);
     }
     let pos = me.pos;
-    let mut result: Vec<_> = result.into_iter().collect();
-    result.sort_by_cached_key(|&x| ((x - pos).len_l2_squared(), x.0, x.1));
+    let mut result: Vec<_> = result.into_iter().map(
+        |(pos, moves)| Follower { pos, moves }).collect();
+    result.sort_by_cached_key(|x| ((x.pos - pos).len_l2_squared(), x.pos.0, x.pos.1));
     result
 }
 
@@ -1620,7 +1622,7 @@ pub fn CheckFollowerSquare(leader: &Entity, follower: &Follower, point: Point) -
 // Choose the best cell from which to defend `leader`, starting from `source`.
 // This choice may fail, e.g. if there are no spots free near `leader`.
 pub fn ChooseDefenseSquare(leader: &Entity, follower: &Follower) -> Option<Point> {
-    let rivals = dangers(leader);
+    let rivals = rivals(leader);
     if rivals.is_empty() { return None; }
 
     let (source, known) = (follower.pos, &*leader.known);
@@ -1632,14 +1634,17 @@ pub fn ChooseDefenseSquare(leader: &Entity, follower: &Follower) -> Option<Point
     // digital line-of-sight is asymmetric. (Consider a rival positioned a
     // knight's move away from the leader.) We want to block the rival's LOS.
     let mut scores = HashMap::default();
-    for &rival in &rivals {
-        if rival == leader.pos { continue; }
+    for rival in &rivals {
+        if rival.pos == leader.pos { continue; }
 
-        let los = LOS(rival, leader.pos);
+        let los = LOS(rival.pos, leader.pos);
         let los = &los[1..los.len() - 1];
-        if los.iter().any(|&x| known.get(x).blocked()) { continue; }
 
-        let Delta(dx, dy) = rival - leader.pos;
+        let moves = rival.moves;
+        let check = |&x| known.get(x).status_for(moves) == Status::Blocked;
+        if los.iter().any(check) { continue; }
+
+        let Delta(dx, dy) = rival.pos - leader.pos;
         let vertical = dy.abs() > dx.abs();
         let sign = if vertical { dy.signum() } else { dx.signum() };
         assert!(sign != 0);
@@ -1717,10 +1722,6 @@ pub fn ChooseDefenseSquare(leader: &Entity, follower: &Follower) -> Option<Point
 //
 // TODO: Choose a defense square even if a rival is adjacent to the player.
 //
-// TODO: ChooseDefenseSquare uses leader's moves to check if an enemy's
-// line-of-sight to the leader is blocked. In reality, we should use the
-// enemy's moves (if known) or fall back to a maximal moveset.
-//
 // TODO: Perhaps an alternate claim: MaybeAttackRivals only attacks rivals
 // that are currently visible; perhaps we should path to and attack any other
 // rivals the player knows about instead.
@@ -1792,9 +1793,7 @@ fn FollowSimpleCommand(ctx: &mut Ctx) -> Option<AttackRequest> {
 }
 
 fn LeaderHasRivals(ctx: &Ctx) -> bool {
-    let Some(leader) = ctx.env.leader else { return false };
-    let rivals = dangers(leader);
-    !rivals.is_empty()
+    ctx.env.leader.map_or(false, |x| !rivals(x).is_empty())
 }
 
 fn DefendLeader(ctx: &mut Ctx) -> Option<Action> {
