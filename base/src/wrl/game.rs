@@ -93,6 +93,7 @@ flags! {
         FreshWater = CanSwimOn | CanFlyOver | CanDrink,
         BerryTree = LimitsVision | DropsBerries,
         TallGrass = CanWalkOn | CanFlyOver | LimitsVision,
+        AllMoves = CanWalkOn | CanSwimOn | CanFlyOver,
         Free = CanWalkOn | CanFlyOver,
     }
 }
