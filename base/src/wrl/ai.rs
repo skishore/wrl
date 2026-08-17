@@ -1717,9 +1717,20 @@ pub fn ChooseDefenseSquare(leader: &Entity, follower: &Follower) -> Option<Point
 //
 // TODO: Choose a defense square even if a rival is adjacent to the player.
 //
+// TODO: ChooseDefenseSquare uses leader's moves to check if an enemy's
+// line-of-sight to the leader is blocked. In reality, we should use the
+// enemy's moves (if known) or fall back to a maximal moveset.
+//
 // TODO: Perhaps an alternate claim: MaybeAttackRivals only attacks rivals
 // that are currently visible; perhaps we should path to and attack any other
 // rivals the player knows about instead.
+//
+// TODO: Just to corroborate the point above - if the leader is beset upon by
+// two enemies that are diagonally-adjacent to it, and we're supposedely
+// defending the leader but we're between them, we'll ignore them. See:
+//
+//  E@E     E - enemy       . - open space
+//  .L.     L - leader      @ - us, obviously
 //
 // TODO: FollowSimpleCommand is weak. If we can't find a short-term path to
 // the target within ASTAR_CELLS_ATTACK, we need to switch to CachedPath-based
@@ -1792,17 +1803,17 @@ fn DefendLeader(ctx: &mut Ctx) -> Option<Action> {
     let follower = Follower { pos: ctx.pos, moves: ctx.me.species.moves };
     let target = ChooseDefenseSquare(leader, &follower)?;
 
-    let turns = FOLLOW_TURNS;
-    let check = |p: Point| ctx.known.get(p).status();
+    let known = &*ctx.known;
+    let check = |p: Point| known.get(p).status();
     let path = AStar(source, target, ASTAR_CELLS_ATTACK, check)?;
 
     let Some(&next) = path.first() else {
         let (step, look) = (dirs::NONE, source - leader.pos);
-        return Some(Action::Move { step, look, turns });
+        return Some(Action::Move { step, look, turns: FOLLOW_TURNS });
     };
 
     let (step, look) = (next - source, next - leader.pos);
-    Some(Action::Move { step, look, turns })
+    Some(Action::Move { step, look, turns: FOLLOW_TURNS })
 }
 
 fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
