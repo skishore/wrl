@@ -235,48 +235,57 @@ fn init_target(data: TargetData, source: Point, target: Point) -> Box<Target> {
 
 fn init_summon_target(me: &Entity, team: usize) -> Box<Target> {
     let Entity { pos, dir, .. } = *me;
+    let known = &*me.known;
     let moves = match me.team.get(team) {
         Some(Teammate::In(x)) => x.species.moves,
         _ => TileFlags::Empty,
     };
     let follower = Follower { pos, moves };
+    let defender = ChooseDefenseSquare(me, &follower);
     let data = TargetData::Summon { team, range: SUMMON_RANGE };
     let mut target = init_target(data, pos, pos);
 
-    let okay = |p: Point, target: &mut Target| {
+    let okay = |p: Point, swap: bool, target: &mut Target| {
         if p == pos || !CheckFollowerSquare(me, &follower, p) { return false; }
+        if swap != known.get(p).occupied() { return false; }
         update_target(me, target, p);
         target.error.is_empty()
     };
 
-    let closest = |p: Point, mut target: Box<Target>| {
-        let mut best = (pos, std::i64::MAX);
+    let closest = |p: Point, swap: bool, target: &mut Target| {
+        let mut best = (None, std::i64::MAX);
         for dx in -2..=2 {
             for dy in -2..=2 {
                 let point = pos + Delta(dx, dy);
                 let score = (p - point).len_l2_squared();
-                if score >= best.1 || !okay(point, &mut target) { continue; }
-                best = (point, score)
+                if score >= best.1 || !okay(point, swap, target) { continue; }
+                best = (Some(point), score)
             }
         }
-        let update = best.0;
-        update_target(me, &mut target, update);
-        target
+        best.0
     };
 
-    if let Some(x) = ChooseDefenseSquare(me, &follower) {
-        let line = LOS(pos, x);
-        for &p in line.iter().skip(1).rev() {
-            if okay(p, &mut target) { return target; }
+    let run = |swap: bool, target: &mut Target| {
+        if let Some(x) = defender {
+            let line = LOS(pos, x);
+            for &p in line.iter().skip(1).rev() {
+                if okay(p, swap, target) { return Some(p); }
+            }
+            if let Some(x) = closest(x, swap, target) { return Some(x); }
         }
-        return closest(x, target);
-    }
 
-    let best = pos + dir.scale(2);
-    let next = pos + dir.scale(1);
-    if okay(best, &mut target) { return target; }
-    if okay(next, &mut target) { return target; }
-    closest(best, target)
+        let best = pos + dir.scale(2);
+        let next = pos + dir.scale(1);
+        if okay(best, swap, target) { return Some(best); }
+        if okay(next, swap, target) { return Some(next); }
+        closest(best, swap, target)
+    };
+
+    // Try to choose a spot to summon this teammate without swapping out one
+    // that's already out. If that fails, look for a swap.
+    let best = run(false, &mut target).or_else(|| run(true, &mut target)).unwrap_or(pos);
+    update_target(me, &mut target, best);
+    target
 }
 
 fn update_target(me: &Entity, target: &mut Target, update: Point) {
