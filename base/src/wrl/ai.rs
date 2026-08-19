@@ -1633,6 +1633,214 @@ pub fn CheckFollowerSquare(leader: &Entity, follower: &Follower, point: Point) -
 // Choose the best cell from which to defend `leader`, starting from `source`.
 // This choice may fail, e.g. if there are no spots free near `leader`.
 pub fn ChooseDefenseSquare(leader: &Entity, follower: &Follower) -> Option<Point> {
+    let start = std::time::Instant::now();
+
+    let rivals = rivals(leader);
+    if rivals.is_empty() { return None; }
+
+    let source = follower.pos;
+    let (known, pos) = (&*leader.known, leader.pos);
+    let scale = 1. / DijkstraLength(dirs::E) as f64;
+    let bound = Bound::new(2);
+
+    let r: usize = 2;
+    let a: usize = (2 * r + 1).pow(2);
+    let n: usize = a + a * a;
+    let mut counts = 0;
+    let mut scores = vec![0; n];
+
+    let maybe_index = |p: Delta| {
+        if p.len_l1() <= 2 { Some((5 * (p.0 + 2) + p.1 + 2) as usize) } else { None }
+    };
+    let point_index = |p: Delta| {
+        maybe_index(p).unwrap()
+    };
+    let edge_index = |v, u| {
+        a * v + u + a
+    };
+    for v in 0..a {
+        scores[edge_index(v, v)] = -1000000;
+    }
+
+    for rival in rivals {
+        let delta = rival.pos - pos;
+        if delta == dirs::NONE { continue; }
+
+        let moves = rival.moves;
+        let check = |&x| known.get(x).status_for(moves) == Status::Blocked;
+
+        let los = LOS(rival.pos, leader.pos);
+        if los.iter().skip(1).rev().skip(1).any(check) { continue; }
+
+        let append_path = |scores: &mut Vec<i64>, path: [(Delta, f32); 2]| {
+            let encode = |x: f32| (x * 100.).round() as i64 * 10;
+            let s0 = encode(path[0].1);
+            let s1 = encode(path[1].1);
+            let loss = encode(path[1].1 * 15. / 16.);
+
+            let i0 = point_index(path[0].0);
+            let i1 = point_index(path[1].0);
+            scores[i0] += s0;
+            scores[i1] += s1;
+            scores[edge_index(i0, i1)] -= loss;
+            scores[edge_index(i1, i0)] -= loss;
+        };
+        let append_pair = |scores: &mut Vec<i64>, l: [Delta; 2], r: [Delta; 2], s: f32| {
+            let lp0 = delta.cross_product(l[0]);
+            let lp1 = delta.cross_product(l[1]);
+            let rp0 = delta.cross_product(r[0]);
+            let rp1 = delta.cross_product(r[1]);
+
+            let l0 = s * if lp0 < rp0 { 1.25 } else { 1. };
+            let r0 = s * if lp0 > rp0 { 1.25 } else { 1. };
+            let l1 = s * if lp1 < rp1 { 1.25 } else { 1. };
+            let r1 = s * if lp1 > rp1 { 1.25 } else { 1. };
+
+            append_path(scores, [(l[0], l0), (l[1], l1)]);
+            append_path(scores, [(r[0], r0), (r[1], r1)]);
+        };
+
+        let len = los.len();
+        if len >= 3 && !bound.contains(delta) {
+            let s = los[len - 3] - pos;
+            let t = los[len - 2] - pos;
+            append_path(&mut scores, [(s, 64.), (t, 64.)]);
+
+            if !bound.contains(s) {
+                let Delta(dx, dy) = t;
+                let (sl0, sr0) = (Delta(2 * dx, 0), Delta(0, 2 * dy));
+                let (sl1, sr1) = (Delta(2 * dx, dy), Delta(dx, 2 * dy));
+                let (tl0, tr0) = (Delta(dx, -dy), Delta(-dx, dy));
+                let (tl1, tr1) = (Delta(dx, 0), Delta(0, dy));
+
+                append_pair(&mut scores, [sl0, tl0], [sr0, tr0], 16.);
+                append_pair(&mut scores, [sl1, tl1], [sr1, tr1], 4.);
+            } else {
+                let (sl0, sr0) = (s.rotate_l(), s.rotate_r());
+                let (sl1, sr1) = (sl0.rotate_l(), sr0.rotate_r());
+                let (tl0, tr0) = (t.rotate_l(), t.rotate_r());
+                let (tl1, tr1) = (tl0.rotate_l(), tr0.rotate_r());
+
+                append_pair(&mut scores, [sl0, tl0], [sr0, tr0], 16.);
+                append_pair(&mut scores, [sl1, tl1], [sr1, tr1], 4.);
+            }
+            counts += 1;
+        }
+    }
+    if counts == 0 { return None; }
+
+    let mut us = None;
+    let mut teammates = vec![];
+    teammates.reserve(leader.summons.len() + 1);
+
+    for &eid in &leader.summons {
+        let Some(other) = known.entity(eid) else { continue };
+
+        if other.pos == source { us = Some(teammates.len()); }
+        teammates.push(Follower { pos: other.pos, moves: other.species.moves });
+    }
+    if us.is_none() {
+        us = Some(teammates.len());
+        teammates.push(Follower { ..*follower });
+    }
+    let us = us.unwrap();
+
+    let pre_search = std::time::Instant::now().duration_since(start);
+
+    let mut options = vec![];
+    options.reserve(teammates.len());
+
+    for t in &teammates {
+        let other = t.pos != source;
+        let check = |p: Point| {
+            let status = known.get(p).status_for(t.moves);
+            if status != Status::Occupied { return status; }
+            if teammates.iter().any(|x| x.pos == p) { Status::Free } else { Status::Blocked }
+        };
+        let map = DijkstraMap(t.pos, check, std::i32::MAX, 4);
+
+        let mut teammate_options = vec![];
+        teammate_options.reserve(map.visited.len());
+
+        for &(point, distance) in &map.visited {
+            let stay = other && t.pos == point;
+            let follower = Follower { pos: point, moves: t.moves };
+            if !stay && !CheckFollowerSquare(leader, &follower, point) { continue; }
+
+            let index = maybe_index(point - pos).unwrap_or(0);
+            let distance = if t.pos == pos { 0. } else { scale * distance as f64 };
+            let score = if (point - pos).len_l1() > 1 { 8000 } else { 0 };
+            let score = score + 500 - (distance * distance * 10.).round() as i64;
+            let score = score + scores[index];
+            teammate_options.push((index, point, score));
+        }
+        if teammate_options.is_empty() { return None; }
+
+        options.push(teammate_options);
+    }
+
+    let post_search = std::time::Instant::now().duration_since(start);
+
+    let mut i = 0;
+    let mut best = (None, 0);
+    let len = options.len();
+    if len == 1 {
+        for a in &options[0] {
+            let score = a.2;
+            if score > best.1 { best = (Some(i), score); }
+            i += 1;
+        }
+    } else if len == 2 {
+        for a in &options[0] {
+            for b in &options[1] {
+                let edge = edge_index(a.0, b.0);
+                let score = a.2 + b.2 + scores[edge];
+                if score > best.1 { best = (Some(i), score); }
+                i += 1;
+            }
+        }
+    } else if len == 3 {
+        for a in &options[0] {
+            for b in &options[1] {
+                let edge = edge_index(a.0, b.0);
+                let score = a.2 + b.2 + scores[edge];
+                for c in &options[2] {
+                    let e0 = edge_index(a.0, c.0);
+                    let e1 = edge_index(b.0, c.0);
+                    let score = score + c.2 + scores[e0] + scores[e1];
+                    if score > best.1 { best = (Some(i), score); }
+                    i += 1;
+                }
+            }
+        }
+    }
+
+    let result = best.0.map(|mut index| {
+        for (i, option) in options.iter().enumerate().rev() {
+            let len = option.len();
+            if i == us { return option[index % len].1; }
+            index /= len;
+        }
+        unreachable!();
+    });
+
+    let taken = std::time::Instant::now().duration_since(start);
+
+    use std::io::Write;
+    let mut opts = std::fs::OpenOptions::new();
+    let f = opts.append(true).create(true).open("debug.txt").unwrap();
+    let mut f = std::io::BufWriter::new(f);
+    writeln!(f, "\nDefender @ {:?} grid:", source - pos).unwrap();
+    writeln!(f, "{}-person grid ({} options) took: {}us ({}us, {}us): {:?} -> {:?} @ {}",
+             options.len(), i, taken.as_micros(), pre_search.as_micros(),
+             post_search.as_micros(), source - pos,
+             result.map(|x| x - pos), best.1).unwrap();
+
+    result
+}
+
+#[allow(unused)]
+fn ChooseDefenseSquareOld(leader: &Entity, follower: &Follower) -> Option<Point> {
     let rivals = rivals(leader);
     if rivals.is_empty() { return None; }
 
