@@ -244,7 +244,7 @@ fn init_summon_target(me: &Entity, team: usize) -> Box<Target> {
     let mut target = init_target(data, pos, pos);
 
     let okay = |p: Point, target: &mut Target| {
-        if p == pos || !CheckFollowerSquare(me, &follower, pos) { return false; }
+        if p == pos || !CheckFollowerSquare(me, &follower, p) { return false; }
         update_target(me, target, p);
         target.error.is_empty()
     };
