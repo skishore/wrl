@@ -47,6 +47,12 @@ impl Delta {
         if Bound::new(r).contains(*self) { r } else { r + 1 }
     }
 
+    pub fn cross_product(&self, with: Self) -> i32 {
+        let Delta(ax, ay) = self;
+        let Delta(bx, by) = with;
+        (ax * by - bx * ay).abs()
+    }
+
     pub fn len_taxicab(&self) -> i32 {
         self.0.abs() + self.1.abs()
     }
@@ -69,6 +75,26 @@ impl Delta {
         let x = (self.0 as f64 * factor).round() as i32;
         let y = (self.1 as f64 * factor).round() as i32;
         Delta(x, y)
+    }
+
+    pub fn rotate_l(&self) -> Delta {
+        let r = self.bound_radius();
+        let (dx, dy) = (self.1.signum(), -self.0.signum());
+        let shifts = [Delta(dx, 0), Delta(0, dy), Delta(dx, dy)];
+        for x in shifts.into_iter().map(|x| *self + x)  {
+            if x != *self && x.bound_radius() == r { return x; }
+        }
+        panic!();
+    }
+
+    pub fn rotate_r(&self) -> Delta {
+        let r = self.bound_radius();
+        let (dx, dy) = (-self.1.signum(), self.0.signum());
+        let shifts = [Delta(dx, 0), Delta(0, dy), Delta(dx, dy)];
+        for x in shifts.into_iter().map(|x| *self + x)  {
+            if x != *self && x.bound_radius() == r { return x; }
+        }
+        panic!();
     }
 
     pub fn scale(&self, scale: i32) -> Delta {
@@ -312,5 +338,35 @@ mod tests {
                 assert!(d.bound_radius() == expected_bound_radius(d));
             }
         }
+    }
+
+    #[test]
+    fn test_rotate_left() {
+        assert!(dirs::E.rotate_l()  == dirs::NE);
+        assert!(dirs::NE.rotate_l() == dirs::N);
+        assert!(dirs::N.rotate_l()  == dirs::NW);
+        assert!(dirs::NW.rotate_l() == dirs::W);
+
+        assert!(Delta(2, 0).rotate_r()  == Delta(2, 1));
+        assert!(Delta(2, 1).rotate_r()  == Delta(1, 2));
+        assert!(Delta(1, 2).rotate_r()  == Delta(0, 2));
+        assert!(Delta(0, 2).rotate_r()  == Delta(-1, 2));
+        assert!(Delta(-1, 2).rotate_r() == Delta(-2, 1));
+        assert!(Delta(-2, 1).rotate_r() == Delta(-2, 0));
+    }
+
+    #[test]
+    fn test_rotate_right() {
+        assert!(dirs::E.rotate_r()  == dirs::SE);
+        assert!(dirs::NE.rotate_r() == dirs::E);
+        assert!(dirs::N.rotate_r()  == dirs::NE);
+        assert!(dirs::NW.rotate_r() == dirs::N);
+
+        assert!(Delta(2, 0).rotate_l()   == Delta(2, -1));
+        assert!(Delta(2, -1).rotate_l()  == Delta(1, -2));
+        assert!(Delta(1, -2).rotate_l()  == Delta(0, -2));
+        assert!(Delta(0, -2).rotate_l()  == Delta(-1, -2));
+        assert!(Delta(-1, -2).rotate_l() == Delta(-2, -1));
+        assert!(Delta(-2, -1).rotate_l() == Delta(-2, 0));
     }
 }
