@@ -1,13 +1,20 @@
 import argparse
 
 
+def bound(r: int) -> int:
+    return r ** 2 + r + (0 if r == 4 else -1 if r == 5 else 1)
+
+
 def draw_circle(r: int) -> None:
-    limit = r ** 2 + r + (0 if r == 4 else -1 if r == 5 else 1)
+    next_bound = bound(r)
+    prev_bound = bound(r - 1) if r else -1
     for y in range(2 * r + 1):
         line = []
         for x in range(2 * r + 1):
-            inside = (x - r) ** 2 + (y - r) ** 2 < limit
-            line.append('＃' if inside else '  ')
+            l2_squared = (x - r) ** 2 + (y - r) ** 2
+            inside_next = l2_squared < next_bound
+            inside_prev = l2_squared < prev_bound
+            line.append('Ｘ' if inside_prev else '＃' if inside_next else '  ')
         print(''.join(line).rstrip())
 
 
