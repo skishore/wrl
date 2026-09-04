@@ -745,8 +745,8 @@ impl Focused {
             self.vision.clear();
             self.vision.set_center(pos);
         } else {
-            let opacity_lookup = |x| known.get(x).tile().map_or(0, |x| x.opacity());
-            self.vision.compute(&VisionArgs { pos, dir, opacity_lookup });
+            let opacity = |x| known.get(x).tile().map_or(0, |x| x.opacity());
+            self.vision.compute(&VisionArgs { pos, dir, opacity });
         }
     }
 }
