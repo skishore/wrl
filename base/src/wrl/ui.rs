@@ -1067,6 +1067,7 @@ impl UI {
     }
 
     fn render_arrows(&self, known: &Knowledge, offset: Point, slice: &mut Slice) {
+        if true { return; }
         let arrow_length = 3;
         let sleep_length = 2;
         let mut arrows = vec![];

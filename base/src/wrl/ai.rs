@@ -2549,6 +2549,7 @@ fn SummonRoot() -> impl Bhv {
             ],
             seq![
                 "MaybeAttackRivals",
+                cond!("ForceFail", |_| false),
                 cond!("MoveReady", |x| move_ready(x.me)),
                 Attack("AttackRival", AttackRival),
             ],
@@ -2583,6 +2584,7 @@ fn Root() -> impl Bhv {
             cb!("Fail", |_| Result::Failed),
         ],
         SummonRoot(),
+        act!("ForceIdle", |_| Some(Action::Idle)),
         FightOrFlight(),
         HuntForMeat(),
         LookForTarget(),
