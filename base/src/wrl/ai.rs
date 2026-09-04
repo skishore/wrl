@@ -827,8 +827,13 @@ fn AStarHelper(ctx: &mut Ctx, target: Point, kind: PathKind) -> Option<Vec<Point
     }
 
     // If that fails, recover a path from the Dijkstra neighborhood:
-    let cells = if hiding { &mut ctx.tmp.sneakable } else { &mut ctx.tmp.reachable };
-    if cells.visited.is_empty() { return None; }
+    let cells = if hiding {
+        ensure_sneakable(ctx);
+        &mut ctx.tmp.sneakable
+    } else {
+        ensure_reachable(ctx);
+        &mut ctx.tmp.reachable
+    };
 
     // Lazily construct a table of neighborhood's scores:
     let scores = &mut cells.scores;
@@ -1207,6 +1212,10 @@ fn FindMatchingCell(ctx: &mut Ctx, kind: PathKind, valid: CellPredicate) -> bool
         ctx.tmp.path_request = Some(point);
         true
     };
+
+    if kind == PathKind::Leader {
+        return ctx.env.leader.map_or(false, |x| success(ctx, x.pos));
+    }
 
     if let Some(point) = FindMatchingNeighbor(ctx, valid) {
         return success(ctx, point);
@@ -1843,16 +1852,6 @@ fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
     Some(Action::Move { look: step, step, turns: FOLLOW_TURNS })
 }
 
-fn MoveToLeader(ctx: &mut Ctx) -> Option<Action> {
-    let leader = ctx.env.leader?;
-    let (known, source, target) = (ctx.known, ctx.pos, leader.pos);
-
-    let check = |p: Point| known.get(p).status();
-    let path = AStar(source, target, ASTAR_CELLS_ATTACK, check)?;
-    let step = *path.first()? - source;
-    Some(Action::Move { look: step, step, turns: FOLLOW_TURNS })
-}
-
 //////////////////////////////////////////////////////////////////////////////
 
 // Behavior tree configuration
@@ -2153,9 +2152,9 @@ fn FightOrFlight() -> impl Bhv {
     ]
 }
 
-fn ReturnToLeader() -> impl Bhv {
+fn MoveToLeader() -> impl Bhv {
     const KIND: PathKind = PathKind::Leader;
-    path!("ReturnToLeader", KIND, IsLeader, cb!("Fail", |_| Result::Failed))
+    path!("MoveToLeader", KIND, IsLeader, cb!("Fail", |_| Result::Failed))
 }
 
 fn SummonRoot() -> impl Bhv {
@@ -2189,8 +2188,7 @@ fn SummonRoot() -> impl Bhv {
                 act!("DefendLeader", DefendLeader),
             ],
             act!("FollowLeader", FollowLeader),
-            act!("MoveToLeader", MoveToLeader),
-            ReturnToLeader(),
+            MoveToLeader(),
             act!("Idle", |_| Some(Action::Idle)),
         ],
     ]
