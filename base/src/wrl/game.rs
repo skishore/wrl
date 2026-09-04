@@ -1672,6 +1672,7 @@ impl State {
         me.team.push(teammate("Squirtle"));
         me.team.push(teammate("Pikachu"));
         me.team.push(teammate("Pidgey"));
+        me.team.push(teammate("Goldeen"));
         board.update_known(player, &mut env);
 
         let ui = &mut env.ui;
