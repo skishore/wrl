@@ -1029,26 +1029,21 @@ fn ChooseAttackTarget(ctx: &mut Ctx, target: AttackTargetSelector) -> bool {
     ctx.tmp.attack_request.is_some()
 }
 
-fn AttackChosenTarget(ctx: &mut Ctx) -> Option<Action> {
-    let AttackRequest { choice, target } = ctx.tmp.attack_request.take()?;
-    match choice {
-        Choice::Attack(attack) => AttackTarget(ctx, target, attack),
-        Choice::Return => PathToTarget(ctx, target, SUMMON_RANGE, /*flip=*/true),
-    }
+fn CanSeeTarget(ctx: &Ctx) -> bool {
+    let Some(request) = &ctx.tmp.attack_request else { return false };
+    ctx.known.get(request.target).visible()
 }
 
-fn AttackTarget(ctx: &mut Ctx, target: Point, attack: &'static Attack) -> Option<Action> {
-    let Ctx { known, me, pos, .. } = *ctx;
+fn CanAttackTarget(ctx: &Ctx) -> bool {
+    let Some(request) = &ctx.tmp.attack_request else { return false };
+    let Choice::Attack(attack) = request.choice else { return false };
+    CanAttackFrom(ctx.known, ctx.pos, request.target, attack.range)
+}
 
-    let range = attack.range;
-    let ready = move_ready(me) && known.get(target).visible() &&
-                CanAttackFrom(known, pos, target, range);
-
-    if ready {
-        Some(Action::Attack { target, attack })
-    } else {
-        PathToTarget(ctx, target, range, /*flip=*/false)
-    }
+fn AttackNow(ctx: &mut Ctx) -> Option<Action> {
+    let Some(request) = &ctx.tmp.attack_request else { return None };
+    let Choice::Attack(attack) = request.choice else { return None };
+    Some(Action::Attack { target: request.target, attack })
 }
 
 fn CanAttackFrom(known: &Knowledge, source: Point, target: Point, range: Bound) -> bool {
@@ -1061,9 +1056,16 @@ fn PathIsFree(known: &Knowledge, path: &[Point]) -> bool {
     path.iter().skip(1).rev().skip(1).all(|&p| known.get(p).status() == Status::Free)
 }
 
-fn PathToTarget(ctx: &mut Ctx, target: Point, range: Bound, flip: bool) -> Option<Action> {
+fn PathToTarget(ctx: &mut Ctx) -> Option<Action> {
     let Ctx { known, pos, .. } = *ctx;
+    let request = ctx.tmp.attack_request.as_ref()?;
+
+    let target = request.target;
     let update = ctx.blackboard.path.path.last().cloned() == Some(target);
+    let (flip, range) = match request.choice {
+        Choice::Attack(attack) => (false, attack.range),
+        Choice::Return => (true, SUMMON_RANGE),
+    };
 
     // Slight tweaks on get_reach_check, etc. to better handle small crowds.
     let step = |dir| {
@@ -1744,6 +1746,14 @@ pub fn ChooseDefenseSquare(leader: &Entity, follower: &Follower) -> Option<Point
 // rival, it should not move out of the way to defend against one other rival
 // (even if that square is better, e.g. because it's further from the leader).
 // This "stickiness" heuristic yields more predictable behavior.
+//
+// TODO: "Return" / "Switch" command following is broken in a few ways:
+//  - We don't correctly check if a leader can spot us there - we check that
+//    we have LOS and that it's not a hiding cell, but that doesn't account
+//    for (say) partial opacity like tall grass.
+//  - We should reduce the radius to 1 and try to get as close to the leader
+//    as possible even once we have an LOS.
+//  - We shouldn't bother running the AttackTarget subtree.
 fn SelectAttackTarget(ctx: &mut Ctx) -> bool {
     let me = ctx.me;
     let Some(command) = me.command.get() else { return false };
@@ -1869,7 +1879,18 @@ fn Attack(name: &'static str, target: AttackTargetSelector) -> impl Bhv {
     seq![
         name,
         cond!("ChooseAttackTarget", move |x| ChooseAttackTarget(x, target)),
-        act!("AttackChosenTarget", move |x| AttackChosenTarget(x)),
+        pri![
+            "AttackChosenTarget",
+            seq![
+                "AttackTarget",
+                cond!("MoveReady", |x| move_ready(x.me)),
+                cond!("CanSeeTarget", |x| CanSeeTarget(x)),
+                cond!("CanAttackTarget", |x| CanAttackTarget(x)),
+                act!("AttackNow", AttackNow),
+            ],
+            act!("PathToTarget", PathToTarget),
+        ]
+        .post_tick(|x| x.tmp.attack_request = None),
     ]
 }
 
