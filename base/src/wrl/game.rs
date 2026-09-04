@@ -221,8 +221,8 @@ impl FOV {
 
         let map = &board.map;
         let dir = if player { dirs::NONE } else { dir };
-        let opacity_lookup = |x| map.entry_ref(x).tile.opacity();
-        vision.check_point(&VisionArgs { pos, dir, opacity_lookup }, point)
+        let opacity = |x| map.entry_ref(x).tile.opacity();
+        vision.check_point(&VisionArgs { pos, dir, opacity }, point)
     }
 
     fn can_see_entity(&mut self, board: &Board, me: &Entity, other: &Entity) -> bool {
@@ -252,8 +252,8 @@ impl FOV {
         } else {
             let map = &board.map;
             let dir = if player { dirs::NONE } else { dir };
-            let opacity_lookup = |x| map.entry_ref(x).tile.opacity();
-            vision.compute(&VisionArgs { pos, dir, opacity_lookup });
+            let opacity = |x| map.entry_ref(x).tile.opacity();
+            vision.compute(&VisionArgs { pos, dir, opacity });
         }
         vision
     }
