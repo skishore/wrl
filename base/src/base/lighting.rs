@@ -104,9 +104,9 @@ impl Lighting {
         if light < 0 { return; }
 
         let (pos, dir) = (point, dirs::NONE);
-        let opacity_lookup = |p: Point| { self.opacity.get(p) };
+        let opacity = |p| self.opacity.get(p);
         let vision = &mut self.visions[light as usize];
-        vision.compute(&VisionArgs { pos, dir, opacity_lookup });
+        vision.compute(&VisionArgs { pos, dir, opacity });
 
         for &p in vision.get_points_seen() {
             let Some(index) = self.light_values.index(p) else { continue };
@@ -214,8 +214,8 @@ mod tests {
             let light = lighting.light_radius.get(other);
             if !Bound::new(light).contains(other - point) { continue; }
 
-            let opacity_lookup = |x| lighting.opacity.get(x);
-            let args = VisionArgs { pos: other, dir: dirs::NONE, opacity_lookup };
+            let opacity = |x| lighting.opacity.get(x);
+            let args = VisionArgs { pos: other, dir: dirs::NONE, opacity };
             if vision.check_point(&args, point) { expected += 1; }
         }
 

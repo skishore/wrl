@@ -10,7 +10,7 @@ use rand_distr::num_traits::Pow;
 
 use crate::base::pathing::{AStar, AStarHeuristic, Status};
 use crate::base::point::{Bound, Delta, LOS, Point, dirs};
-use crate::base::pathing::{Dijkstra, DijkstraLength, DijkstraMap, Neighborhood};
+use crate::base::pathing::{Check, Dijkstra, DijkstraLength, DijkstraMap, Neighborhood};
 use crate::base::util::{HashMap, HashSet, RNG, clamp, sample, sortable, weighted};
 use crate::base::vision::{INITIAL_VISIBILITY, Vision, VisionArgs};
 
@@ -307,7 +307,7 @@ fn is_hidden_from(ctx: &Ctx, point: Point, threats: &[Point]) -> bool {
     cell.is_cover() || !(light || !cell.is_shadow_cover())
 }
 
-fn get_reach_check<'a>(ctx: &'a Ctx) -> impl Fn(Point) -> Status + use<'a> {
+fn get_reach_check<'a>(ctx: &'a Ctx) -> impl Check + use<'a> {
     let (fov, known, pos) = (&ctx.env.fov, ctx.known, ctx.pos);
     move |p: Point| match known.get(p).status() {
         Status::Occupied if (p - pos).len_l1() == 1 => Status::Blocked,
@@ -316,7 +316,7 @@ fn get_reach_check<'a>(ctx: &'a Ctx) -> impl Fn(Point) -> Status + use<'a> {
     }
 }
 
-fn get_sneak_check<'a, 'b>(ctx: &'a Ctx<'b>) -> impl Fn(Point) -> Status + use<'a, 'b> {
+fn get_sneak_check<'a, 'b>(ctx: &'a Ctx<'b>) -> impl Check + use<'a, 'b> {
     let (known, pos) = (ctx.known, ctx.pos);
     move |p: Point| {
         if !is_hiding_place(ctx, p) { return Status::Blocked; }
@@ -348,8 +348,8 @@ fn ensure_vision(ctx: &mut Ctx) {
     if ctx.tmp.ran_vision { return; }
 
     let Ctx { known, pos, .. } = *ctx;
-    let opacity_lookup = |x| if known.get(x).blocked() { INITIAL_VISIBILITY } else { 0 };
-    let args = VisionArgs { pos, dir: dirs::NONE, opacity_lookup, };
+    let opacity = |x| if known.get(x).blocked() { INITIAL_VISIBILITY } else { 0 };
+    let args = VisionArgs { pos, dir: dirs::NONE, opacity };
 
     ctx.env.fov.compute(&args);
     ctx.tmp.ran_vision = true;
@@ -1121,7 +1121,7 @@ fn PathToTarget(ctx: &mut Ctx, target: Point, range: Bound, flip: bool) -> Optio
     }
 
     // Find the closest `source` cell from which we could attack the target.
-    let source = Dijkstra(pos, valid, ASTAR_CELLS_ATTACK, check, |_| 0);
+    let source = Dijkstra(pos, valid, ASTAR_CELLS_ATTACK, check);
     let source = source.and_then(|x| x.last().cloned()).unwrap_or(target);
 
     // Then, use A* to find a path to that cell.
@@ -1325,7 +1325,7 @@ macro_rules! check_time {
     }}
 }
 
-fn List<T: Fn(&mut Ctx)>(t: T) -> impl Fn(&mut Ctx) -> bool {
+fn List(t: impl Fn(&mut Ctx) -> ()) -> impl Fn(&mut Ctx) -> bool {
     move |x| { let n = x.tmp.targets.len(); t(x); x.tmp.targets.len() > n }
 }
 
@@ -1393,7 +1393,7 @@ fn ListHumansByScent(ctx: &mut Ctx) {
     ListTargetsByScent(ctx, |x| x.species.human(), MIN_TRACKING_TURNS)
 }
 
-fn ListTargetsByScent<F: Fn(&ScentKnowledge) -> bool>(ctx: &mut Ctx, f: F, turns: i32) {
+fn ListTargetsByScent(ctx: &mut Ctx, f: impl Fn(&ScentKnowledge) -> bool, turns: i32) {
     for scent in &ctx.known.scents {
         if !f(scent) { continue; }
         if !check_time!(ctx, scent.time, turns) { break; }
@@ -2134,7 +2134,7 @@ fn FightOrFlight() -> impl Bhv {
 
 fn ReturnToLeader() -> impl Bhv {
     const KIND: PathKind = PathKind::Leader;
-    path!("FindLeader", KIND, IsLeader, cb!("Fail", |_| Result::Failed))
+    path!("ReturnToLeader", KIND, IsLeader, cb!("Fail", |_| Result::Failed))
 }
 
 fn SummonRoot() -> impl Bhv {

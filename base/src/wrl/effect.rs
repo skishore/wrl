@@ -200,7 +200,7 @@ impl Event {
         }
     }
 
-    pub fn update_frame<F: FnOnce(i32) -> i32>(&mut self, update: F) {
+    pub fn update_frame(&mut self, update: impl Fn(i32) -> i32) {
         match self {
             Event::Callback { frame, .. } => *frame = update(*frame),
             Event::Other { frame, .. } => *frame = update(*frame),

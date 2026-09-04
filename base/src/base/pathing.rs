@@ -16,6 +16,12 @@ use super::util::HashMap;
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub enum Status { Free, Blocked, Occupied, Unknown }
 
+pub type Path = Vec<Point>;
+
+pub trait Final = Fn(Point) -> bool;
+pub trait Check = Fn(Point) -> Status;
+pub trait Heuristic = Fn(Point) -> i32;
+
 //////////////////////////////////////////////////////////////////////////////
 
 // Pathfinding is not re-entrant. Reuse heap allocations for perf:
@@ -219,8 +225,7 @@ pub fn AStarHeuristic(p: Point, los: &[Point]) -> i32 {
    ASTAR_LOS_DIFF_PENALTY * diff + AStarLength(p - Point(tx, ty))
 }
 
-pub fn AStar<F: Fn(Point) -> Status>(
-        source: Point, target: Point, cells: i32, check: F) -> Option<Vec<Point>> {
+pub fn AStar(source: Point, target: Point, cells: i32, check: impl Check) -> Option<Path> {
     if source == target { return Some(vec![]); }
 
     // Try line-of-sight - if that path is clear, then we don't need to search.
@@ -229,20 +234,19 @@ pub fn AStar<F: Fn(Point) -> Status>(
     let free = (1..los.len() - 1).all(|i| check(los[i]) == Status::Free);
     if free { return Some(los.into_iter().skip(1).collect()) }
 
-    Dijkstra(source, |x| x == target, cells, check, |x| AStarHeuristic(x, &los))
+    DijkstraCore(source, |x| x == target, cells, check, |x| AStarHeuristic(x, &los))
 }
 
 //////////////////////////////////////////////////////////////////////////////
 
 // Dijkstra
 
-// TODO: This search algorithm is non-isotropic. It prefers to move northwest.
-// Fix it by sampling all nodes at `score` matching `target`.
-//
-// TODO: If it's AStar, and we haven't found a target, return a path that gets
-// us as close as possible to the target.
-pub fn Dijkstra<F: Fn(Point) -> bool, G: Fn(Point) -> Status, H: Fn(Point) -> i32>(
-        source: Point, target: F, cells: i32, check: G, heuristic: H) -> Option<Vec<Point>> {
+pub fn Dijkstra(source: Point, target: impl Final, cells: i32, check: impl Check) -> Option<Path> {
+    DijkstraCore(source, target, cells, check, |_| 0)
+}
+
+fn DijkstraCore(source: Point, target: impl Final, cells: i32,
+                check: impl Check, heuristic: impl Heuristic) -> Option<Vec<Point>> {
     ASTAR_STATE.with_borrow_mut(|state|{
         let result = CachedDijkstra(state, source, target, cells, check, heuristic);
 
@@ -255,9 +259,13 @@ pub fn Dijkstra<F: Fn(Point) -> bool, G: Fn(Point) -> Status, H: Fn(Point) -> i3
     })
 }
 
-fn CachedDijkstra<F: Fn(Point) -> bool, G: Fn(Point) -> Status, H: Fn(Point) -> i32>(
-        state: &mut AStarState, source: Point, target: F,
-        cells: i32, check: G, heuristic: H) -> Option<Vec<Point>> {
+// TODO: This search algorithm is non-isotropic. It prefers to move northwest.
+// Fix it by sampling all nodes at `score` matching `target`.
+//
+// TODO: If it's AStar, and we haven't found a target, return a path that gets
+// us as close as possible to the target.
+fn CachedDijkstra(state: &mut AStarState, source: Point, target: impl Final,
+                  cells: i32, check: impl Check, heuristic: impl Heuristic) -> Option<Path> {
     let map = &mut state.map;
     let heap = &mut state.heap;
 
@@ -390,8 +398,7 @@ pub fn DijkstraLength(d: Delta) -> i32 {
     DIJKSTRA_UNIT_COST * max(x, y) + DIJKSTRA_DIAGONAL_PENALTY * min(x, y)
 }
 
-pub fn DijkstraMap<F: Fn(Point) -> Status>(
-        source: Point, check: F, cells: i32, limit: i32) -> Neighborhood {
+pub fn DijkstraMap(source: Point, check: impl Check, cells: i32, limit: i32) -> Neighborhood {
     DIJKSTRA_STATE.with_borrow_mut(|state|{
         // Make sure we've allocated enough space for the search.
         let n = ((2 * limit + 1) as usize).pow(2);
@@ -407,9 +414,8 @@ pub fn DijkstraMap<F: Fn(Point) -> Status>(
     })
 }
 
-fn CachedDijkstraMap<F: Fn(Point) -> Status>(
-        state: &mut DijkstraState, source: Point,
-        check: F, cells: i32, limit: i32) -> Neighborhood {
+fn CachedDijkstraMap(state: &mut DijkstraState, source: Point,
+                     check: impl Check, cells: i32, limit: i32) -> Neighborhood {
     let cells = cells as usize;
     let cells = min(cells, (2 * limit as usize + 1).pow(2));
     let mut result = Neighborhood::default();
@@ -551,7 +557,7 @@ mod tests {
         b.iter(|| {
             let done = |_: Point| { false };
             let check = |p: Point| { map.get(&p).copied().unwrap_or(Status::Free) };
-            Dijkstra(Point::ORIGIN, done, DIJKSTRA_CELLS, check, |_| 0);
+            Dijkstra(Point::ORIGIN, done, DIJKSTRA_CELLS, check);
         });
     }
 

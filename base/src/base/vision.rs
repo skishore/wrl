@@ -34,6 +34,8 @@ fn div_ceil(lhs: i32, rhs: i32) -> i32 {
 pub const INITIAL_VISIBILITY: i32 = 100;
 pub const VISIBILITY_LOSSES: [i32; 7] = [100, 75, 45, 30, 24, 19, 15];
 
+pub trait Opacity = Fn(Point) -> i32;
+
 #[derive(Clone, Copy, Debug)]
 struct Transform([[i32; 2]; 2]);
 
@@ -114,10 +116,10 @@ struct SlopeRanges {
 
 // Public API
 
-pub struct VisionArgs<F: Fn(Point) -> i32> {
+pub struct VisionArgs<F: Opacity> {
     pub pos: Point,
     pub dir: Delta,
-    pub opacity_lookup: F,
+    pub opacity: F,
 }
 
 pub struct Vision {
@@ -184,8 +186,7 @@ impl Vision {
         self.points_seen.clear();
     }
 
-    pub fn check_point<F: Fn(Point) -> i32>(
-            &mut self, args: &VisionArgs<F>, target: Point) -> bool {
+    pub fn check_point(&mut self, args: &VisionArgs<impl Opacity>, target: Point) -> bool {
         if args.pos == target { return true; }
 
         let delta = target - args.pos;
@@ -197,15 +198,15 @@ impl Vision {
         self.clear();
         self.set_center(args.pos);
         self.seed_ranges(args.dir, Some(target - args.pos));
-        self.execute(args.pos, limit, &args.opacity_lookup);
+        self.execute(args.pos, limit, &args.opacity);
         self.can_see(target)
     }
 
-    pub fn compute<F: Fn(Point) -> i32>(&mut self, args: &VisionArgs<F>) {
+    pub fn compute(&mut self, args: &VisionArgs<impl Opacity>) {
         self.clear();
         self.set_center(args.pos);
         self.seed_ranges(args.dir, None);
-        self.execute(args.pos, self.range.radius, &args.opacity_lookup);
+        self.execute(args.pos, self.range.radius, &args.opacity);
     }
 
     pub fn set_center(&mut self, pos: Point) {
@@ -282,8 +283,7 @@ impl Vision {
         }
     }
 
-    fn execute<F: Fn(Point) -> i32>(
-            &mut self, pos: Point, limit: i32, opacity_lookup: F) {
+    fn execute(&mut self, pos: Point, limit: i32, opacity: impl Opacity) {
         let radius = self.range.radius;
         let center = Point(radius, radius);
 
@@ -313,7 +313,7 @@ impl Vision {
 
                     let next_visibility = (|| {
                         if !nearby { return -1; }
-                        let opacity = opacity_lookup(point + pos);
+                        let opacity = opacity(point + pos);
                         if opacity == 0 { return visibility; }
                         if opacity >= visibility { return 0; }
                         let r = 1.0 + (0.5 * source.1.abs() as f64) / (source.0 as f64);
@@ -378,13 +378,13 @@ mod tests {
     fn run_fov(pos: Point, dir: Delta, map: &Matrix<char>,
                radius: i32, check_point_lookups: bool) -> Matrix<bool> {
         // Wrapper around Vision to make it easier to test.
-        let opacity_lookup = |p: Point| {
+        let opacity = |p: Point| {
             let tile = if map.contains(p) { map.get(p) } else { '#' };
             if tile == '#' { return INITIAL_VISIBILITY; }
             if tile == ',' { return VISIBILITY_LOSS; }
             0
         };
-        let args = VisionArgs { pos, dir, opacity_lookup };
+        let args = VisionArgs { pos, dir, opacity };
 
         let mut vision = Vision::new(radius);
         vision.compute(&args);
@@ -848,14 +848,14 @@ mod tests {
         let (pos, map) = generate_fov_input();
         let mut tiles = Matrix::new(map.size(), Tile::get('#'));
         for (p, x) in tiles.iter_mut() { *x = Tile::get(map.get(p)); }
-        let opacity_lookup = |p: Point| {
+        let opacity = |p: Point| {
             let tile = tiles.get(p);
             if tile.blocks_vision() { return INITIAL_VISIBILITY; }
             if tile.limits_vision() { return VISIBILITY_LOSS; }
             0
         };
         let dir = if directional { dirs::SE } else { dirs::NONE };
-        let args = VisionArgs { pos, dir, opacity_lookup };
+        let args = VisionArgs { pos, dir, opacity };
 
         let mut vision = Vision::new(pos.0);
         if point_lookups {
