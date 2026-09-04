@@ -96,6 +96,7 @@ impl PartialEq for &'static Species {
 
 static SPECIES: LazyLock<HashMap<&'static str, Species>> = LazyLock::new(|| {
     let walks = TF::CanWalkOn;
+    let swims = TF::CanSwimOn;
     let flies = TF::CanWalkOn | TF::CanFlyOver;
     let items = vec![
         ("Human",      0xffffff, walks, 0, 0, 0.000, 0.9, 3,   vec![]),
@@ -106,6 +107,7 @@ static SPECIES: LazyLock<HashMap<&'static str, Species>> = LazyLock::new(|| {
         ("Squirtle",   0x80c0ff, walks, 0, 0, 0.250, 1.0, 200, vec!["Ice Beam"]),
         ("Pikachu",    0xffff00, walks, 0, 4, 0.500, 1.1, 200, vec![]),
         ("Eevee",      0xd0a070, walks, 0, 0, 1.000, 1.0, 200, vec!["Headbutt"]),
+        ("Goldeen",    0xff7050, swims, 0, 0, 0.125, 1.0, 200, vec!["Headbutt"]),
     ];
     let mut result = HashMap::default();
     for (name, color, moves, predator, light, scent, speed, hp, attacks) in items {
