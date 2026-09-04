@@ -1603,6 +1603,7 @@ impl State {
             let result = mapgen(size, &mut rng);
             for x in 0..size.0 {
                 for y in 0..size.1 {
+                    if true { break; }
                     let p = Point(x, y);
                     board.set_tile(p, Tile::get(result.get(p)));
                 }
@@ -1624,11 +1625,30 @@ impl State {
             rng,
         };
 
+        pos = Point(WORLD_SIZE / 2, WORLD_SIZE / 2);
+
         let input = Action::WaitForInput;
         let (name, leader, player) = (Some("skishore".into()), None, true);
         let args = EntityArgs { name, pos, player, leader, species };
         let player = board.add_entity(&args, &mut env);
 
+        let enemies = vec![
+            //Delta(1, 1),
+            //Delta(2, 1),
+            //Delta(2, 2),
+            Delta(3, 0),
+            Delta(-3, 0),
+            Delta(-3, -1),
+        ];
+        for enemy in enemies {
+            let x = pos + enemy;
+            let species = Species::get("Rattata");
+            let (name, leader, player) = (None, None, false);
+            let args = EntityArgs { name, pos: x, player, leader, species };
+            board.add_entity(&args, &mut env);
+        }
+
+        /*
         if matches!(mode, GameMode::Gym | GameMode::Sim | GameMode::Test) {
             board.map.entry_mut(pos).unwrap().eid = None;
             let me = &mut board.entities[player];
@@ -1660,6 +1680,7 @@ impl State {
             let args = EntityArgs { name, pos: x, player, leader, species };
             board.add_entity(&args, &mut env);
         }
+        */
 
         let teammate = |name: &str| {
             let species = Species::get(name);
