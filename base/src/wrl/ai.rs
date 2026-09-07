@@ -1110,6 +1110,10 @@ fn PathIsFree(known: &Knowledge, path: &[Point]) -> bool {
     path.iter().skip(1).rev().skip(1).all(|&p| known.get(p).status() == Status::Free)
 }
 
+fn PathToAttack(ctx: &mut Ctx) -> Option<Point> {
+    ctx.tmp.attack_request.take().map(|x| x.target)
+}
+
 fn PathToTarget(ctx: &mut Ctx) -> Option<Action> {
     let Ctx { known, pos, .. } = *ctx;
     let request = ctx.tmp.attack_request.as_ref()?;
@@ -1809,6 +1813,16 @@ pub fn ChooseDefenseSquare(leader: &Entity, follower: &Follower) -> Option<Point
 //  - We should reduce the radius to 1 and try to get as close to the leader
 //    as possible even once we have an LOS.
 //  - We shouldn't bother running the AttackTarget subtree.
+//
+// TODO: In PathToTarget, we don't currently test whether a cell has an
+// unobstructed view (e.g. unobstructed by tall grass) to the target cell.
+// See combat-pathfinding-alt where we instead use a local Vision instance.
+//
+// TODO: PathToTarget currently recomputes the path at every step (arguably
+// alright) but as a result always takes cardinal moves instead of a mix of
+// cardinal and diagonal (because of the non-isotropic path result). Fix it
+// by comparing the new path to the old one and only replacing the old one if
+// the new path is *strictly* shorter.
 fn SelectAttackTarget(ctx: &mut Ctx) -> bool {
     let me = ctx.me;
     let Some(command) = me.command.get() else { return false };
@@ -1923,6 +1937,12 @@ fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
 //    when we're near it again. Or: generalize this fallback to all "path to
 //    target" cases, and drop the first bullet above.
 
+macro_rules! attack {
+    ($v:expr) => {
+        cond!("ChooseAttackTarget", move |x| ChooseAttackTarget(x, $v))
+    };
+}
+
 macro_rules! path {
     ($n:expr, $k:expr, $v:expr, $f:expr) => {
         seq![$n, ComputePath($k, $v), cb!("FollowPath", FollowPath), $f]
@@ -1946,20 +1966,20 @@ fn Move(name: &'static str, kind: PathKind, target: PathTargetSelector) -> impl 
 fn Attack(name: &'static str, target: AttackTargetSelector) -> impl Bhv {
     seq![
         name,
-        cond!("ChooseAttackTarget", move |x| ChooseAttackTarget(x, target)),
+        attack!(target),
+        cond!("CanSeeTarget", |x| CanSeeTarget(x)),
         pri![
             "AttackChosenTarget",
             seq![
-                "AttackTarget",
+                "AttackIfReady",
                 cond!("MoveReady", |x| move_ready(x.me)),
-                cond!("CanSeeTarget", |x| CanSeeTarget(x)),
                 cond!("CanAttackTarget", |x| CanAttackTarget(x)),
                 act!("AttackNow", AttackNow),
             ],
             act!("PathToTarget", PathToTarget),
-        ]
-        .post_tick(|x| x.tmp.attack_request = None),
+        ],
     ]
+    .post_tick(|x| x.tmp.attack_request = None)
 }
 
 fn Follow(name: &'static str, kind: PathKind) -> impl Bhv {
@@ -2237,11 +2257,16 @@ fn SummonRoot() -> impl Bhv {
                 cond!("HasCommand", |x| x.me.command.get().is_some()),
                 pri![
                     "FollowCommand",
-                    Attack("FollowSimpleCommand", FollowSimpleCommand),
                     seq![
                         "FollowAttackCommand",
                         cond!("SelectAttackTarget", SelectAttackTarget),
                         HuntSelectedTarget(),
+                    ],
+                    Attack("FollowSimpleCommand", FollowSimpleCommand),
+                    seq![
+                        "MoveTowardsTarget",
+                        attack!(FollowSimpleCommand),
+                        Move("PathToAttack", PathKind::Target, PathToAttack),
                     ],
                 ]
                 .post_tick(ClearAttackCommand),
