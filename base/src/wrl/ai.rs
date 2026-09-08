@@ -10,7 +10,8 @@ use rand_distr::num_traits::Pow;
 
 use crate::base::pathing::{AStar, AStarHeuristic, Status};
 use crate::base::point::{Bound, Delta, LOS, Point, dirs};
-use crate::base::pathing::{Check, Dijkstra, DijkstraLength, DijkstraMap, Neighborhood};
+use crate::base::pathing::{AStarPathLength, Check, Neighborhood};
+use crate::base::pathing::{Dijkstra, DijkstraLength, DijkstraMap};
 use crate::base::util::{HashMap, HashSet, RNG, clamp, sample, sortable, weighted};
 use crate::base::vision::{INITIAL_VISIBILITY, Vision, VisionArgs};
 
@@ -932,6 +933,38 @@ fn CheckPathStepsHidden(ctx: &Ctx) -> bool {
     let path = &ctx.blackboard.path;
     if path.kind != PathKind::Hide { return true; }
     path.path.iter().skip(path.step).all(|&x| is_hiding_place(ctx, x))
+}
+
+fn ImprovePath(ctx: &mut Ctx) -> bool {
+    let path = &ctx.blackboard.path;
+    let kind = path.kind;
+
+    // Try to improve the path to the target.
+    let Some(&target) = path.path.last() else { return false };
+    let Some(&source) = path.path.get(path.step) else { return false };
+
+    let alternate  = if kind == PathKind::Hide {
+        AStar(source, target, ASTAR_CELLS_WANDER, get_sneak_check(ctx))
+    } else {
+        AStar(source, target, ASTAR_CELLS_WANDER, get_reach_check(ctx))
+    };
+    let Some(mut alternate) = alternate else { return false };
+
+    alternate.splice(0..0, path.path.iter().take(path.step + 1).copied());
+
+    let Ctx { known, pos, .. } = *ctx;
+    let check = |p| match known.get(p).status() {
+        Status::Occupied if (p - pos).len_l1() > 2 => Status::Free,
+        x => x,
+    };
+    let old = AStarPathLength(&path.path[path.step..], check);
+    let new = AStarPathLength(&alternate[path.step..], check);
+    if new >= old { return false; }
+
+    let step = path.step;
+    ctx.blackboard.path.replace(kind, alternate);
+    ctx.blackboard.path.step = step;
+    true
 }
 
 // Follow a valid path. Succeeds if we've made it to the end of the path.
@@ -1947,7 +1980,12 @@ fn CheckPath(kind: PathKind, valid: CellPredicate) -> impl Bhv {
             cond!("CheckPathStepsFree", |x| CheckPathStepsFree(x)),
             cond!("CheckPathStepsHidden", |x| CheckPathStepsHidden(x)),
         ]
-        .on_fail(move |x| x.blackboard.path.clear())
+        .on_fail(move |x| x.blackboard.path.clear()),
+        pri![
+            "MaybeImprovePath",
+            cond!("ImprovePath", ImprovePath),
+            cond!("UseLastPath", |_| true),
+        ],
     ]
 }
 
