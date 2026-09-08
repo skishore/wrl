@@ -772,8 +772,9 @@ type AttackTargetSelector = fn(&mut Ctx) -> Option<AttackRequest>;
 enum PathKind {
     // High-priority actions:
     Leader,
-    Hide,
+    Target,
     Flee,
+    Hide,
     Chase,
     ChaseFallback,
     // Low-priority needs:
@@ -892,10 +893,10 @@ fn SkipLastPathStep(kind: PathKind) -> bool {
     type K = PathKind;
     match kind {
         // Move adjacent to the cell but not onto it.
-        K::Leader | K::Meat | K::Water | K::Berry | K::BerryTree => true,
+        K::Leader | K::Target | K::Meat | K::Water | K::Berry | K::BerryTree => true,
 
         // High-priority search/flee pathing; move to the cell.
-        K::Hide | K::Flee | K::Chase | K::ChaseFallback => false,
+        K::Flee | K::Hide | K::Chase | K::ChaseFallback => false,
 
         // Low-priority needs pathing; move to the cell.
         K::Rest | K::Explore | K::None => false,
@@ -984,6 +985,8 @@ fn FollowPath(ctx: &mut Ctx) -> Result {
         if x.target.time > limit && !x.target.slow { turns = 1. };
     } else if kind == PathKind::Flee && any_threat_awake(ctx) {
         turns = 1.;
+    } else if kind == PathKind::Target {
+        turns = 1.;
     } else if kind == PathKind::Leader {
         turns = FOLLOW_TURNS;
     }
@@ -1039,6 +1042,12 @@ fn AttackPathTarget(ctx: &mut Ctx) -> Option<AttackRequest> {
 fn AttackNow(ctx: &mut Ctx) -> Option<Action> {
     let Some(request) = &ctx.tmp.attack_request else { return None };
     let Choice::Attack(attack) = request.choice else { return None };
+
+    let target = request.target;
+    let update = ctx.blackboard.path.path.last().cloned() == Some(target);
+    let kind = if update { ctx.blackboard.path.kind } else { PathKind::Target };
+    ctx.blackboard.path.replace(kind, LOS(ctx.pos, target));
+
     Some(Action::Attack { target: request.target, attack })
 }
 
@@ -1074,7 +1083,7 @@ fn PathToTarget(ctx: &mut Ctx) -> Option<Action> {
 
     let target = request.target;
     let update = ctx.blackboard.path.path.last().cloned() == Some(target);
-    let kind = if update { Some(ctx.blackboard.path.kind) } else { None };
+    let kind = if update { ctx.blackboard.path.kind } else { PathKind::Target };
     let (flip, range) = match request.choice {
         Choice::Attack(attack) => (false, attack.range),
         Choice::Return => (true, SUMMON_RANGE),
@@ -1131,7 +1140,7 @@ fn PathToTarget(ctx: &mut Ctx) -> Option<Action> {
         let dirs: Vec<_> = [dirs::NONE].iter().chain(
             dirs::ALL.iter().filter(|&&x| valid(pos + x))).copied().collect();
         let dir = pick(&dirs, ctx.env.rng);
-        if let Some(x) = kind { ctx.blackboard.path.replace(x, LOS(pos + dir, target)); }
+        ctx.blackboard.path.replace(kind, LOS(pos + dir, target));
         return Some(step(dir))
     }
 
@@ -1146,7 +1155,7 @@ fn PathToTarget(ctx: &mut Ctx) -> Option<Action> {
     // Record the new path as our current one.
     let mut path = path;
     path.extend(LOS(source, target).into_iter().skip(1));
-    if let Some(x) = kind { ctx.blackboard.path.replace(x, path); }
+    ctx.blackboard.path.replace(kind, path);
 
     Some(step(dir))
 }
