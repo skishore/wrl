@@ -183,6 +183,22 @@ fn AStarLength(d: Delta) -> i32 {
     ASTAR_UNIT_COST * max(x, y) + ASTAR_DIAGONAL_PENALTY * min(x, y)
 }
 
+pub fn AStarPathLength<F: Fn(Point) -> Status>(path: &[Point], f: F) -> i32 {
+    let mut result = 0;
+    let mut blocked = false;
+    for (&prev, &next) in path.iter().zip(path.iter().skip(1)) {
+        if blocked { return std::i32::MAX; }
+
+        let status = f(next);
+        blocked = status == Status::Blocked;
+
+        result += ASTAR_UNIT_COST;
+        result += ASTAR_DIAGONAL_PENALTY * ((prev - next).len_taxicab() - 1);
+        result += if status == Status::Occupied { ASTAR_OCCUPIED_PENALTY } else { 0 };
+    }
+    result
+}
+
 // "diff" penalizes paths that travel far from the direct line-of-sight
 // from the source to the target. In order to compute it, we figure out if
 // this line is "more horizontal" or "more vertical", then compute the the
