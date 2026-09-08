@@ -618,7 +618,7 @@ fn UpdateLastSeen(ctx: &mut Ctx, kind: PathKind, valid: CellPredicate) -> Result
         if path.kind == kind && let Some(&target) = path.path.last() &&
            (cell.point - pos).len_l2_squared() < (target - pos).len_l2_squared() {
             let los = LOS(ctx.pos, cell.point);
-            if PathIsFree(known, &los) { path.replace(los); }
+            if PathIsFree(known, &los) { path.replace(kind, los); }
         }
         return Result::Success;
     }
@@ -799,9 +799,9 @@ impl CachedPath {
         *self = Default::default();
     }
 
-    fn replace(&mut self, path: Vec<Point>) {
-        self.path = path;
-        self.step = 0;
+    fn replace(&mut self, kind: PathKind, path: Vec<Point>) {
+        let skip = if SkipLastPathStep(kind) { 1 } else { 0 };
+        *self = CachedPath { kind, path, skip, step: 0 };
     }
 }
 
@@ -811,11 +811,25 @@ fn CleanupPath(ctx: &mut Ctx) {
     if !okay { path.clear(); }
 }
 
+fn ChooseNeighborhood<'a>(ctx: &'a mut Ctx, kind: PathKind) -> &'a ScoredNeighborhood {
+    let result = if kind == PathKind::Hide {
+        ensure_sneakable(ctx);
+        &mut ctx.tmp.sneakable
+    } else {
+        ensure_reachable(ctx);
+        &mut ctx.tmp.reachable
+    };
+
+    let ScoredNeighborhood { scores, neighborhood } = result;
+    if scores.is_empty() { *scores = neighborhood.visited.iter().cloned().collect(); }
+
+    result
+}
+
 fn AStarHelper(ctx: &mut Ctx, target: Point, kind: PathKind) -> Option<Vec<Point>> {
     // Try using A* to find the best path:
     let source = ctx.pos;
-    let hiding = kind == PathKind::Hide;
-    let result = if hiding {
+    let result = if kind == PathKind::Hide {
         AStar(source, target, ASTAR_CELLS_WANDER, get_sneak_check(ctx))
     } else {
         AStar(source, target, ASTAR_CELLS_WANDER, get_reach_check(ctx))
@@ -825,29 +839,20 @@ fn AStarHelper(ctx: &mut Ctx, target: Point, kind: PathKind) -> Option<Vec<Point
         return Some(path);
     }
 
-    // If that fails, recover a path from the Dijkstra neighborhood:
-    let cells = if hiding {
-        ensure_sneakable(ctx);
-        &mut ctx.tmp.sneakable
-    } else {
-        ensure_reachable(ctx);
-        &mut ctx.tmp.reachable
-    };
-
-    // Lazily construct a table of neighborhood's scores:
-    let scores = &mut cells.scores;
-    if scores.is_empty() { *scores = cells.neighborhood.visited.iter().map(|&x| x).collect(); }
-
-    // Walk back from `target`, greedily moving to the closest neighbor to `source`.
-    // Use the A* heuristic to break ties to favor that follows the LOS.
+    // If that fails, recover a path from the Dijkstra neighborhood.
+    //
+    // Walk back from `target`, greedily moving to the neighbor closest to
+    // `source` at each step. Use the A* heuristic to break ties, so we stay
+    // as close to the LOS as possible without affecting path length.
     let mut prev = target;
     let mut path = vec![target];
     let los = LOS(source, target);
+    let scores = &ChooseNeighborhood(ctx, kind).scores;
     while prev != source {
         let (mut best_point, mut best_score) = (None, (std::i32::MAX, std::i32::MAX));
         for &dir in &dirs::ALL {
             let point = prev + dir;
-            let Some(&score) = cells.scores.get(&point) else { continue };
+            let Some(&score) = scores.get(&point) else { continue };
             let score = (score, AStarHeuristic(point, &los));
             if score < best_score { (best_point, best_score) = (Some(point), score); }
         }
@@ -879,19 +884,22 @@ fn FindPathToTarget(ctx: &mut Ctx, kind: PathKind) -> bool {
     let path = AStarHelper(ctx, target, kind);
     let Some(path) = path else { return false };
 
+    ctx.blackboard.path.replace(kind, path);
+    true
+}
+
+fn SkipLastPathStep(kind: PathKind) -> bool {
     type K = PathKind;
-    let skip = match kind {
+    match kind {
         // Move adjacent to the cell but not onto it.
-        K::Leader | K::Meat | K::Water | K::Berry | K::BerryTree => 1,
+        K::Leader | K::Meat | K::Water | K::Berry | K::BerryTree => true,
 
         // High-priority search/flee pathing; move to the cell.
-        K::Hide | K::Flee | K::Chase | K::ChaseFallback => 0,
+        K::Hide | K::Flee | K::Chase | K::ChaseFallback => false,
 
         // Low-priority needs pathing; move to the cell.
-        K::Rest | K::Explore | K::None => 0,
-    };
-    ctx.blackboard.path = CachedPath { kind, path, skip, step: 0 };
-    true
+        K::Rest | K::Explore | K::None => false,
+    }
 }
 
 // Path validity, broken down for debugging:
@@ -1066,6 +1074,7 @@ fn PathToTarget(ctx: &mut Ctx) -> Option<Action> {
 
     let target = request.target;
     let update = ctx.blackboard.path.path.last().cloned() == Some(target);
+    let kind = if update { Some(ctx.blackboard.path.kind) } else { None };
     let (flip, range) = match request.choice {
         Choice::Attack(attack) => (false, attack.range),
         Choice::Return => (true, SUMMON_RANGE),
@@ -1122,7 +1131,7 @@ fn PathToTarget(ctx: &mut Ctx) -> Option<Action> {
         let dirs: Vec<_> = [dirs::NONE].iter().chain(
             dirs::ALL.iter().filter(|&&x| valid(pos + x))).copied().collect();
         let dir = pick(&dirs, ctx.env.rng);
-        if update { ctx.blackboard.path.replace(LOS(pos + dir, target)); }
+        if let Some(x) = kind { ctx.blackboard.path.replace(x, LOS(pos + dir, target)); }
         return Some(step(dir))
     }
 
@@ -1131,14 +1140,14 @@ fn PathToTarget(ctx: &mut Ctx) -> Option<Action> {
     let source = source.and_then(|x| x.last().cloned()).unwrap_or(target);
 
     // Then, use A* to find a path to that cell.
-    let mut path = AStar(pos, source, ASTAR_CELLS_ATTACK, check)?;
+    let path = AStar(pos, source, ASTAR_CELLS_ATTACK, check)?;
     let dir = *path.first()? - pos;
 
-    if update {
-        let (s, t) = (source, target);
-        if s != t { path.extend(LOS(s, t).into_iter().skip(1)); }
-        ctx.blackboard.path.replace(path);
-    }
+    // Record the new path as our current one.
+    let mut path = path;
+    path.extend(LOS(source, target).into_iter().skip(1));
+    if let Some(x) = kind { ctx.blackboard.path.replace(x, path); }
+
     Some(step(dir))
 }
 
