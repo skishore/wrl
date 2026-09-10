@@ -15,7 +15,7 @@ use crate::base::util::{HashMap, HashSet, RNG, clamp, sample, sortable, weighted
 use crate::base::vision::{INITIAL_VISIBILITY, Vision, VisionArgs};
 
 use crate::{act, cb, cond, pri, run, seq, util};
-use super::bhv::{Bhv, Result};
+use super::bhv::{Bhv, BhvExt, Result};
 use super::debug::{DebugFile, DebugLine, DebugLog};
 use super::dex::{Attack, Species};
 use super::entity::{AttackTarget, Command, Entity};

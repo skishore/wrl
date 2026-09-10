@@ -6,6 +6,10 @@ use super::game::Action;
 
 // Bhv
 
+pub trait CB = Fn(&mut Ctx) -> ();
+
+impl<T: Bhv> BhvExt for T {}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Result { Failed, Running, Success }
 
@@ -13,6 +17,14 @@ pub trait Bhv {
     fn debug(&self, _: &mut DebugLog) {}
     fn reset(&mut self, _: &mut Ctx) {}
     fn tick(&mut self, _: &mut Ctx) -> Result;
+}
+
+pub trait BhvExt : Bhv + Sized {
+    fn on_exit<F: CB>(self, f: F) -> impl Bhv { OnExit(f, self) }
+    fn on_fail<F: CB>(self, f: F) -> impl Bhv { OnFail(f, self) }
+    fn on_tick<F: CB>(self, f: F) -> impl Bhv { OnTick(f, self) }
+    fn on_running<F: CB>(self, f: F) -> impl Bhv { OnRunning(f, self) }
+    fn post_tick<F: CB>(self, f: F) -> impl Bhv { PostTick(f, self) }
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -42,26 +54,6 @@ pub struct Node<S, T> {
 impl<S: Label, T: Bhv> Node<S, T> {
     pub fn new(label: S, tree: T) -> Self {
         Self { last: None, label, tree }
-    }
-
-    pub fn on_exit<F: Fn(&mut Ctx) -> ()>(self, f: F) -> Node<S, OnExit<F, T>> {
-        Node::new(self.label, OnExit(f, self.tree))
-    }
-
-    pub fn on_fail<F: Fn(&mut Ctx) -> ()>(self, f: F) -> Node<S, OnFail<F, T>> {
-        Node::new(self.label, OnFail(f, self.tree))
-    }
-
-    pub fn on_tick<F: Fn(&mut Ctx) -> ()>(self, f: F) -> Node<S, OnTick<F, T>> {
-        Node::new(self.label, OnTick(f, self.tree))
-    }
-
-    pub fn on_running<F: Fn(&mut Ctx) -> ()>(self, f: F) -> Node<S, OnRunning<F, T>> {
-        Node::new(self.label, OnRunning(f, self.tree))
-    }
-
-    pub fn post_tick<F: Fn(&mut Ctx) -> ()>(self, f: F) -> Node<S, PostTick<F, T>> {
-        Node::new(self.label, PostTick(f, self.tree))
     }
 }
 
