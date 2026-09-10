@@ -771,6 +771,7 @@ type AttackTargetSelector = fn(&mut Ctx) -> Option<AttackRequest>;
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 enum PathKind {
     // High-priority actions:
+    Follow,
     Leader,
     Target,
     Flee,
@@ -896,7 +897,7 @@ fn SkipLastPathStep(kind: PathKind) -> bool {
         K::Leader | K::Target | K::Meat | K::Water | K::Berry | K::BerryTree => true,
 
         // High-priority search / flee pathing; move to the cell.
-        K::Flee | K::Hide | K::Chase | K::ChaseFallback => false,
+        K::Follow | K::Flee | K::Hide | K::Chase | K::ChaseFallback => false,
 
         // Low-priority needs pathing; move to the cell.
         K::Rest | K::Explore | K::None => false,
@@ -1015,12 +1016,12 @@ fn FollowPath(ctx: &mut Ctx) -> Result {
     if IsChasePathKind(kind) && let Some(x) = &ctx.blackboard.target {
         let limit = ctx.known.time_at_turn(MIN_SEARCH_TURNS);
         if x.target.time > limit && !x.target.slow { turns = 1. };
+    } else if kind == PathKind::Follow || kind == PathKind::Leader {
+        turns = FOLLOW_TURNS;
     } else if kind == PathKind::Flee && any_threat_awake(ctx) {
         turns = 1.;
     } else if kind == PathKind::Target {
         turns = 1.;
-    } else if kind == PathKind::Leader {
-        turns = FOLLOW_TURNS;
     }
 
     ctx.blackboard.path.step += 1;
@@ -1856,27 +1857,38 @@ fn FollowSimpleCommand(ctx: &mut Ctx) -> Option<AttackRequest> {
     }
 }
 
+fn LookTowards(ctx: &mut Ctx, target: PathTargetSelector) {
+    let source = ctx.pos;
+    let Some(target) = target(ctx) else { return };
+
+    ctx.action = match ctx.action.take() {
+        Some(Action::Idle | Action::Look { .. }) => {
+            Some(Action::Look { look: target - source })
+        }
+        Some(Action::Move { step, turns, .. }) => {
+            Some(Action::Move { look: target - source - step, step, turns })
+        }
+        x => x,
+    }
+}
+
+fn ClosestRival(ctx: &Ctx) -> Option<Point> {
+    let mut rivals = rivals(ctx.env.leader?);
+    if rivals.is_empty() { return None; }
+
+    let source = ctx.pos;
+    let target = rivals.select_nth_unstable_by_key(
+        0, |x| ((x.pos - source).len_l2_squared(), x.pos.0, x.pos.1)).1;
+    Some(target.pos)
+}
+
 fn LeaderHasRivals(ctx: &Ctx) -> bool {
     ctx.env.leader.map_or(false, |x| !rivals(x).is_empty())
 }
 
-fn DefendLeader(ctx: &mut Ctx) -> Option<Action> {
-    let source = ctx.pos;
-    let leader = ctx.env.leader?;
+fn DefendLeader(ctx: &Ctx) -> Option<Point> {
     let follower = Follower { pos: ctx.pos, moves: ctx.me.species.moves };
-    let target = ChooseDefenseSquare(leader, &follower)?;
-
-    let known = &*ctx.known;
-    let check = |p: Point| known.get(p).status();
-    let path = AStar(source, target, ASTAR_CELLS_ATTACK, check)?;
-
-    let Some(&next) = path.first() else {
-        let (step, look) = (dirs::NONE, source - leader.pos);
-        return Some(Action::Move { step, look, turns: FOLLOW_TURNS });
-    };
-
-    let (step, look) = (next - source, next - leader.pos);
-    Some(Action::Move { step, look, turns: FOLLOW_TURNS })
+    ChooseDefenseSquare(ctx.env.leader?, &follower)
 }
 
 fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
@@ -2242,7 +2254,8 @@ fn SummonRoot() -> impl Bhv {
             seq![
                 "MaybeDefendLeader",
                 cond!("LeaderHasRivals", |x| LeaderHasRivals(x)),
-                act!("DefendLeader", DefendLeader),
+                Move("DefendLeader", PathKind::Follow, |x| DefendLeader(x))
+                    .on_running(|x| LookTowards(x, |x| ClosestRival(x))),
             ],
             act!("FollowLeader", FollowLeader),
             Move("MoveToLeader", PathKind::Leader, |x| x.env.leader.map(|x| x.pos)),
