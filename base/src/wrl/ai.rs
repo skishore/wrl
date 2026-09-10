@@ -597,12 +597,10 @@ fn ForceThreatState(ctx: &mut Ctx, state: FightOrFlight) {
 // Last-seen cache:
 
 fn CheckLastSeen(ctx: &mut Ctx, kind: PathKind) -> bool {
-    if kind == PathKind::Leader { return true; }
     ctx.blackboard.last_seen.contains_key(&kind)
 }
 
 fn ClearLastSeen(ctx: &mut Ctx, kind: PathKind) {
-    if kind == PathKind::Leader { return; }
     ctx.blackboard.last_seen.remove(&kind);
 }
 
@@ -897,7 +895,7 @@ fn SkipLastPathStep(kind: PathKind) -> bool {
         // Move adjacent to the cell but not onto it.
         K::Leader | K::Target | K::Meat | K::Water | K::Berry | K::BerryTree => true,
 
-        // High-priority search/flee pathing; move to the cell.
+        // High-priority search / flee pathing; move to the cell.
         K::Flee | K::Hide | K::Chase | K::ChaseFallback => false,
 
         // Low-priority needs pathing; move to the cell.
@@ -1220,8 +1218,8 @@ fn Weariness(ctx: &mut Ctx) -> i64 {
     ctx.blackboard.weariness.percent()
 }
 
-fn IsLeader(ctx: &Ctx, point: Point) -> bool {
-    ctx.env.leader.map_or(false, |x| x.pos == point)
+fn MatchesPathTarget(ctx: &Ctx, point: Point) -> bool {
+    ctx.tmp.path_request == Some(point)
 }
 
 fn HasMeat(ctx: &Ctx, point: Point) -> bool {
@@ -1263,10 +1261,6 @@ fn FindMatchingCell(ctx: &mut Ctx, kind: PathKind, valid: CellPredicate) -> bool
         ctx.tmp.path_request = Some(point);
         true
     };
-
-    if kind == PathKind::Leader {
-        return ctx.env.leader.map_or(false, |x| success(ctx, x.pos));
-    }
 
     if let Some(point) = FindMatchingNeighbor(ctx, valid) {
         return success(ctx, point);
@@ -1923,6 +1917,20 @@ macro_rules! path {
     };
 }
 
+fn Move(name: &'static str, kind: PathKind, target: PathTargetSelector) -> impl Bhv {
+    seq![
+        name,
+        cond!("ChoosePathTarget", move |x| ChoosePathTarget(x, target)),
+        pri![
+            "EnsurePath",
+            CheckPath(kind, MatchesPathTarget),
+            cond!("FindPathToTarget", move |x| FindPathToTarget(x, kind)),
+        ],
+        cb!("FollowPath", FollowPath),
+        act!("Idle", |_| Some(Action::Idle)),
+    ]
+}
+
 fn Attack(name: &'static str, target: AttackTargetSelector) -> impl Bhv {
     seq![
         name,
@@ -2206,11 +2214,6 @@ fn FightOrFlight() -> impl Bhv {
     ]
 }
 
-fn MoveToLeader() -> impl Bhv {
-    const KIND: PathKind = PathKind::Leader;
-    path!("MoveToLeader", KIND, IsLeader, cb!("Fail", |_| Result::Failed))
-}
-
 fn SummonRoot() -> impl Bhv {
     seq![
         "SummonRoot",
@@ -2242,7 +2245,7 @@ fn SummonRoot() -> impl Bhv {
                 act!("DefendLeader", DefendLeader),
             ],
             act!("FollowLeader", FollowLeader),
-            MoveToLeader(),
+            Move("MoveToLeader", PathKind::Leader, |x| x.env.leader.map(|x| x.pos)),
             act!("Idle", |_| Some(Action::Idle)),
         ],
     ]
