@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use std::cell::RefCell;
 use std::cmp::{max, min};
 use std::f64::consts::TAU;
 use std::ops::RangeInclusive;
@@ -773,6 +774,7 @@ enum PathKind {
     // High-priority actions:
     Follow,
     Leader,
+    Source,
     Target,
     Flee,
     Hide,
@@ -897,7 +899,7 @@ fn SkipLastPathStep(kind: PathKind) -> bool {
         K::Leader | K::Target | K::Meat | K::Water | K::Berry | K::BerryTree => true,
 
         // High-priority search / flee pathing; move to the cell.
-        K::Follow | K::Flee | K::Hide | K::Chase | K::ChaseFallback => false,
+        K::Follow | K::Source | K::Flee | K::Hide | K::Chase | K::ChaseFallback => false,
 
         // Low-priority needs pathing; move to the cell.
         K::Rest | K::Explore | K::None => false,
@@ -1016,12 +1018,12 @@ fn FollowPath(ctx: &mut Ctx) -> Result {
     if IsChasePathKind(kind) && let Some(x) = &ctx.blackboard.target {
         let limit = ctx.known.time_at_turn(MIN_SEARCH_TURNS);
         if x.target.time > limit && !x.target.slow { turns = 1. };
-    } else if kind == PathKind::Follow || kind == PathKind::Leader {
-        turns = FOLLOW_TURNS;
     } else if kind == PathKind::Flee && any_threat_awake(ctx) {
         turns = 1.;
-    } else if kind == PathKind::Target {
+    } else if kind == PathKind::Source || kind == PathKind::Target {
         turns = 1.;
+    } else if kind == PathKind::Follow || kind == PathKind::Leader {
+        turns = FOLLOW_TURNS;
     }
 
     ctx.blackboard.path.step += 1;
@@ -1084,6 +1086,10 @@ fn AttackNow(ctx: &mut Ctx) -> Option<Action> {
     Some(Action::Attack { target: request.target, attack })
 }
 
+fn AttackTarget(ctx: &mut Ctx) -> Option<Point> {
+    ctx.tmp.attack_request.as_ref().map(|x| x.target)
+}
+
 fn ChooseAttackTarget(ctx: &mut Ctx, target: AttackTargetSelector) -> bool {
     ctx.tmp.attack_request = target(ctx);
     ctx.tmp.attack_request.is_some()
@@ -1097,10 +1103,10 @@ fn CanSeeTarget(ctx: &Ctx) -> bool {
 fn CanAttackTarget(ctx: &Ctx) -> bool {
     let Some(request) = &ctx.tmp.attack_request else { return false };
     let Choice::Attack(attack) = request.choice else { return false };
-    CanAttackFrom(ctx.known, ctx.pos, request.target, attack.range)
+    HasLineOfSight(ctx.known, ctx.pos, request.target, attack.range)
 }
 
-fn CanAttackFrom(known: &Knowledge, source: Point, target: Point, range: Bound) -> bool {
+fn HasLineOfSight(known: &Knowledge, source: Point, target: Point, range: Bound) -> bool {
     if source == target { return false; }
     if !range.contains(source - target) { return false; }
     PathIsFree(known, &LOS(source, target))
@@ -1110,40 +1116,52 @@ fn PathIsFree(known: &Knowledge, path: &[Point]) -> bool {
     path.iter().skip(1).rev().skip(1).all(|&p| known.get(p).status() == Status::Free)
 }
 
-fn PathToAttack(ctx: &mut Ctx) -> Option<Point> {
-    ctx.tmp.attack_request.take().map(|x| x.target)
+thread_local! {
+    static VISION: RefCell<Vision> = Vision::new(FOV_RADIUS_NPC).into();
 }
 
-fn PathToTarget(ctx: &mut Ctx) -> Option<Action> {
-    let Ctx { known, pos, .. } = *ctx;
-    let request = ctx.tmp.attack_request.as_ref()?;
+fn CanAttackFrom(ctx: &Ctx, point: Point) -> bool {
+    let Some(request) = &ctx.tmp.attack_request else { return false };
+    let Choice::Attack(attack) = request.choice else { return false };
 
-    let target = request.target;
-    let update = ctx.blackboard.path.path.last().cloned() == Some(target);
-    let kind = if update { ctx.blackboard.path.kind } else { PathKind::Target };
-    let (flip, range) = match request.choice {
-        Choice::Attack(attack) => (false, attack.range),
-        Choice::Return => (true, SUMMON_RANGE),
-    };
+    let Ctx { known, pos, .. } = *ctx;
+    if pos != point && known.get(point).status() != Status::Free { return false; }
+
+    let (range, target) = (attack.range, request.target);
+    if !HasLineOfSight(known, point, target, range) { return false; }
+
+    let opacity = |x| known.get(x).tile().map_or(INITIAL_VISIBILITY, |x| x.opacity());
+    let args = VisionArgs { pos: point, dir: dirs::NONE, opacity };
+    VISION.with_borrow_mut(|x| x.check_point(&args, target))
+}
+
+fn GetClearLineOfSight(ctx: &mut Ctx, valid: CellPredicate) -> bool {
+    let Ctx { known, pos, .. } = *ctx;
 
     // Slight tweaks on get_reach_check, etc. to better handle small crowds.
-    let step = |dir| {
-        let look = target - pos - dir;
-        Action::Move { step: dir, look, turns: 1. }
-    };
     let check = |p| match known.get(p).status() {
         Status::Occupied if (p - pos).len_l1() == 1 => Status::Blocked,
         x => x
     };
-    let valid = |p| {
-        let cell = known.get(p);
-        if p != pos && cell.status() != Status::Free { return false; }
+    let valid = |x| valid(ctx, x);
+    let steps = Dijkstra(pos, valid, ASTAR_CELLS_ATTACK, check);
+    let Some(last) = steps.and_then(|x| x.last().cloned()) else { return false };
 
-        let (a, b) = if flip { (target, p) } else { (p, target) };
-        if !CanAttackFrom(known, a, b, range) { return false; }
+    ctx.tmp.path_request = Some(last);
+    ctx.tmp.path_request.is_some()
+}
 
-        !flip || !is_hidden_from(ctx, p, &[target])
+fn MaintainLineOfSight(ctx: &mut Ctx, valid: CellPredicate) -> bool {
+    let Ctx { known, pos, .. } = *ctx;
+    let Some(request) = &ctx.tmp.attack_request else { return false };
+
+    let target = request.target;
+    let range = match request.choice {
+        Choice::Attack(attack) => attack.range,
+        Choice::Return => SUMMON_RANGE,
     };
+
+    if !valid(ctx, pos) { return false };
 
     // Given a non-empty list of "good" directions (each of which maintains
     // line-of-sight to the target), choose one closest to our attack range.
@@ -1172,29 +1190,12 @@ fn PathToTarget(ctx: &mut Ctx) -> Option<Action> {
         dirs[*sample(&opts, rng)]
     };
 
-    // If we could already attack the target, don't move out of view.
-    if valid(pos) {
-        let dirs: Vec<_> = [dirs::NONE].iter().chain(
-            dirs::ALL.iter().filter(|&&x| valid(pos + x))).copied().collect();
-        let dir = pick(&dirs, ctx.env.rng);
-        ctx.blackboard.path.replace(kind, LOS(pos + dir, target));
-        return Some(step(dir))
-    }
+    let dirs: Vec<_> = [dirs::NONE].iter().chain(
+        dirs::ALL.iter().filter(|&&x| valid(ctx, pos + x))).copied().collect();
+    let dir = pick(&dirs, ctx.env.rng);
 
-    // Find the closest `source` cell from which we could attack the target.
-    let source = Dijkstra(pos, valid, ASTAR_CELLS_ATTACK, check);
-    let source = source.and_then(|x| x.last().cloned()).unwrap_or(target);
-
-    // Then, use A* to find a path to that cell.
-    let path = AStar(pos, source, ASTAR_CELLS_ATTACK, check)?;
-    let dir = *path.first()? - pos;
-
-    // Record the new path as our current one.
-    let mut path = path;
-    path.extend(LOS(source, target).into_iter().skip(1));
-    ctx.blackboard.path.replace(kind, path);
-
-    Some(step(dir))
+    ctx.tmp.path_request = Some(pos + dir);
+    ctx.tmp.path_request.is_some()
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -1813,12 +1814,15 @@ pub fn ChooseDefenseSquare(leader: &Entity, follower: &Follower) -> Option<Point
 //  - We should reduce the radius to 1 and try to get as close to the leader
 //    as possible even once we have an LOS.
 //  - We shouldn't bother running the AttackTarget subtree.
+//  - We don't do the right test (we check us -> leader, not leader -> us).
 //
-// TODO: In PathToTarget, we don't currently test whether a cell has an
-// unobstructed view (e.g. unobstructed by tall grass) to the target cell.
-// See combat-pathfinding-alt where we instead use a local Vision instance.
+// TODO: Because the targeting subtree overrides the PathKind with
+// PathKind::Target, we now repeatedly re-plan paths to a BerryTree in sight.
 //
-// TODO: PathToTarget currently recomputes the path at every step (arguably
+// TODO: The number of PathKinds is exploding; can we homogenize the kinds
+// that are the same modulo their skip count?
+//
+// TODO: MoveIntoRange currently recomputes the path at every step (arguably
 // alright) but as a result always takes cardinal moves instead of a mix of
 // cardinal and diagonal (because of the non-isotropic path result). Fix it
 // by comparing the new path to the old one and only replacing the old one if
@@ -1937,16 +1941,29 @@ fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
 //    when we're near it again. Or: generalize this fallback to all "path to
 //    target" cases, and drop the first bullet above.
 
-macro_rules! attack {
-    ($v:expr) => {
-        cond!("ChooseAttackTarget", move |x| ChooseAttackTarget(x, $v))
-    };
-}
-
 macro_rules! path {
     ($n:expr, $k:expr, $v:expr, $f:expr) => {
         seq![$n, ComputePath($k, $v), cb!("FollowPath", FollowPath), $f]
     };
+}
+
+fn MoveIntoRange(kind: PathKind, valid: CellPredicate) -> impl Bhv {
+    seq![
+        "MoveIntoRange",
+        pri![
+            "ChoosePathTarget",
+            cond!("MaintainLineOfSight", move |x| MaintainLineOfSight(x, valid)),
+            cond!("GetClearLineOfSight", move |x| GetClearLineOfSight(x, valid)),
+        ],
+        pri![
+            "EnsurePath",
+            CheckPath(kind, MatchesPathTarget),
+            cond!("FindPathToTarget", move |x| FindPathToTarget(x, kind)),
+        ],
+        cb!("FollowPath", FollowPath),
+        act!("Idle", |_| Some(Action::Idle)),
+    ]
+    .on_running(|x| LookTowards(x, |x| AttackTarget(x)))
 }
 
 fn Move(name: &'static str, kind: PathKind, target: PathTargetSelector) -> impl Bhv {
@@ -1966,17 +1983,17 @@ fn Move(name: &'static str, kind: PathKind, target: PathTargetSelector) -> impl 
 fn Attack(name: &'static str, target: AttackTargetSelector) -> impl Bhv {
     seq![
         name,
-        attack!(target),
+        cond!("ChooseTarget", move |x| ChooseAttackTarget(x, target)),
         cond!("CanSeeTarget", |x| CanSeeTarget(x)),
         pri![
-            "AttackChosenTarget",
+            "AttackVisibleTarget",
             seq![
                 "AttackIfReady",
                 cond!("MoveReady", |x| move_ready(x.me)),
                 cond!("CanAttackTarget", |x| CanAttackTarget(x)),
                 act!("AttackNow", AttackNow),
             ],
-            act!("PathToTarget", PathToTarget),
+            MoveIntoRange(PathKind::Source, CanAttackFrom),
         ],
     ]
     .post_tick(|x| x.tmp.attack_request = None)
@@ -2265,8 +2282,8 @@ fn SummonRoot() -> impl Bhv {
                     Attack("FollowSimpleCommand", FollowSimpleCommand),
                     seq![
                         "MoveTowardsTarget",
-                        attack!(FollowSimpleCommand),
-                        Move("PathToAttack", PathKind::Target, PathToAttack),
+                        cond!("ChooseTarget", |x| ChooseAttackTarget(x, FollowSimpleCommand)),
+                        Move("PathToTarget", PathKind::Target, AttackTarget),
                     ],
                 ]
                 .post_tick(ClearAttackCommand),
