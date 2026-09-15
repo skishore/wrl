@@ -617,6 +617,7 @@ fn UpdateLastSeen(ctx: &mut Ctx, kind: PathKind, valid: CellPredicate) -> Result
         let Ctx { known, pos, .. } = *ctx;
         let path = &mut ctx.blackboard.path;
         if path.kind == kind && let Some(&target) = path.path.last() &&
+           (target - pos).len_l1() > (path.skip as i32) &&
            (cell.point - pos).len_l2_squared() < (target - pos).len_l2_squared() {
             let los = LOS(ctx.pos, cell.point);
             if PathIsFree(known, &los) { path.replace(kind, los); }
