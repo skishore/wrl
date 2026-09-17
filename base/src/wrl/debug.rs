@@ -7,7 +7,7 @@ use std::io::{Result, Write};
 use super::log::{Logger, LogFile};
 
 use crate::base::glyph::{Color, Glyph};
-use crate::base::point::{Matrix, Point};
+use crate::base::point::{LOS, Matrix, Point};
 use crate::base::pathing::Neighborhood;
 
 use super::effect::{Frame, ParticleData, RenderData};
@@ -269,18 +269,36 @@ impl DebugFile {
         Self::write_bin(&mut file, &(self.detail.utilities.len() as i32))?;
         Self::write_array(&mut file, self.detail.utilities.as_slice())?;
 
+        // Render action plans by highlighting each of the plan's steps.
+        let color = |map: &mut Matrix<Glyph>, p: Point, c: i32| {
+            if p == me.pos { return; }
+            let mut glyph = map.get(p);
+            if glyph.ch() == Glyph::wide(' ').ch() { glyph = Glyph::wide('.'); }
+            map.set(p, glyph.with_fg(c));
+        };
+        let highlight = |map: &mut Matrix<Glyph>, p: Point, c: i32| {
+            if p == me.pos { return; }
+            let mut glyph = map.get(p);
+            if glyph.ch() == Glyph::wide(' ').ch() { glyph = Glyph::wide('.'); }
+            map.set(p, glyph.with_fg(Color::black()).with_bg(c));
+        };
+
         // Anything we scribble on the map shows up in the debug UI.
         for (p, x) in self.map.iter_mut() {
             *x = UI::render_tile(me, p, None);
         }
         for &p in me.ai.get_path() {
-            if p == me.pos { continue; }
-            let mut glyph = self.map.get(p);
-            if glyph.ch() == Glyph::wide(' ').ch() { glyph = Glyph::wide('.'); }
-            self.map.set(p, glyph.with_fg(0xff0000));
+            color(&mut self.map, p, 0xff0000);
         }
         if let Some(&p) = me.ai.get_path().last() {
-            self.map.set(p, self.map.get(p).with_fg(Color::black()).with_bg(0xff0000));
+            highlight(&mut self.map, p, 0xff0000);
+        }
+        if let Some(target) = me.ai.get_target() {
+            let source = me.ai.get_path().last().cloned().unwrap_or(me.pos);
+            for p in LOS(source, target).into_iter().skip(1) {
+                color(&mut self.map, p, 0xff0000);
+            }
+            highlight(&mut self.map, target, 0xff0000);
         }
         Self::write_bin(&mut file, &self.map.size())?;
         Self::write_array(&mut file, self.map.raw_data())?;
