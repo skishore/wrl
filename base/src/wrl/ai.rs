@@ -796,6 +796,7 @@ struct CachedPath {
     path: Vec<Point>,
     skip: usize,
     step: usize,
+    target: Option<Point>,
 }
 
 impl CachedPath {
@@ -805,7 +806,7 @@ impl CachedPath {
 
     fn replace(&mut self, kind: PathKind, path: Vec<Point>) {
         let skip = if SkipLastPathStep(kind) { 1 } else { 0 };
-        *self = CachedPath { kind, path, skip, step: 0 };
+        *self = CachedPath { kind, path, skip, step: 0, target: None };
     }
 }
 
@@ -1887,7 +1888,8 @@ fn LookTowards(ctx: &mut Ctx, target: PathTargetSelector) {
             Some(Action::Move { look: target - source - step, step, turns })
         }
         x => x,
-    }
+    };
+    ctx.blackboard.path.target = Some(target);
 }
 
 fn ClosestRival(ctx: &Ctx) -> Option<Point> {
@@ -2357,6 +2359,10 @@ impl AIState {
 
     pub fn get_path(&self) -> &[Point] {
         &self.blackboard.path.path
+    }
+
+    pub fn get_target(&self) -> Option<Point> {
+        self.blackboard.path.target
     }
 
     pub fn get_trace(&self, known: &Knowledge) -> Vec<DebugLine> {
