@@ -251,6 +251,7 @@ impl std::ops::Deref for ScoredNeighborhood {
 struct PerTickState {
     attack_request: Option<AttackRequest>,
     path_request: Option<Point>,
+    command: Option<Command>,
 
     reachable: ScoredNeighborhood,
     sneakable: ScoredNeighborhood,
@@ -1145,6 +1146,19 @@ fn HasLineOfSight(known: &Knowledge, source: Point, target: Point, range: Bound)
     PathIsFree(known, &LOS(source, target))
 }
 
+fn HasLOSAndVision(known: &Knowledge, source: Point, target: Point, range: Bound) -> bool {
+    if !HasLineOfSight(known, source, target, range) { return false; }
+
+    let opacity = |x| known.get(x).tile().map_or(INITIAL_VISIBILITY, |x| x.opacity());
+    let args = VisionArgs { pos: source, dir: dirs::NONE, opacity };
+    VISION.with_borrow_mut(|x| x.check_point(&args, target))
+}
+
+fn CellIsFree(ctx: &Ctx, point: Point) -> bool {
+    let Ctx { known, pos, .. } = *ctx;
+    pos == point || known.get(point).status() == Status::Free
+}
+
 fn PathIsFree(known: &Knowledge, path: &[Point]) -> bool {
     path.iter().skip(1).rev().skip(1).all(|&p| known.get(p).status() == Status::Free)
 }
@@ -1154,18 +1168,23 @@ thread_local! {
 }
 
 fn CanAttackFrom(ctx: &Ctx, point: Point) -> bool {
+    if !CellIsFree(ctx, point) { return false; }
+
     let Some(request) = &ctx.tmp.attack_request else { return false };
     let Choice::Attack(attack) = request.choice else { return false };
 
-    let Ctx { known, pos, .. } = *ctx;
-    if pos != point && known.get(point).status() != Status::Free { return false; }
+    HasLOSAndVision(ctx.known, point, request.target, attack.range)
+}
 
-    let (range, target) = (attack.range, request.target);
-    if !HasLineOfSight(known, point, target, range) { return false; }
+fn CanReturnFrom(ctx: &Ctx, point: Point) -> bool {
+    if !CellIsFree(ctx, point) { return false; }
 
-    let opacity = |x| known.get(x).tile().map_or(INITIAL_VISIBILITY, |x| x.opacity());
-    let args = VisionArgs { pos: point, dir: dirs::NONE, opacity };
-    VISION.with_borrow_mut(|x| x.check_point(&args, target))
+    let Some(request) = &ctx.tmp.attack_request else { return false };
+    let Choice::Return = request.choice else { return false };
+
+    if is_hidden_from(ctx, point, &[request.target]) { return false; }
+
+    HasLOSAndVision(ctx.known, request.target, point, SUMMON_RANGE)
 }
 
 fn PathMatchesTarget(ctx: &Ctx) -> bool {
@@ -1213,7 +1232,7 @@ fn StayInRange(ctx: &mut Ctx, valid: CellPredicate) -> bool {
     let target = request.target;
     let range = match request.choice {
         Choice::Attack(attack) => attack.range,
-        Choice::Return => SUMMON_RANGE,
+        Choice::Return => Bound::new(1),
     };
 
     // Given a non-empty list of "good" directions (each of which maintains
@@ -1877,10 +1896,8 @@ pub fn ChooseDefenseSquare(leader: &Entity, follower: &Follower) -> Option<Point
 // cardinal and diagonal (because of the non-isotropic path result). Fix it
 // by comparing the new path to the old one and only replacing the old one if
 // the new path is *strictly* shorter.
-fn SelectAttackTarget(ctx: &mut Ctx) -> bool {
-    let me = ctx.me;
-    let Some(command) = me.command.get() else { return false };
-    let Command::Attack(attack, target) = command else { return false };
+fn SelectEnemyTarget(ctx: &mut Ctx) -> bool {
+    let Some(Command::Attack(attack, target)) = &ctx.tmp.command else { return false };
     let Some(eid) = target.eid else { return false };
 
     let other = ctx.known.entity(eid);
@@ -1890,18 +1907,18 @@ fn SelectAttackTarget(ctx: &mut Ctx) -> bool {
     let sense = other.map_or(Sense::Sound, |x| x.sense);
 
     if !check_time!(ctx, loc.time, MIN_SEARCH_TURNS) {
-        me.command.take();
+        ctx.me.command.take();
         return false;
     }
 
     if target.seen && other.is_none() {
-        me.command.take();
+        ctx.me.command.take();
         return false;
     }
 
     if !target.seen && other.is_some() {
-        let target = AttackTarget { seen: true, ..target };
-        me.command.set(Some(Command::Attack(attack, target)));
+        let target = AttackTarget { seen: true, ..*target };
+        ctx.me.command.set(Some(Command::Attack(attack, target)));
     }
 
     let target = Target { loc, sense, slow: false, sure: other.is_some() };
@@ -1909,20 +1926,27 @@ fn SelectAttackTarget(ctx: &mut Ctx) -> bool {
     true
 }
 
-fn ClearAttackCommand(ctx: &mut Ctx) {
-    if matches!(ctx.action, Some(Action::Attack { .. })) { ctx.me.command.take(); }
+fn SelectPointTarget(ctx: &mut Ctx) -> Option<AttackRequest> {
+    let command = ctx.tmp.command.as_ref()?;
+    let Command::Attack(attack, target) = command else { return None };
+    if target.eid.is_some() { return None; }
+
+    Some(AttackRequest { choice: Choice::Attack(attack), target: target.loc.pos })
 }
 
-fn FollowSimpleCommand(ctx: &mut Ctx) -> Option<AttackRequest> {
-    match ctx.me.command.get()? {
-        Command::Attack(attack, AttackTarget { eid, loc, .. }) => {
-            if eid.is_some() { return None; }
-            Some(AttackRequest { choice: Choice::Attack(attack), target: loc.pos })
-        }
-        Command::Return | Command::Switch(_) => {
-            Some(AttackRequest { choice: Choice::Return, target: ctx.env.leader?.pos })
-        }
-    }
+fn SelectReturnTarget(ctx: &mut Ctx) -> Option<AttackRequest> {
+    let command = ctx.tmp.command.as_ref()?;
+    if !matches!(command, Command::Return | Command::Switch(..)) { return None };
+
+    Some(AttackRequest { choice: Choice::Return, target: ctx.env.leader?.pos })
+}
+
+fn SelectSimpleTarget(ctx: &mut Ctx) -> Option<AttackRequest> {
+    SelectPointTarget(ctx).or_else(|| SelectReturnTarget(ctx))
+}
+
+fn ClearAttackCommand(ctx: &mut Ctx) {
+    if matches!(ctx.action, Some(Action::Attack { .. })) { ctx.me.command.take(); }
 }
 
 fn ClosestRival(ctx: &Ctx) -> Option<Point> {
@@ -2312,6 +2336,30 @@ fn FightOrFlight() -> impl Bhv {
     ]
 }
 
+fn FollowCommands() -> impl Bhv {
+    pri![
+        "FollowCommands",
+        seq![
+            "AttackEnemy",
+            cond!("SelectEnemyTarget", SelectEnemyTarget),
+            HuntSelectedTarget(),
+        ],
+        Attack("AttackPoint", SelectPointTarget),
+        seq![
+            "ReturnToLeader",
+            cond!("ChooseTarget", |x| ChooseAttackTarget(x, SelectReturnTarget)),
+            cond!("CanSeeTarget", |x| CanSeeTarget(x)),
+            MoveIntoRange(PathKind::Source, CanReturnFrom),
+        ],
+        seq![
+            "MoveTowardsTarget",
+            cond!("ChooseTarget", |x| ChooseAttackTarget(x, SelectSimpleTarget)),
+            Move("PathToTarget", PathKind::Target, AttackTarget),
+        ]
+    ]
+    .post_tick(ClearAttackCommand)
+}
+
 fn SummonRoot() -> impl Bhv {
     seq![
         "SummonRoot",
@@ -2319,26 +2367,12 @@ fn SummonRoot() -> impl Bhv {
         pri![
             "SummonOptions",
             seq![
-                "FollowCommands",
-                cond!("HasCommand", |x| x.me.command.get().is_some()),
-                pri![
-                    "FollowCommand",
-                    seq![
-                        "FollowAttackCommand",
-                        cond!("SelectAttackTarget", SelectAttackTarget),
-                        HuntSelectedTarget(),
-                    ],
-                    Attack("FollowSimpleCommand", FollowSimpleCommand),
-                    seq![
-                        "MoveTowardsTarget",
-                        cond!("ChooseTarget", |x| ChooseAttackTarget(x, FollowSimpleCommand)),
-                        Move("PathToTarget", PathKind::Target, AttackTarget),
-                    ],
-                ]
-                .post_tick(ClearAttackCommand),
+                "MaybeFollowCommands",
+                cond!("HasCommand", |x| x.tmp.command.is_some()),
+                FollowCommands(),
             ],
             seq![
-                "AttackRivals",
+                "MaybeAttackRivals",
                 cond!("MoveReady", |x| move_ready(x.me)),
                 Attack("AttackRival", AttackRival),
             ],
@@ -2428,7 +2462,9 @@ impl AIState {
 
     pub fn plan(&mut self, me: &Entity, env: AIEnv) -> Action {
         let known = &*me.known;
+        let command = me.command.get();
         let blackboard = &mut self.blackboard;
+        let tmp = PerTickState { command, ..Default::default() };
         let mut env = AIEnv { ..env };
 
         let mut ctx = Ctx {
@@ -2442,7 +2478,7 @@ impl AIState {
             action: None,
             blackboard,
             env: &mut env,
-            tmp: Default::default(),
+            tmp,
         };
         self.tree.tick(&mut ctx);
         ctx.action.take().unwrap_or(Action::Idle)
