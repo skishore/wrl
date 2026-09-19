@@ -940,12 +940,15 @@ fn CheckPathStepsHidden(ctx: &Ctx) -> bool {
 
 fn ImprovePath(ctx: &mut Ctx) -> bool {
     let path = &ctx.blackboard.path;
-    let kind = path.kind;
-
-    // Try to improve the path to the target.
     let Some(&target) = path.path.last() else { return false };
+    ImprovePathEndpoint(ctx, target)
+}
+
+fn ImprovePathEndpoint(ctx: &mut Ctx, target: Point) -> bool {
+    let path = &ctx.blackboard.path;
     let Some(&source) = path.path.get(path.step) else { return false };
 
+    let kind = path.kind;
     let alternate  = if kind == PathKind::Hide {
         AStar(source, target, ASTAR_CELLS_WANDER, get_sneak_check(ctx))
     } else {
@@ -1165,7 +1168,29 @@ fn CanAttackFrom(ctx: &Ctx, point: Point) -> bool {
     VISION.with_borrow_mut(|x| x.check_point(&args, target))
 }
 
-fn GetClearLineOfSight(ctx: &mut Ctx, valid: CellPredicate) -> bool {
+fn PathMatchesTarget(ctx: &Ctx) -> bool {
+    let path = &ctx.blackboard.path;
+    let Some(request) = &ctx.tmp.attack_request else { return false };
+    path.target.or_else(|| path.path.last().cloned()) == Some(request.target)
+}
+
+fn ChooseBestSource(ctx: &mut Ctx, kind: PathKind, valid: CellPredicate) -> bool {
+    let path = &ctx.blackboard.path;
+    let best = path.path.iter().enumerate().filter(|&(_, &x)| valid(ctx, x)).next();
+    let Some((limit, _)) = best else { return false };
+
+    let path = &mut ctx.blackboard.path;
+    let (step, steps) = (path.step, std::mem::take(&mut path.path));
+    path.replace(kind, steps);
+    path.path.truncate(limit + 1);
+    path.step = step;
+
+    let Some(target) = ctx.tmp.path_request.take() else { return true };
+    ImprovePathEndpoint(ctx, target);
+    true
+}
+
+fn FindCellInRange(ctx: &mut Ctx, valid: CellPredicate) -> bool {
     let Ctx { known, pos, .. } = *ctx;
 
     // Slight tweaks on get_reach_check, etc. to better handle small crowds.
@@ -1181,7 +1206,7 @@ fn GetClearLineOfSight(ctx: &mut Ctx, valid: CellPredicate) -> bool {
     ctx.tmp.path_request.is_some()
 }
 
-fn MaintainLineOfSight(ctx: &mut Ctx, valid: CellPredicate) -> bool {
+fn StayInRange(ctx: &mut Ctx, valid: CellPredicate) -> bool {
     let Ctx { known, pos, .. } = *ctx;
     let Some(request) = &ctx.tmp.attack_request else { return false };
 
@@ -1190,8 +1215,6 @@ fn MaintainLineOfSight(ctx: &mut Ctx, valid: CellPredicate) -> bool {
         Choice::Attack(attack) => attack.range,
         Choice::Return => SUMMON_RANGE,
     };
-
-    if !valid(ctx, pos) { return false };
 
     // Given a non-empty list of "good" directions (each of which maintains
     // line-of-sight to the target), choose one closest to our attack range.
@@ -1963,14 +1986,27 @@ fn MoveIntoRange(kind: PathKind, valid: CellPredicate) -> impl Bhv {
     seq![
         "MoveIntoRange",
         pri![
-            "ChoosePathTarget",
-            cond!("MaintainLineOfSight", move |x| MaintainLineOfSight(x, valid)),
-            cond!("GetClearLineOfSight", move |x| GetClearLineOfSight(x, valid)),
-        ],
-        pri![
-            "EnsurePath",
-            CheckPath(kind, MatchesPathTarget),
-            cond!("FindPathToTarget", move |x| FindPathToTarget(x, kind)),
+            "FindPathIntoRange",
+            seq![
+                "MaintainRange",
+                cond!("InRange", move |x| valid(x, x.pos)),
+                cond!("StayInRange", move |x| StayInRange(x, valid)),
+                cond!("FindPathToTarget", move |x| FindPathToTarget(x, kind)),
+            ],
+            seq![
+                "PathIntoRange",
+                cond!("FindCellInRange", move |x| FindCellInRange(x, valid)),
+                pri![
+                    "TryOldOrNewPath",
+                    seq![
+                        "CheckPath",
+                        cond!("CheckPathTarget", |x| PathMatchesTarget(x)),
+                        cond!("CheckPathStepsFree", |x| CheckPathStepsFree(x)),
+                        cond!("ChooseBestSource", move |x| ChooseBestSource(x, kind, valid)),
+                    ],
+                    cond!("FindPathToTarget", move |x| FindPathToTarget(x, kind)),
+                ],
+            ],
         ],
         cb!("FollowPath", FollowPath),
         act!("Idle", |_| Some(Action::Idle)),
