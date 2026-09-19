@@ -1898,31 +1898,16 @@ pub fn ChooseDefenseSquare(leader: &Entity, follower: &Follower) -> Option<Point
     best.1
 }
 
-// TODO: Similar bug; if all cells near the player are defended from a given
-// rival, we'll just hover near them with FollowLeader, but FollowLeader's
-// move doesn't look in the direction of a rival. This prevents us from
-// attacking an enemy even if it's attacking us. If there are rivals, we
-// should always look towards them (and not just "in our last movement dir"
-// or "away from the leader" - both conditions are wrong).
-//
 // TODO: Another reason "DefendLeader" may fail is because the player is in
 // tall grass or shadow (so the only valid follower squares are 1 cell away)
 // and all of those squares are blocked or occupied. We should instead have
 // a dead-simple version that considers any cell within a 5x5 centered on
 // the player and picks one if more sophisticated checks fail.
 //
-// TODO: Choose a defense square even if a rival is adjacent to the player.
-//
-// TODO: Perhaps an alternate claim: MaybeAttackRivals only attacks rivals
-// that are currently visible; perhaps we should path to and attack any other
-// rivals the player knows about instead.
-//
-// TODO: Just to corroborate the point above - if the leader is beset upon by
-// two enemies that are diagonally-adjacent to it, and we're supposedely
-// defending the leader but we're between them, we'll ignore them. See:
+// TODO: Choose a defense square even if a rival is adjacent to the player:
 //
 //  E@E     E - enemy       . - open space
-//  .L.     L - leader      @ - us, obviously
+//  .L.     L - leader      @ - us, defending L
 //
 // TODO: If a defender is currently the only one defending against a particular
 // rival, it should not move out of the way to defend against one other rival
@@ -2359,15 +2344,18 @@ fn SummonRoot() -> impl Bhv {
                 cond!("MoveReady", |x| move_ready(x.me)),
                 Attack("AttackRival", AttackRival),
             ],
-            seq![
-                "MaybeDefendLeader",
-                cond!("LeaderHasRivals", |x| LeaderHasRivals(x)),
-                Move("DefendLeader", PathKind::Follow, |x| DefendLeader(x))
-                    .on_running(|x| LookTowards(x, |x| ClosestRival(x))),
-            ],
-            act!("FollowLeader", FollowLeader),
-            Move("MoveToLeader", PathKind::Leader, |x| x.env.leader.map(|x| x.pos)),
-            act!("Idle", |_| Some(Action::Idle)),
+            pri![
+                "FollowerMoves",
+                seq![
+                    "MaybeDefendLeader",
+                    cond!("LeaderHasRivals", |x| LeaderHasRivals(x)),
+                    Move("DefendLeader", PathKind::Follow, |x| DefendLeader(x))
+                ],
+                act!("FollowLeader", FollowLeader),
+                Move("MoveToLeader", PathKind::Leader, |x| x.env.leader.map(|x| x.pos)),
+                act!("Idle", |_| Some(Action::Idle)),
+            ]
+            .on_running(|x| LookTowards(x, |x| ClosestRival(x))),
         ],
     ]
 }
