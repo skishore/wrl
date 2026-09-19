@@ -1073,6 +1073,36 @@ fn AttackPathTarget(ctx: &mut Ctx) -> Option<AttackRequest> {
     Some(AttackRequest { choice: Choice::Attack(attack), target })
 }
 
+// Combat pathfinding tweaks:
+
+fn ExtendPathToTarget(ctx: &mut Ctx, kind: PathKind) {
+    let path = &mut ctx.blackboard.path;
+    let Some(target) = path.target else { return };
+    let Some(source) = path.path.last().cloned() else { return };
+
+    let path = &mut ctx.blackboard.path;
+    let (step, mut steps) = (path.step, std::mem::take(&mut path.path));
+    if source != target { steps.extend(LOS(source, target).into_iter().skip(1)); }
+    path.replace(kind, steps);
+    path.step = step;
+}
+
+fn LookTowards(ctx: &mut Ctx, target: PathTargetSelector) {
+    let source = ctx.pos;
+    let Some(target) = target(ctx) else { return };
+
+    ctx.action = match ctx.action.take() {
+        Some(Action::Idle | Action::Look { .. }) => {
+            Some(Action::Look { look: target - source })
+        }
+        Some(Action::Move { step, turns, .. }) => {
+            Some(Action::Move { look: target - source - step, step, turns })
+        }
+        x => x,
+    };
+    ctx.blackboard.path.target = Some(target);
+}
+
 // Attack execution:
 
 fn AttackNow(ctx: &mut Ctx) -> Option<Action> {
@@ -1080,11 +1110,10 @@ fn AttackNow(ctx: &mut Ctx) -> Option<Action> {
     let Choice::Attack(attack) = request.choice else { return None };
 
     let target = request.target;
-    let update = ctx.blackboard.path.path.last().cloned() == Some(target);
-    let kind = if update { ctx.blackboard.path.kind } else { PathKind::Target };
-    ctx.blackboard.path.replace(kind, LOS(ctx.pos, target));
+    ctx.blackboard.path.replace(PathKind::Source, vec![ctx.pos]);
+    ctx.blackboard.path.target = Some(target);
 
-    Some(Action::Attack { target: request.target, attack })
+    Some(Action::Attack { target, attack })
 }
 
 fn AttackTarget(ctx: &mut Ctx) -> Option<Point> {
@@ -1817,9 +1846,6 @@ pub fn ChooseDefenseSquare(leader: &Entity, follower: &Follower) -> Option<Point
 //  - We shouldn't bother running the AttackTarget subtree.
 //  - We don't do the right test (we check us -> leader, not leader -> us).
 //
-// TODO: Because the targeting subtree overrides the PathKind with
-// PathKind::Target, we now repeatedly re-plan paths to a BerryTree in sight.
-//
 // TODO: The number of PathKinds is exploding; can we homogenize the kinds
 // that are the same modulo their skip count?
 //
@@ -1874,22 +1900,6 @@ fn FollowSimpleCommand(ctx: &mut Ctx) -> Option<AttackRequest> {
             Some(AttackRequest { choice: Choice::Return, target: ctx.env.leader?.pos })
         }
     }
-}
-
-fn LookTowards(ctx: &mut Ctx, target: PathTargetSelector) {
-    let source = ctx.pos;
-    let Some(target) = target(ctx) else { return };
-
-    ctx.action = match ctx.action.take() {
-        Some(Action::Idle | Action::Look { .. }) => {
-            Some(Action::Look { look: target - source })
-        }
-        Some(Action::Move { step, turns, .. }) => {
-            Some(Action::Move { look: target - source - step, step, turns })
-        }
-        x => x,
-    };
-    ctx.blackboard.path.target = Some(target);
 }
 
 fn ClosestRival(ctx: &Ctx) -> Option<Point> {
@@ -2073,7 +2083,8 @@ fn ForageForBerries() -> impl Bhv {
         ComputePath(KIND, HasBerryTree),
         pri![
             "AttackBerryTree",
-            Attack("AttackPathTarget", AttackPathTarget),
+            Attack("AttackPathTarget", AttackPathTarget)
+                .on_running(|x| ExtendPathToTarget(x, KIND)),
             cb!("FollowPath", FollowPath),
             cb!("ClearFinishedPath", ClearFinishedPath),
         ],
