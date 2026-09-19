@@ -1713,6 +1713,63 @@ fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
 
 //////////////////////////////////////////////////////////////////////////////
 
+// Command-following helpers:
+
+fn ClearAttackCommand(ctx: &mut Ctx) {
+    if matches!(ctx.action, Some(Action::Attack { .. })) { ctx.me.command.take(); }
+}
+
+fn SelectSimpleTarget(ctx: &mut Ctx) -> Option<AttackRequest> {
+    SelectPointTarget(ctx).or_else(|| SelectReturnTarget(ctx))
+}
+
+fn SelectReturnTarget(ctx: &mut Ctx) -> Option<AttackRequest> {
+    let command = ctx.tmp.command.as_ref()?;
+    if !matches!(command, Command::Return | Command::Switch(..)) { return None };
+
+    Some(AttackRequest { choice: Choice::Return, target: ctx.env.leader?.pos })
+}
+
+fn SelectPointTarget(ctx: &mut Ctx) -> Option<AttackRequest> {
+    let command = ctx.tmp.command.as_ref()?;
+    let Command::Attack(attack, target) = command else { return None };
+    if target.eid.is_some() { return None; }
+
+    Some(AttackRequest { choice: Choice::Attack(attack), target: target.loc.pos })
+}
+
+fn SelectEnemyTarget(ctx: &mut Ctx) -> bool {
+    let Some(Command::Attack(attack, target)) = &ctx.tmp.command else { return false };
+    let Some(eid) = target.eid else { return false };
+
+    let other = ctx.known.entity(eid);
+    let other = other.and_then(|x| if x.time < target.loc.time { None } else { Some(x) });
+
+    let loc = other.map_or(target.loc, |x| x.loc);
+    let sense = other.map_or(Sense::Sound, |x| x.sense);
+
+    if !check_time!(ctx, loc.time, MIN_SEARCH_TURNS) {
+        ctx.me.command.take();
+        return false;
+    }
+
+    if target.seen && other.is_none() {
+        ctx.me.command.take();
+        return false;
+    }
+
+    if !target.seen && other.is_some() {
+        let target = AttackTarget { seen: true, ..*target };
+        ctx.me.command.set(Some(Command::Attack(attack, target)));
+    }
+
+    let target = Target { loc, sense, slow: false, sure: other.is_some() };
+    SetChaseTarget(ctx, target, Some(attack));
+    true
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 // Follower AI:
 
 pub struct Follower { pub pos: Point, pub moves: TileFlags }
@@ -1874,58 +1931,6 @@ pub fn ChooseDefenseSquare(leader: &Entity, follower: &Follower) -> Option<Point
 //
 // TODO: The number of PathKinds is exploding; can we homogenize the kinds
 // that are the same modulo their skip count?
-fn SelectEnemyTarget(ctx: &mut Ctx) -> bool {
-    let Some(Command::Attack(attack, target)) = &ctx.tmp.command else { return false };
-    let Some(eid) = target.eid else { return false };
-
-    let other = ctx.known.entity(eid);
-    let other = other.and_then(|x| if x.time < target.loc.time { None } else { Some(x) });
-
-    let loc = other.map_or(target.loc, |x| x.loc);
-    let sense = other.map_or(Sense::Sound, |x| x.sense);
-
-    if !check_time!(ctx, loc.time, MIN_SEARCH_TURNS) {
-        ctx.me.command.take();
-        return false;
-    }
-
-    if target.seen && other.is_none() {
-        ctx.me.command.take();
-        return false;
-    }
-
-    if !target.seen && other.is_some() {
-        let target = AttackTarget { seen: true, ..*target };
-        ctx.me.command.set(Some(Command::Attack(attack, target)));
-    }
-
-    let target = Target { loc, sense, slow: false, sure: other.is_some() };
-    SetChaseTarget(ctx, target, Some(attack));
-    true
-}
-
-fn SelectPointTarget(ctx: &mut Ctx) -> Option<AttackRequest> {
-    let command = ctx.tmp.command.as_ref()?;
-    let Command::Attack(attack, target) = command else { return None };
-    if target.eid.is_some() { return None; }
-
-    Some(AttackRequest { choice: Choice::Attack(attack), target: target.loc.pos })
-}
-
-fn SelectReturnTarget(ctx: &mut Ctx) -> Option<AttackRequest> {
-    let command = ctx.tmp.command.as_ref()?;
-    if !matches!(command, Command::Return | Command::Switch(..)) { return None };
-
-    Some(AttackRequest { choice: Choice::Return, target: ctx.env.leader?.pos })
-}
-
-fn SelectSimpleTarget(ctx: &mut Ctx) -> Option<AttackRequest> {
-    SelectPointTarget(ctx).or_else(|| SelectReturnTarget(ctx))
-}
-
-fn ClearAttackCommand(ctx: &mut Ctx) {
-    if matches!(ctx.action, Some(Action::Attack { .. })) { ctx.me.command.take(); }
-}
 
 fn ClosestRival(ctx: &Ctx) -> Option<Point> {
     let mut rivals = rivals(ctx.env.leader?);
