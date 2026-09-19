@@ -1867,35 +1867,13 @@ pub fn ChooseDefenseSquare(leader: &Entity, follower: &Follower) -> Option<Point
 //  E@E     E - enemy       . - open space
 //  .L.     L - leader      @ - us, obviously
 //
-// TODO: FollowSimpleCommand is weak. If we can't find a short-term path to
-// the target within ASTAR_CELLS_ATTACK, we need to switch to CachedPath-based
-// long-range pathing even for relatively nearby targets.
-//
-// Arguably, we only need the pathing for attack-point; attack-enemy already
-// works this way, and return is backed by PathToLeader.
-//
 // TODO: If a defender is currently the only one defending against a particular
 // rival, it should not move out of the way to defend against one other rival
 // (even if that square is better, e.g. because it's further from the leader).
 // This "stickiness" heuristic yields more predictable behavior.
 //
-// TODO: "Return" / "Switch" command following is broken in a few ways:
-//  - We don't correctly check if a leader can spot us there - we check that
-//    we have LOS and that it's not a hiding cell, but that doesn't account
-//    for (say) partial opacity like tall grass.
-//  - We should reduce the radius to 1 and try to get as close to the leader
-//    as possible even once we have an LOS.
-//  - We shouldn't bother running the AttackTarget subtree.
-//  - We don't do the right test (we check us -> leader, not leader -> us).
-//
 // TODO: The number of PathKinds is exploding; can we homogenize the kinds
 // that are the same modulo their skip count?
-//
-// TODO: MoveIntoRange currently recomputes the path at every step (arguably
-// alright) but as a result always takes cardinal moves instead of a mix of
-// cardinal and diagonal (because of the non-isotropic path result). Fix it
-// by comparing the new path to the old one and only replacing the old one if
-// the new path is *strictly* shorter.
 fn SelectEnemyTarget(ctx: &mut Ctx) -> bool {
     let Some(Command::Attack(attack, target)) = &ctx.tmp.command else { return false };
     let Some(eid) = target.eid else { return false };
