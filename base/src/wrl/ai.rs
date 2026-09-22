@@ -704,6 +704,7 @@ fn HeardUnknownNoise(ctx: &mut Ctx) -> bool {
     if bb.dirs.kind == DirsKind::Noises && bb.dirs.steps_left() == 1 {
         for threat in &mut bb.threats.threats { threat.mark_scanned(); }
     }
+    if !scanning { bb.last_scan = bb.prev_time; }
     true
 }
 
