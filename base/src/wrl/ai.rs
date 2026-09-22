@@ -2387,8 +2387,8 @@ fn Root() -> impl Bhv {
         InvestigateScents(),
         Wander(),
     ]
-    .on_tick(CleanupDirs)
     .on_tick(CleanupPath)
+    .post_tick(CleanupDirs)
     .post_tick(CleanupChaseState)
 }
 
