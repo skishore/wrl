@@ -47,6 +47,10 @@ impl Delta {
         if Bound::new(r).contains(*self) { r } else { r + 1 }
     }
 
+    pub fn inverse_l2(&self) -> f64 {
+        if *self == dirs::NONE { 0. } else { self.len_l2().recip() }
+    }
+
     pub fn len_taxicab(&self) -> i32 {
         self.0.abs() + self.1.abs()
     }
