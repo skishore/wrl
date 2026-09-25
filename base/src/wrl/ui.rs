@@ -125,7 +125,7 @@ impl Default for Layout {
         let kl = UI::render_key('a').chars().count() as i32;
         assert!(kl == UI_KEY_SPACE);
 
-        let side = 2 * FOV_RADIUS_PC_ + 1;
+        let side = 2 * FOV_RADIUS_PC_.radius + 1;
         let (x, y) = (side, side);
 
         let ss = UI_STATUS_SIZE;

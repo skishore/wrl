@@ -48,8 +48,8 @@ const SLOWED_TURNS: f64 = 1.5;
 
 // Sight and sound distances:
 
-pub const FOV_RADIUS_NPC: i32 = 12;
-pub const FOV_RADIUS_PC_: i32 = 21;
+pub const FOV_RADIUS_NPC: Bound = Bound::new(12);
+pub const FOV_RADIUS_PC_: Bound = Bound::new(21);
 
 const FOV_IN_TALL_GRASS: usize = 4;
 const VISIBILITY_LOSS: i32 = VISIBILITY_LOSSES[FOV_IN_TALL_GRASS - 1];
