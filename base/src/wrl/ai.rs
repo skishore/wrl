@@ -23,7 +23,8 @@ use super::dex::{Attack, Species};
 use super::entity::{AttackTarget, Command, Entity};
 use super::event::{Call, Location, Sense};
 use super::game::{Action, Item, TileFlags, move_ready};
-use super::game::{FOV_RADIUS_NPC, CALL_VOLUME, FOLLOW_RANGE, SUMMON_RANGE};
+use super::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_};
+use super::game::{CALL_VOLUME, FOLLOW_RANGE, SUMMON_RANGE};
 use super::knowledge::{Knowledge, ScentKnowledge};
 use super::threats::{FightOrFlight, ThreatState};
 use super::time::Timestamp;
@@ -130,7 +131,6 @@ impl CachedScan {
 enum PathKind {
     // High-priority actions:
     Follow,
-    Leader,
     Source,
     Target,
     Flee,
@@ -733,7 +733,7 @@ fn SkipLastPathStep(kind: PathKind) -> bool {
     type K = PathKind;
     match kind {
         // Move adjacent to the cell but not onto it.
-        K::Leader | K::Target | K::Meat | K::Water | K::Berry | K::BerryTree => true,
+        K::Target | K::Meat | K::Water | K::Berry | K::BerryTree => true,
 
         // High-priority search / flee pathing; move to the cell.
         K::Follow | K::Source | K::Flee | K::Hide | K::Chase | K::ChaseFallback => false,
@@ -862,7 +862,7 @@ fn FollowPath(ctx: &mut Ctx) -> Result {
         turns = 1.;
     } else if kind == PathKind::Source || kind == PathKind::Target {
         turns = 1.;
-    } else if kind == PathKind::Follow || kind == PathKind::Leader {
+    } else if kind == PathKind::Follow {
         turns = FOLLOW_TURNS;
     }
 
@@ -1009,7 +1009,7 @@ fn select_flight_target(ctx: &mut Ctx, hiding: bool) -> Option<Point> {
     let Ctx { known, pos, .. } = *ctx;
 
     let scale = 1. / DijkstraLength(dirs::E) as f64;
-    let min_distance = DijkstraLength(dirs::E.scale(FOV_RADIUS_NPC));
+    let min_distance = DijkstraLength(dirs::E.scale(FOV_RADIUS_NPC.radius));
     let threats = &ctx.blackboard.threats.menacing;
     let first = threats.iter().next()?.pos;
 
@@ -1268,7 +1268,7 @@ fn AttackNow(ctx: &mut Ctx) -> Option<Action> {
     Some(Action::Attack { target, attack })
 }
 
-fn AttackTarget(ctx: &mut Ctx) -> Option<Point> {
+fn AttackTarget(ctx: &Ctx) -> Option<Point> {
     ctx.tmp.attack_request.as_ref().map(|x| x.target)
 }
 
@@ -1733,6 +1733,14 @@ fn ForceThreatState(ctx: &mut Ctx, state: FightOrFlight) {
 
 // Command-following helpers:
 
+fn GetVisionRange(entity: &Entity) -> Bound {
+    if entity.player { FOV_RADIUS_PC_ } else { FOV_RADIUS_NPC }
+}
+
+fn CloseToLeader(ctx: &Ctx) -> bool {
+    ctx.env.leader.map_or(false, |x| GetVisionRange(x).contains(x.pos - ctx.pos))
+}
+
 fn ClearAttackCommand(ctx: &mut Ctx) {
     if matches!(ctx.action, Some(Action::Attack { .. })) { ctx.me.command.take(); }
 }
@@ -1932,12 +1940,21 @@ pub fn ChooseDefenseSquare(leader: &Entity, follower: &Follower) -> Option<Point
 // (even if that square is better, e.g. because it's further from the leader).
 // This "stickiness" heuristic yields more predictable behavior.
 //
-// TODO: The number of PathKinds is exploding; can we homogenize the kinds
-// that are the same modulo their skip count?
-//
-// TODO: If a follower can't find a path to the leader (or if the path goes
-// way into unknown territory), they should instead move to the reachable cell
-// closest to the leader, then wait / call out for them.
+// TODO: Try to memoize or use a smaller range for CellNearLeader.
+
+fn CellNearLeader(ctx: &mut Ctx) -> Option<Point> {
+    let leader = ctx.env.leader?;
+
+    ensure_reachable(ctx);
+
+    let mut best = ctx.pos;
+    for &(point, _) in &ctx.tmp.reachable.neighborhood.visited {
+        if (point - leader.pos).len_l2_squared() < (best - leader.pos).len_l2_squared() {
+            best = point;
+        }
+    }
+    Some(best)
+}
 
 fn ClosestRival(ctx: &Ctx) -> Option<Point> {
     let mut rivals = rivals(ctx.env.leader?);
@@ -1989,6 +2006,16 @@ fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
 //    all the way to the cache target, path as close as possible and re-plan
 //    when we're near it again. Or: generalize this fallback to all "path to
 //    target" cases, and drop the first bullet above.
+//
+//  - We don't account for "attack moves" (i.e. what cells an attack can pass
+//    through, which may differ from what cells we can move on) correctly. For
+//    instance, even if we can't fly or swim, we could use a special attack
+//    through water. Doing so is tricky. It interacts with attack range and
+//    strength. Just because we could take 1 step and use attack X doesn't
+//    mean that's better than taking 2 steps and using attack Y. Best would
+//    be to consider all pairs of (attack, shortest distance to usage).
+//
+//  - The same bug affects CanReturnFrom - we should use CanFlyOver for that.
 
 macro_rules! path {
     ($n:expr, $k:expr, $v:expr, $f:expr) => {
@@ -2352,7 +2379,7 @@ fn FollowCommands() -> impl Bhv {
         seq![
             "MoveTowardsTarget",
             cond!("ChooseTarget", |x| ChooseAttackTarget(x, SelectSimpleTarget)),
-            Move("PathToTarget", PathKind::Target, AttackTarget),
+            Move("PathToTarget", PathKind::Target, |x| AttackTarget(x)),
         ]
     ]
     .post_tick(ClearAttackCommand)
@@ -2367,8 +2394,10 @@ fn SummonRoot() -> impl Bhv {
             seq![
                 "MaybeFollowCommands",
                 cond!("HasCommand", |x| x.tmp.command.is_some()),
+                cond!("CloseToLeader", |x| CloseToLeader(x)),
                 FollowCommands(),
-            ],
+            ]
+            .on_fail(|x| { x.me.command.take(); }),
             seq![
                 "MaybeAttackRivals",
                 cond!("MoveReady", |x| move_ready(x.me)),
@@ -2382,7 +2411,7 @@ fn SummonRoot() -> impl Bhv {
                     Move("DefendLeader", PathKind::Follow, |x| DefendLeader(x))
                 ],
                 act!("FollowLeader", FollowLeader),
-                Move("MoveToLeader", PathKind::Leader, |x| x.env.leader.map(|x| x.pos)),
+                Move("MoveToLeader", PathKind::Follow, CellNearLeader),
                 act!("Idle", |_| Some(Action::Idle)),
             ]
             .on_running(|x| LookTowards(x, |x| ClosestRival(x))),

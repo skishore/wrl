@@ -1,4 +1,4 @@
-use super::point::{Delta, Matrix, Point, dirs};
+use super::point::{Bound, Delta, Matrix, Point, dirs};
 use super::vision::{INITIAL_VISIBILITY, Vision, VisionArgs};
 
 //////////////////////////////////////////////////////////////////////////////
@@ -58,7 +58,7 @@ impl Lighting {
             light_values: Matrix::new(size, 0),
             opacity: Matrix::new(size, INITIAL_VISIBILITY),
             sources: Matrix::new(size, Default::default()),
-            visions: (0..=MAX_LIGHT_RADIUS).map(|x| Vision::new(x)).collect(),
+            visions: (0..=MAX_LIGHT_RADIUS).map(|x| Vision::new(Bound::new(x))).collect(),
         };
         result.opacity.fill(0);
         result
@@ -208,7 +208,7 @@ mod tests {
 
     fn check_lighting_at_cell(lighting: &Lighting, point: Point) {
         let mut expected = 0;
-        let mut vision = Vision::new(MAX_LIGHT_RADIUS);
+        let mut vision = Vision::new(Bound::new(MAX_LIGHT_RADIUS));
 
         for other in lighting.opacity.iter_points() {
             let light = lighting.light_radius.get(other);

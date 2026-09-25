@@ -135,15 +135,15 @@ pub struct Vision {
 }
 
 impl Vision {
-    pub fn new(radius: i32) -> Self {
-        Self::new_with_visibility(radius, INITIAL_VISIBILITY)
+    pub fn new(range: Bound) -> Self {
+        Self::new_with_visibility(range, INITIAL_VISIBILITY)
     }
 
-    pub fn new_with_visibility(radius: i32, initial_visibility: i32) -> Self {
-        let side = 2 * radius + 1;
+    pub fn new_with_visibility(range: Bound, initial_visibility: i32) -> Self {
+        let side = 2 * range.radius + 1;
         let size = Point(side, side);
         Self {
-            range: Bound::new(radius),
+            range,
             initial_visibility,
             offset: dirs::NONE,
             points_seen: vec![],
@@ -386,7 +386,7 @@ mod tests {
         };
         let args = VisionArgs { pos, dir, opacity };
 
-        let mut vision = Vision::new(radius);
+        let mut vision = Vision::new(Bound::new(radius));
         vision.compute(&args);
 
         let mut result = Matrix::new(map.size(), false);
@@ -857,7 +857,7 @@ mod tests {
         let dir = if directional { dirs::SE } else { dirs::NONE };
         let args = VisionArgs { pos, dir, opacity };
 
-        let mut vision = Vision::new(pos.0);
+        let mut vision = Vision::new(Bound::new(pos.0));
         if point_lookups {
             let mut rng = RNG::seed_from_u64(17);
             b.iter(|| {
