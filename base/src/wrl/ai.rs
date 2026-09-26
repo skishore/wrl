@@ -24,7 +24,7 @@ use super::entity::{AttackTarget, Command, Entity};
 use super::event::{Call, Location, Sense};
 use super::game::{Action, Item, TileFlags, move_ready};
 use super::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_};
-use super::game::{CALL_VOLUME, FOLLOW_RANGE, SUMMON_RANGE};
+use super::game::{CALL_VOLUME, FOLLOW_RANGE, SUMMON_MOVES, SUMMON_RANGE};
 use super::knowledge::{Knowledge, ScentKnowledge};
 use super::threats::{FightOrFlight, ThreatState};
 use super::time::Timestamp;
@@ -470,13 +470,13 @@ fn UpdateLastSeen(ctx: &mut Ctx, kind: PathKind, valid: CellPredicate) -> Result
         ctx.blackboard.last_seen.insert(kind, cell.point);
 
         // If we spot a path that's a clear improvement, switch to it.
-        let Ctx { known, pos, .. } = *ctx;
+        let Ctx { known, me, pos, .. } = *ctx;
         let path = &mut ctx.blackboard.path;
         if path.kind == kind && let Some(&target) = path.path.last() &&
            (target - pos).len_l1() > (path.skip as i32) &&
            (cell.point - pos).len_l2_squared() < (target - pos).len_l2_squared() {
             let los = LOS(ctx.pos, cell.point);
-            if PathIsFree(known, &los) { path.replace(kind, los); }
+            if PathIsFree(known, me.species.moves, &los) { path.replace(kind, los); }
         }
         return Result::Success;
     }
@@ -1257,6 +1257,9 @@ fn LookTowards(ctx: &mut Ctx, target: PathTargetSelector) {
 
 // Attack execution:
 
+#[derive(Clone, Copy)]
+struct Range { bound: Bound, moves: TileFlags }
+
 fn AttackNow(ctx: &mut Ctx) -> Option<Action> {
     let Some(request) = &ctx.tmp.attack_request else { return None };
     let Choice::Attack(attack) = request.choice else { return None };
@@ -1285,16 +1288,18 @@ fn CanSeeTarget(ctx: &Ctx) -> bool {
 fn CanAttackTarget(ctx: &Ctx) -> bool {
     let Some(request) = &ctx.tmp.attack_request else { return false };
     let Choice::Attack(attack) = request.choice else { return false };
-    HasLineOfSight(ctx.known, ctx.pos, request.target, attack.range)
+
+    let range = Range { bound: attack.range, moves: ctx.me.species.moves };
+    HasLineOfSight(ctx.known, ctx.pos, request.target, range)
 }
 
-fn HasLineOfSight(known: &Knowledge, source: Point, target: Point, range: Bound) -> bool {
+fn HasLineOfSight(known: &Knowledge, source: Point, target: Point, range: Range) -> bool {
     if source == target { return false; }
-    if !range.contains(source - target) { return false; }
-    PathIsFree(known, &LOS(source, target))
+    if !range.bound.contains(source - target) { return false; }
+    PathIsFree(known, range.moves, &LOS(source, target))
 }
 
-fn HasLOSAndVision(known: &Knowledge, source: Point, target: Point, range: Bound) -> bool {
+fn HasLOSAndVision(known: &Knowledge, source: Point, target: Point, range: Range) -> bool {
     if !HasLineOfSight(known, source, target, range) { return false; }
 
     let opacity = |x| known.get(x).tile().map_or(INITIAL_VISIBILITY, |x| x.opacity());
@@ -1307,8 +1312,8 @@ fn CellIsFree(ctx: &Ctx, point: Point) -> bool {
     pos == point || known.get(point).status() == Status::Free
 }
 
-fn PathIsFree(known: &Knowledge, path: &[Point]) -> bool {
-    path.iter().skip(1).rev().skip(1).all(|&p| known.get(p).status() == Status::Free)
+fn PathIsFree(known: &Knowledge, moves: TileFlags, path: &[Point]) -> bool {
+    path.iter().skip(1).rev().skip(1).all(|&p| known.get(p).status_for(moves) == Status::Free)
 }
 
 thread_local! {
@@ -1321,7 +1326,8 @@ fn CanAttackFrom(ctx: &Ctx, point: Point) -> bool {
     let Some(request) = &ctx.tmp.attack_request else { return false };
     let Choice::Attack(attack) = request.choice else { return false };
 
-    HasLOSAndVision(ctx.known, point, request.target, attack.range)
+    let range = Range { bound: attack.range, moves: ctx.me.species.moves };
+    HasLOSAndVision(ctx.known, point, request.target, range)
 }
 
 fn CanReturnFrom(ctx: &Ctx, point: Point) -> bool {
@@ -1332,7 +1338,8 @@ fn CanReturnFrom(ctx: &Ctx, point: Point) -> bool {
 
     if is_hidden_from(ctx, point, &[request.target]) { return false; }
 
-    HasLOSAndVision(ctx.known, request.target, point, SUMMON_RANGE)
+    let range = Range { bound: SUMMON_RANGE, moves: SUMMON_MOVES };
+    HasLOSAndVision(ctx.known, request.target, point, range)
 }
 
 fn PathMatchesTarget(ctx: &Ctx) -> bool {
@@ -2008,14 +2015,15 @@ fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
 //    target" cases, and drop the first bullet above.
 //
 //  - We don't account for "attack moves" (i.e. what cells an attack can pass
-//    through, which may differ from what cells we can move on) correctly. For
-//    instance, even if we can't fly or swim, we could use a special attack
-//    through water. Doing so is tricky. It interacts with attack range and
-//    strength. Just because we could take 1 step and use attack X doesn't
-//    mean that's better than taking 2 steps and using attack Y. Best would
-//    be to consider all pairs of (attack, shortest distance to usage).
+//    through, which may differ from what cells we can move on) correctly.
 //
-//  - The same bug affects CanReturnFrom - we should use CanFlyOver for that.
+//    For instance, we may be able to use a special attack over water even if
+//    we can't fly or swim. Note that CanReturnFrom does handle this logic.
+//
+//    The attack case is trickier because it interacts with attack range and
+//    strength. Just because we could take 1 step and use attack X doesn't
+//    make that a better option than taking 2 steps and using attack Y. Best
+//    would be to consider all pairs of (attack, closest source).
 
 macro_rules! path {
     ($n:expr, $k:expr, $v:expr, $f:expr) => {
@@ -2381,6 +2389,7 @@ fn FollowCommands() -> impl Bhv {
             cond!("ChooseTarget", |x| ChooseAttackTarget(x, SelectSimpleTarget)),
             Move("PathToTarget", PathKind::Target, |x| AttackTarget(x)),
         ]
+        .on_running(|x| LookTowards(x, |x| AttackTarget(x))),
     ]
     .post_tick(ClearAttackCommand)
 }

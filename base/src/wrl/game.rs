@@ -63,6 +63,8 @@ pub const SNIFF_VOLUME:  Bound = Bound::new(8);
 pub const FOLLOW_RANGE:  Bound = Bound::new(4);
 pub const SUMMON_RANGE:  Bound = Bound::new(12);
 
+pub const SUMMON_MOVES: TileFlags = TileFlags::CanFlyOver;
+
 // Miscellaneous types:
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -998,7 +1000,7 @@ fn can_attack(board: &Board, me: &Entity, target: Point, range: Bound) -> bool {
 }
 
 fn can_summon(board: &Board, me: &Entity, target: Point) -> bool {
-    let moves = TileFlags::CanFlyOver;
+    let moves = SUMMON_MOVES;
     let (known, range, source) = (&me.known, SUMMON_RANGE, me.pos);
 
     if source == target { return false; }
