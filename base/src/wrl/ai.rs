@@ -2392,7 +2392,6 @@ fn FollowCommands() -> impl Bhv {
         seq![
             "ReturnToLeader",
             cond!("ChooseTarget", |x| ChooseAttackTarget(x, SelectReturnTarget)),
-            cond!("CanSeeTarget", |x| CanSeeTarget(x)),
             MoveIntoRange(PathKind::Source, CanReturnFrom),
         ],
         seq![
