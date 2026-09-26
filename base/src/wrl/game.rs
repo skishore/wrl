@@ -14,7 +14,7 @@ use crate::base::util::{HashMap, HashSet, RNG, sample, weighted};
 use crate::base::vision::{INITIAL_VISIBILITY, VISIBILITY_LOSSES, Vision, VisionArgs};
 
 use super::ai::{AIEnv, AIState};
-use super::dex::{Attack, Species};
+use super::dex::{Attack, Range, Species};
 use super::debug::DebugFile;
 use super::effect::{CB, Effect, Frame, FT, Particle, ParticleData, RenderData, self};
 use super::entity::{Command, Individual, Teammate};
@@ -984,34 +984,26 @@ impl ActionResult {
     fn success_turns(turns: f64) -> Self { Self { success: true,  moves: 0., turns } }
 }
 
-fn can_attack(board: &Board, me: &Entity, target: Point, range: Bound) -> bool {
-    let moves = me.species.moves;
-    let (known, source) = (&me.known, me.pos);
+fn can_attack(board: &Board, me: &Entity, target: Point, range: Range) -> bool {
+    let moves = range.moves;
+    let (known, source) = (&*me.known, me.pos);
 
     if source == target { return false; }
     if !known.get(target).visible() { return false; }
-    if !range.contains(source - target) { return false; }
+    if !range.bound.contains(source - target) { return false; }
 
     let los = LOS(source, target);
     los[1..los.len() - 1].iter().all(|&p| {
-        matches!(known.get(p).status(), Status::Free) &&
+        matches!(known.get(p).status_for(moves), Status::Free) &&
         matches!(board.get_status(p, moves), Status::Free)
     })
 }
 
 fn can_summon(board: &Board, me: &Entity, target: Point) -> bool {
-    let moves = SUMMON_MOVES;
-    let (known, range, source) = (&me.known, SUMMON_RANGE, me.pos);
+    if !me.known.get(target).can_see_entity_at() { return false; }
 
-    if source == target { return false; }
-    if !range.contains(source - target) { return false; }
-    if !known.get(target).can_see_entity_at() { return false; }
-
-    let los = LOS(source, target);
-    los[1..los.len() - 1].iter().all(|&p| {
-        matches!(known.get(p).status_for(moves), Status::Free) &&
-        matches!(board.get_status(p, moves), Status::Free | Status::Occupied)
-    })
+    let range = Range { bound: SUMMON_RANGE, moves: SUMMON_MOVES };
+    can_attack(board, me, target, range)
 }
 
 fn plan(state: &mut State, eid: EID, leader: Option<EID>) -> Action {
@@ -1204,7 +1196,9 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
         Action::Attack { attack, target } => {
             let board = &mut state.board;
             let me = &board.entities[eid];
-            if !can_attack(board, me, target, attack.range) {
+            let range = me.species.range(attack);
+
+            if !can_attack(board, me, target, range) {
                 board.entities[eid].face_direction(target - source);
                 return ActionResult::failure();
             }

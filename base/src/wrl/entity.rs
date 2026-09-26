@@ -24,10 +24,14 @@ const SCENT_BASE: f64 = 0.25;
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Command
+// Command:
 
 #[derive(Clone, Copy, Debug)]
-pub struct AttackTarget { pub eid: Option<EID>, pub loc: Location, pub seen: bool }
+pub struct AttackTarget {
+    pub eid: Option<EID>,
+    pub loc: Location,
+    pub seen: bool,
+}
 
 #[derive(Clone, Copy, Debug)]
 pub enum Command {
@@ -38,7 +42,7 @@ pub enum Command {
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Entity
+// Entity:
 
 pub struct EntityArgs {
     pub name: Option<Rc<str>>,
@@ -179,7 +183,7 @@ impl Entity {
 
 //////////////////////////////////////////////////////////////////////////////
 
-// EID
+// EID:
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct EID(NonZeroU64);
@@ -187,7 +191,7 @@ static_assert_size!(Option<EID>, 8);
 
 //////////////////////////////////////////////////////////////////////////////
 
-// EntityMap
+// EntityMap:
 
 #[derive(Default)]
 pub struct EntityMap {
