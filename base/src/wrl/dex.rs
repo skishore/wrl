@@ -14,9 +14,16 @@ use super::game::{TF, TileFlags};
 
 type AttackEffect = fn(&mut RNG, Point, Point) -> Effect;
 
+#[derive(Clone, Copy)]
+pub struct Range {
+    pub bound: Bound,
+    pub moves: TileFlags,
+}
+
 pub struct Attack {
     pub name: &'static str,
-    pub range: Bound,
+    pub bound: Bound,
+    pub contact: bool,
     pub damage: i32,
     pub effect: AttackEffect,
 }
@@ -34,17 +41,17 @@ impl std::fmt::Debug for Attack {
 }
 
 static ATTACKS: LazyLock<HashMap<&'static str, Attack>> = LazyLock::new(|| {
-    let items: Vec<(&'static str, i32, i32, AttackEffect)> = vec![
-        ("Blizzard", 12, 120, effect::BlizzardEffect),
-        ("Ember",    12, 40,  effect::EmberEffect),
-        ("Headbutt", 6,  70,  effect::HeadbuttEffect),
-        ("Ice Beam", 12, 60,  effect::IceBeamEffect),
-        ("Tackle",   6,  40,  effect::HeadbuttEffect),
+    let items: Vec<(&'static str, i32, i32, i32, AttackEffect)> = vec![
+        ("Blizzard", 0, 12, 120, effect::BlizzardEffect),
+        ("Ember",    0, 12, 40,  effect::EmberEffect),
+        ("Headbutt", 1, 6,  70,  effect::HeadbuttEffect),
+        ("Ice Beam", 0, 12, 60,  effect::IceBeamEffect),
+        ("Tackle",   1, 6,  40,  effect::HeadbuttEffect),
     ];
     let mut result = HashMap::default();
-    for (name, range, damage, effect) in items {
-        let range = Bound::new(range);
-        result.insert(name, Attack { name, range, damage, effect });
+    for (name, contact, range, damage, effect) in items {
+        let (bound, contact) = (Bound::new(range), contact > 0);
+        result.insert(name, Attack { name, bound, contact, damage, effect });
     }
     result
 });
@@ -78,6 +85,13 @@ impl Species {
 
     pub fn human(&self) -> bool { self.flags.any(SF::Human) }
     pub fn predator(&self) -> bool { self.flags.any(SF::Predator) }
+
+    // Resolve an attack's range:
+
+    pub fn range(&self, attack: &Attack) -> Range {
+        let moves = if attack.contact { self.moves } else { TileFlags::CanFlyOver };
+        Range { bound: attack.bound, moves }
+    }
 }
 
 impl std::fmt::Debug for Species {
@@ -107,7 +121,7 @@ static SPECIES: LazyLock<HashMap<&'static str, Species>> = LazyLock::new(|| {
         ("Squirtle",   0x80c0ff, walks, 0, 0, 0.250, 1.0, 200, vec!["Ice Beam"]),
         ("Pikachu",    0xffff00, walks, 0, 4, 0.500, 1.1, 200, vec![]),
         ("Eevee",      0xd0a070, walks, 0, 0, 1.000, 1.0, 200, vec!["Headbutt"]),
-        ("Goldeen",    0xff7050, swims, 0, 0, 0.125, 1.0, 200, vec!["Headbutt"]),
+        ("Goldeen",    0xff7050, swims, 0, 0, 0.125, 1.0, 200, vec!["Ice Beam"]),
     ];
     let mut result = HashMap::default();
     for (name, color, moves, predator, light, scent, speed, hp, attacks) in items {

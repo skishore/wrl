@@ -19,7 +19,7 @@ use crate::base::vision::{INITIAL_VISIBILITY, Vision, VisionArgs};
 use crate::{act, cb, cond, pri, run, seq, util};
 use super::bhv::{Bhv, BhvExt, Result};
 use super::debug::{DebugFile, DebugLine, DebugLog};
-use super::dex::{Attack, Species};
+use super::dex::{Attack, Range, Species};
 use super::entity::{AttackTarget, Command, Entity};
 use super::event::{Call, Location, Sense};
 use super::game::{Action, Item, TileFlags, move_ready};
@@ -1264,9 +1264,6 @@ fn LookTowards(ctx: &mut Ctx, target: PathTargetSelector) {
 
 // Attack execution:
 
-#[derive(Clone, Copy)]
-struct Range { bound: Bound, moves: TileFlags }
-
 fn AttackNow(ctx: &mut Ctx) -> Option<Action> {
     let Some(request) = &ctx.tmp.attack_request else { return None };
     let Choice::Attack(attack) = request.choice else { return None };
@@ -1287,36 +1284,8 @@ fn ChooseAttackTarget(ctx: &mut Ctx, target: AttackTargetSelector) -> bool {
     ctx.tmp.attack_request.is_some()
 }
 
-fn CanSeeTarget(ctx: &Ctx) -> bool {
-    let Some(request) = &ctx.tmp.attack_request else { return false };
-    ctx.known.get(request.target).visible()
-}
-
-fn CanAttackTarget(ctx: &Ctx) -> bool {
-    let Some(request) = &ctx.tmp.attack_request else { return false };
-    let Choice::Attack(attack) = request.choice else { return false };
-
-    let range = Range { bound: attack.range, moves: ctx.me.species.moves };
-    HasLineOfSight(ctx.known, ctx.pos, request.target, range)
-}
-
-fn HasLineOfSight(known: &Knowledge, source: Point, target: Point, range: Range) -> bool {
-    if source == target { return false; }
-    if !range.bound.contains(source - target) { return false; }
-    PathIsFree(known, range.moves, &LOS(source, target))
-}
-
-fn HasLOSAndVision(known: &Knowledge, source: Point, target: Point, range: Range) -> bool {
-    if !HasLineOfSight(known, source, target, range) { return false; }
-
-    let opacity = |x| known.get(x).tile().map_or(INITIAL_VISIBILITY, |x| x.opacity());
-    let args = VisionArgs { pos: source, dir: dirs::NONE, opacity };
-    VISION.with_borrow_mut(|x| x.check_point(&args, target))
-}
-
 fn CellIsFree(ctx: &Ctx, point: Point) -> bool {
-    let Ctx { known, pos, .. } = *ctx;
-    pos == point || known.get(point).status() == Status::Free
+    ctx.pos == point || ctx.known.get(point).status() == Status::Free
 }
 
 fn PathIsFree(known: &Knowledge, moves: TileFlags, path: &[Point]) -> bool {
@@ -1327,14 +1296,30 @@ thread_local! {
     static VISION: RefCell<Vision> = Vision::new(FOV_RADIUS_NPC).into();
 }
 
+fn HasLineOfSight(ctx: &Ctx, source: Point, target: Point, range: Range) -> bool {
+    let known = ctx.known;
+    if source == target { return false; }
+    if !range.bound.contains(source - target) { return false; }
+    if !PathIsFree(known, range.moves, &LOS(source, target)) { return false; }
+
+    // Check for visibility. If `source` is our current position, use the
+    // `known` value for `target`. Else, do a hypothetical visibility check.
+
+    if source == ctx.pos { return known.get(target).visible(); }
+
+    let opacity = |x| known.get(x).tile().map_or(INITIAL_VISIBILITY, |x| x.opacity());
+    let args = VisionArgs { pos: source, dir: dirs::NONE, opacity };
+    VISION.with_borrow_mut(|x| x.check_point(&args, target))
+}
+
 fn CanAttackFrom(ctx: &Ctx, point: Point) -> bool {
     if !CellIsFree(ctx, point) { return false; }
 
     let Some(request) = &ctx.tmp.attack_request else { return false };
     let Choice::Attack(attack) = request.choice else { return false };
 
-    let range = Range { bound: attack.range, moves: ctx.me.species.moves };
-    HasLOSAndVision(ctx.known, point, request.target, range)
+    let range = ctx.me.species.range(attack);
+    HasLineOfSight(ctx, point, request.target, range)
 }
 
 fn CanReturnFrom(ctx: &Ctx, point: Point) -> bool {
@@ -1346,7 +1331,7 @@ fn CanReturnFrom(ctx: &Ctx, point: Point) -> bool {
     if is_hidden_from(ctx, point, &[request.target]) { return false; }
 
     let range = Range { bound: SUMMON_RANGE, moves: SUMMON_MOVES };
-    HasLOSAndVision(ctx.known, request.target, point, range)
+    HasLineOfSight(ctx, request.target, point, range)
 }
 
 fn PathMatchesTarget(ctx: &Ctx) -> bool {
@@ -1392,16 +1377,16 @@ fn StayInRange(ctx: &mut Ctx, valid: CellPredicate) -> bool {
     let Some(request) = &ctx.tmp.attack_request else { return false };
 
     let target = request.target;
-    let range = match request.choice {
-        Choice::Attack(attack) => attack.range,
-        Choice::Return => Bound::new(1),
+    let radius = match request.choice {
+        Choice::Attack(attack) => attack.bound.radius,
+        Choice::Return => 1,
     };
 
     // Given a non-empty list of "good" directions (each of which maintains
     // line-of-sight to the target), choose one closest to our attack range.
     let pick = |dirs: &[Delta], rng: &mut RNG| {
         let cell = known.get(target);
-        let mut radius = range.radius;
+        let mut radius = radius;
 
         // Check for any of several reasons to move closer to a target entity.
         // These reasons don't apply to cells, because cells don't move.
@@ -1812,7 +1797,10 @@ fn SelectEnemyTarget(ctx: &mut Ctx) -> bool {
 
 // Follower AI:
 
-pub struct Follower { pub pos: Point, pub moves: TileFlags }
+pub struct Follower {
+    pub pos: Point,
+    pub moves: TileFlags,
+}
 
 pub fn rivals(me: &Entity) -> Vec<Follower> {
     let mut result = HashMap::default();
@@ -2092,13 +2080,12 @@ fn Attack(name: &'static str, target: AttackTargetSelector) -> impl Bhv {
     seq![
         name,
         cond!("ChooseTarget", move |x| ChooseAttackTarget(x, target)),
-        cond!("CanSeeTarget", |x| CanSeeTarget(x)),
         pri![
-            "AttackVisibleTarget",
+            "AttackTarget",
             seq![
                 "AttackIfReady",
                 cond!("MoveReady", |x| move_ready(x.me)),
-                cond!("CanAttackTarget", |x| CanAttackTarget(x)),
+                cond!("CanAttackTarget", |x| CanAttackFrom(x, x.pos)),
                 act!("AttackNow", AttackNow),
             ],
             MoveIntoRange(PathKind::Source, CanAttackFrom),
