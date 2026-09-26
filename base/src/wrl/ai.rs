@@ -1240,19 +1240,26 @@ fn ExtendPathToTarget(ctx: &mut Ctx, kind: PathKind) {
 }
 
 fn LookTowards(ctx: &mut Ctx, target: PathTargetSelector) {
-    let source = ctx.pos;
     let Some(target) = target(ctx) else { return };
 
-    ctx.action = match ctx.action.take() {
-        Some(Action::Idle | Action::Look { .. }) => {
-            Some(Action::Look { look: target - source })
-        }
-        Some(Action::Move { step, turns, .. }) => {
-            Some(Action::Move { look: target - source - step, step, turns })
-        }
-        x => x,
+    let path = &mut ctx.blackboard.path;
+    if path.kind != PathKind::None { path.target = Some(target) };
+
+    let prev = match &ctx.action {
+        &Some(Action::Idle | Action::Look { .. }) => Some((dirs::NONE, 0.)),
+        &Some(Action::Move { step, turns, .. }) => Some((step, turns)),
+        _ => None,
     };
-    ctx.blackboard.path.target = Some(target);
+    let Some((step, turns)) = prev else { return };
+
+    let look = target - ctx.pos - step;
+    if !GetVisionRange(ctx.me).contains(look) { return };
+
+    ctx.action = if turns > 0. {
+        Some(Action::Move { look, step, turns })
+    } else {
+        Some(Action::Look { look })
+    };
 }
 
 // Attack execution:
@@ -1997,7 +2004,8 @@ fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
     if moves.is_empty() { return None; }
 
     let step = *weighted(&moves, ctx.env.rng);
-    Some(Action::Move { look: step, step, turns: FOLLOW_TURNS })
+    let look = if step == dirs::NONE { ctx.dir } else { step };
+    Some(Action::Move { look, step, turns: FOLLOW_TURNS })
 }
 
 //////////////////////////////////////////////////////////////////////////////
