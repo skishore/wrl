@@ -14,7 +14,7 @@ use super::dex::{Attack, Species};
 use super::effect::{Frame, ParticleData, RenderData};
 use super::entity::{AttackTarget, Command, EID, Entity, Teammate};
 use super::event::{Call, Location, Sound};
-use super::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_, SUMMON_RANGE};
+use super::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_, SUMMON_MOVES, SUMMON_RANGE};
 use super::game::{Action, Input, Tile, TileFlags, show_item};
 use super::knowledge::{EntityKnowledge, Knowledge, PointLookup};
 
@@ -328,7 +328,7 @@ fn update_target(me: &Entity, target: &mut Target, update: Point) {
                 let cell = known.get(x);
                 let last = i + 1 == target.path.len();
                 let friend = cell.entity().map_or(false, |x| x.friend());
-                let moves = if last { moves } else { TileFlags::CanFlyOver };
+                let moves = if last { moves } else { SUMMON_MOVES };
 
                 let free = match cell.status_for(moves) {
                     Status::Blocked => false,
