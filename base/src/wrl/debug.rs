@@ -287,18 +287,18 @@ impl DebugFile {
         for (p, x) in self.map.iter_mut() {
             *x = UI::render_tile(me, p, None);
         }
+        if let Some(target) = me.ai.get_target() {
+            let source = me.ai.get_path().last().cloned().unwrap_or(me.pos);
+            for p in LOS(source, target).into_iter().skip(1) {
+                color(&mut self.map, p, 0x0000ff);
+            }
+            highlight(&mut self.map, target, 0x0000ff);
+        }
         for &p in me.ai.get_path() {
             color(&mut self.map, p, 0xff0000);
         }
         if let Some(&p) = me.ai.get_path().last() {
             highlight(&mut self.map, p, 0xff0000);
-        }
-        if let Some(target) = me.ai.get_target() {
-            let source = me.ai.get_path().last().cloned().unwrap_or(me.pos);
-            for p in LOS(source, target).into_iter().skip(1) {
-                color(&mut self.map, p, 0xff0000);
-            }
-            highlight(&mut self.map, target, 0xff0000);
         }
         Self::write_bin(&mut file, &self.map.size())?;
         Self::write_array(&mut file, self.map.raw_data())?;
