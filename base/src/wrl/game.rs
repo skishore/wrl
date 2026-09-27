@@ -63,6 +63,7 @@ pub const SNIFF_VOLUME:  Bound = Bound::new(8);
 pub const FOLLOW_RANGE:  Bound = Bound::new(4);
 pub const SUMMON_RANGE:  Bound = Bound::new(12);
 
+pub const ITEM_MOVES:   TileFlags = TileFlags::CanWalkOn;
 pub const SUMMON_MOVES: TileFlags = TileFlags::CanFlyOver;
 
 // Miscellaneous types:
@@ -448,6 +449,7 @@ impl Board {
 
     fn add_item(&mut self, eid: Option<EID>, pos: Point, item: Item) {
         let Some(cell) = self.map.entry_mut(pos) else { return };
+        if !cell.tile.can_move_to(ITEM_MOVES) { return };
 
         cell.items.push(item);
 
@@ -565,9 +567,14 @@ impl Board {
 
     fn set_tile(&mut self, point: Point, tile: &'static Tile) {
         let Some(cell) = self.map.entry_mut(point) else { return; };
+
+        if !tile.can_move_to(ITEM_MOVES) { cell.items.clear(); }
+
         let old_shadow = if cell.tile.casts_shadow() { 1 } else { 0 };
         let new_shadow = if tile.casts_shadow() { 1 } else { 0 };
+
         cell.tile = tile;
+
         self.update_shadow(point, new_shadow - old_shadow);
         self.lighting.set_opacity(point, tile.opacity());
     }
@@ -780,15 +787,10 @@ fn hit_tile(state: &mut State, eid: EID, target: Point) {
     let State { board, env, .. } = state;
     if !board.get_tile(target).drops_berries() { return; }
 
-    let moves = TF::CanWalkOn | TF::CanSwimOn;
-    let options: Vec<_> = dirs::ALL.clone().into_iter().filter(
-        |&x| board.get_status(target + x, moves) != Status::Blocked).collect();
-    if options.is_empty() { return; }
-
     let rng = &mut env.rng;
     let n = *weighted(&[(1, 0), (2, 1), (1, 2)], rng);
     for _ in 0..n {
-        let pos = target + *sample(&options, rng);
+        let pos = target + *sample(&dirs::ALL, rng);
         board.add_item(Some(eid), pos, Item::Berry);
     }
 }
