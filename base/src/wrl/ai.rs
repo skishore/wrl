@@ -1956,20 +1956,6 @@ pub fn ChooseDefenseSquare(leader: &Entity, follower: &Follower) -> Option<Point
 //
 // TODO: Try to memoize or use a smaller range for CellNearLeader.
 
-fn CellNearLeader(ctx: &mut Ctx) -> Option<Point> {
-    let leader = ctx.env.leader?;
-
-    ensure_reachable(ctx);
-
-    let mut best = ctx.pos;
-    for &(point, _) in &ctx.tmp.reachable.neighborhood.visited {
-        if (point - leader.pos).len_l2_squared() < (best - leader.pos).len_l2_squared() {
-            best = point;
-        }
-    }
-    Some(best)
-}
-
 fn ClosestRival(ctx: &Ctx) -> Option<Point> {
     let mut rivals = rivals(ctx.env.leader?);
     if rivals.is_empty() { return None; }
@@ -1989,7 +1975,19 @@ fn DefendLeader(ctx: &Ctx) -> Option<Point> {
     ChooseDefenseSquare(ctx.env.leader?, &follower)
 }
 
-fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
+fn MoveNearLeader(ctx: &mut Ctx) -> Option<Point> {
+    let target = ctx.env.leader?.pos;
+
+    ensure_reachable(ctx);
+
+    let mut best = ctx.pos;
+    for &(p, _) in &ctx.tmp.reachable.neighborhood.visited {
+        if (p - target).len_l2_squared() < (best - target).len_l2_squared() { best = p; }
+    }
+    Some(best)
+}
+
+fn StayNearLeader(ctx: &mut Ctx) -> Option<Point> {
     let leader = ctx.env.leader?;
     let (source, target) = (ctx.pos, leader.pos);
     if !Bound::new(3).contains(source - target) { return None; }
@@ -2004,8 +2002,7 @@ fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
     if moves.is_empty() { return None; }
 
     let step = *weighted(&moves, ctx.env.rng);
-    let look = if step == dirs::NONE { ctx.dir } else { step };
-    Some(Action::Move { look, step, turns: FOLLOW_TURNS })
+    Some(ctx.pos + step)
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -2036,6 +2033,12 @@ fn FollowLeader(ctx: &mut Ctx) -> Option<Action> {
 macro_rules! path {
     ($n:expr, $k:expr, $v:expr, $f:expr) => {
         seq![$n, ComputePath($k, $v), cb!("FollowPath", FollowPath), $f]
+    };
+}
+
+macro_rules! step {
+    ($n:expr, $k:expr, $t:expr) => {
+        Move($n, $k, cond!("ChoosePathTarget", move |x| ChoosePathTarget(x, $t)))
     };
 }
 
@@ -2071,10 +2074,10 @@ fn MoveIntoRange(kind: PathKind, valid: CellPredicate) -> impl Bhv {
     .on_running(|x| LookTowards(x, |x| AttackTarget(x)))
 }
 
-fn Move(name: &'static str, kind: PathKind, target: PathTargetSelector) -> impl Bhv {
+fn Move(name: &'static str, kind: PathKind, target: impl Bhv) -> impl Bhv {
     seq![
         name,
-        cond!("ChoosePathTarget", move |x| ChoosePathTarget(x, target)),
+        target,
         pri![
             "EnsurePath",
             CheckPath(kind, MatchesPathTarget),
@@ -2395,11 +2398,24 @@ fn FollowCommands() -> impl Bhv {
         seq![
             "MoveTowardsTarget",
             cond!("ChooseTarget", |x| ChooseAttackTarget(x, SelectSimpleTarget)),
-            Move("PathToTarget", PathKind::Target, |x| AttackTarget(x)),
+            step!("PathToTarget", PathKind::Target, |x| AttackTarget(x)),
         ]
         .on_running(|x| LookTowards(x, |x| AttackTarget(x))),
     ]
     .post_tick(ClearAttackCommand)
+}
+
+fn ChooseFollowerSquare() -> impl Bhv {
+    pri![
+        "ChooseFollowerSquare",
+        seq![
+            "MaybeDefendLeader",
+            cond!("LeaderHasRivals", |x| LeaderHasRivals(x)),
+            step!("DefendLeader", PathKind::Follow, |x| DefendLeader(x))
+        ],
+        cond!("StayNearLeader", |x| ChoosePathTarget(x, StayNearLeader)),
+        cond!("MoveNearLeader", |x| ChoosePathTarget(x, MoveNearLeader)),
+    ]
 }
 
 fn SummonRoot() -> impl Bhv {
@@ -2422,13 +2438,7 @@ fn SummonRoot() -> impl Bhv {
             ],
             pri![
                 "FollowerMoves",
-                seq![
-                    "MaybeDefendLeader",
-                    cond!("LeaderHasRivals", |x| LeaderHasRivals(x)),
-                    Move("DefendLeader", PathKind::Follow, |x| DefendLeader(x))
-                ],
-                act!("FollowLeader", FollowLeader),
-                Move("MoveToLeader", PathKind::Follow, CellNearLeader),
+                Move("FollowLeader", PathKind::Follow, ChooseFollowerSquare()),
                 act!("Idle", |_| Some(Action::Idle)),
             ]
             .on_running(|x| LookTowards(x, |x| ClosestRival(x))),
