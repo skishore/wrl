@@ -833,7 +833,7 @@ fn hit_entity(state: &mut State, eid: EID, attack: &Attack, logged: bool, tid: E
         if fainted { log.log_append(format!("{} fainted!", upper)); }
     }
 
-    if fainted { state.record_remove(tid, pos); }
+    if fainted { state.record_remove(tid, pos, species); }
 }
 
 fn summon_entity(state: &mut State, eid: EID, target: Point, index: usize, team: usize) {
@@ -1741,10 +1741,10 @@ impl State {
         debug.record(action, board, entity);
     }
 
-    fn record_remove(&mut self, eid: EID, pos: Point) {
+    fn record_remove(&mut self, eid: EID, pos: Point, species: &Species) {
         if self.env.mode == GameMode::Sim && eid != self.player {
             let eid = unsafe { std::mem::transmute::<EID, u64>(eid) };
-            println!("  EID {:2} @ {:>2?}: removed!", eid, pos);
+            println!("  EID {:2}: {} @ {:>2?}: removed!", eid, species.name, pos);
         }
     }
 
