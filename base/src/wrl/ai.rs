@@ -8,6 +8,7 @@ use std::ops::RangeInclusive;
 use rand::Rng;
 use rand_distr::{Distribution, Normal};
 use rand_distr::num_traits::Pow;
+use thin_vec::{thin_vec, ThinVec};
 
 use crate::base::pathing::{AStar, AStarHeuristic, Status};
 use crate::base::point::{Bound, Delta, LOS, Point, dirs};
@@ -20,7 +21,7 @@ use crate::{act, cb, cond, pri, run, seq, util};
 use super::bhv::{Bhv, BhvExt, Result};
 use super::debug::{DebugFile, DebugLine, DebugLog};
 use super::dex::{Attack, Range, Species};
-use super::entity::{AttackTarget, Command, Entity};
+use super::entity::{Command, Entity};
 use super::event::{Call, Location, Sense};
 use super::game::{Action, Item, TileFlags, move_ready};
 use super::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_};
@@ -321,7 +322,6 @@ impl std::ops::Deref for ScoredNeighborhood {
 struct PerTickState {
     attack_request: Option<AttackRequest>,
     path_request: Option<Point>,
-    command: Option<Command>,
 
     reachable: ScoredNeighborhood,
     sneakable: ScoredNeighborhood,
@@ -341,6 +341,7 @@ pub struct Ctx<'a> {
 
     // Mutable outputs:
     action: Option<Action>,
+    update: ThinVec<Update>,
     blackboard: &'a mut Blackboard,
     env: &'a mut AIEnv<'a>,
     tmp: PerTickState,
@@ -1740,8 +1741,14 @@ fn CloseToLeader(ctx: &Ctx) -> bool {
     ctx.env.leader.map_or(false, |x| GetVisionRange(x).contains(x.pos - ctx.pos))
 }
 
-fn ClearAttackCommand(ctx: &mut Ctx) {
-    if matches!(ctx.action, Some(Action::Attack { .. })) { ctx.me.command.take(); }
+fn CheckAttackSuccess(ctx: &mut Ctx) {
+    let attack = matches!(ctx.action, Some(Action::Attack { .. }));
+    if attack { ctx.update.push(Update::CommandSuccess); }
+}
+
+fn CheckCommandFailure(ctx: &mut Ctx) {
+    let exists = ctx.me.command.is_some();
+    if exists { ctx.update.push(Update::CommandFailure); }
 }
 
 fn SelectSimpleTarget(ctx: &mut Ctx) -> Option<AttackRequest> {
@@ -1749,14 +1756,14 @@ fn SelectSimpleTarget(ctx: &mut Ctx) -> Option<AttackRequest> {
 }
 
 fn SelectReturnTarget(ctx: &mut Ctx) -> Option<AttackRequest> {
-    let command = ctx.tmp.command.as_ref()?;
+    let command = ctx.me.command.as_ref()?;
     if !matches!(command, Command::Return | Command::Switch(..)) { return None };
 
     Some(AttackRequest { choice: Choice::Return, target: ctx.env.leader?.pos })
 }
 
 fn SelectPointTarget(ctx: &mut Ctx) -> Option<AttackRequest> {
-    let command = ctx.tmp.command.as_ref()?;
+    let command = ctx.me.command.as_ref()?;
     let Command::Attack(attack, target) = command else { return None };
     if target.eid.is_some() { return None; }
 
@@ -1764,7 +1771,7 @@ fn SelectPointTarget(ctx: &mut Ctx) -> Option<AttackRequest> {
 }
 
 fn SelectEnemyTarget(ctx: &mut Ctx) -> bool {
-    let Some(Command::Attack(attack, target)) = &ctx.tmp.command else { return false };
+    let Some(Command::Attack(attack, target)) = &ctx.me.command else { return false };
     let Some(eid) = target.eid else { return false };
 
     let other = ctx.known.entity(eid);
@@ -1773,20 +1780,10 @@ fn SelectEnemyTarget(ctx: &mut Ctx) -> bool {
     let loc = other.map_or(target.loc, |x| x.loc);
     let sense = other.map_or(Sense::Sound, |x| x.sense);
 
-    if !check_time!(ctx, loc.time, MIN_SEARCH_TURNS) {
-        ctx.me.command.take();
-        return false;
-    }
+    if target.seen && other.is_none() { return false; }
+    if !check_time!(ctx, loc.time, MIN_SEARCH_TURNS) { return false; }
 
-    if target.seen && other.is_none() {
-        ctx.me.command.take();
-        return false;
-    }
-
-    if !target.seen && other.is_some() {
-        let target = AttackTarget { seen: true, ..*target };
-        ctx.me.command.set(Some(Command::Attack(attack, target)));
-    }
+    if !target.seen && other.is_some() { ctx.update.push(Update::TargetSeen); }
 
     let target = Target { loc, sense, slow: false, sure: other.is_some() };
     SetChaseTarget(ctx, target, Some(attack));
@@ -2388,7 +2385,7 @@ fn FollowCommands() -> impl Bhv {
         ]
         .on_running(|x| LookTowards(x, |x| AttackTarget(x))),
     ]
-    .post_tick(ClearAttackCommand)
+    .post_tick(CheckAttackSuccess)
 }
 
 fn ChooseFollowerSquare() -> impl Bhv {
@@ -2412,11 +2409,11 @@ fn SummonRoot() -> impl Bhv {
             "SummonOptions",
             seq![
                 "MaybeFollowCommands",
-                cond!("HasCommand", |x| x.tmp.command.is_some()),
+                cond!("HasCommand", |x| x.me.command.is_some()),
                 cond!("CloseToLeader", |x| CloseToLeader(x)),
                 FollowCommands(),
             ]
-            .on_fail(|x| { x.me.command.take(); }),
+            .on_fail(CheckCommandFailure),
             seq![
                 "MaybeAttackRivals",
                 cond!("MoveReady", |x| move_ready(x.me)),
@@ -2464,11 +2461,19 @@ fn Root() -> impl Bhv {
 
 // Entry point:
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum Update { CommandFailure, CommandSuccess, TargetSeen }
+
 pub struct AIEnv<'a> {
     pub leader: Option<&'a Entity>,
     pub debug: Option<&'a mut DebugFile>,
     pub fov: &'a mut Vision,
     pub rng: &'a mut RNG,
+}
+
+pub struct AIPlan {
+    pub action: Action,
+    pub update: ThinVec<Update>,
 }
 
 pub struct AIState {
@@ -2503,11 +2508,9 @@ impl AIState {
         if item == &Item::Corpse { map.entry(PathKind::Meat).or_insert(pos); }
     }
 
-    pub fn plan(&mut self, me: &Entity, env: AIEnv) -> Action {
+    pub fn plan(&mut self, me: &Entity, env: AIEnv) -> AIPlan {
         let known = &*me.known;
-        let command = me.command.get();
         let blackboard = &mut self.blackboard;
-        let tmp = PerTickState { command, ..Default::default() };
         let mut env = AIEnv { ..env };
 
         let mut ctx = Ctx {
@@ -2519,11 +2522,14 @@ impl AIState {
 
             // Mutable outputs:
             action: None,
+            update: thin_vec![],
             blackboard,
             env: &mut env,
-            tmp,
+            tmp: Default::default(),
         };
         self.tree.tick(&mut ctx);
-        ctx.action.take().unwrap_or(Action::Idle)
+
+        let action = ctx.action.unwrap_or(Action::Idle);
+        AIPlan { action, update: ctx.update }
     }
 }

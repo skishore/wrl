@@ -1,4 +1,3 @@
-use std::cell::Cell;
 use std::collections::VecDeque;
 use std::iter::FusedIterator;
 use std::num::NonZeroU64;
@@ -81,7 +80,7 @@ pub struct Entity {
 
     // Team:
     pub leader: Option<EID>,
-    pub command: Cell<Option<Command>>,
+    pub command: Option<Command>,
     pub summons: Vec<EID>,
     pub team: Vec<Teammate>,
 
