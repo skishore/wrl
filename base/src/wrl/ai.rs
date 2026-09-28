@@ -416,7 +416,7 @@ fn ensure_vision(ctx: &mut Ctx) {
     if ctx.tmp.ran_vision { return; }
 
     let Ctx { known, pos, .. } = *ctx;
-    let opacity = |x| if known.get(x).blocked() { INITIAL_VISIBILITY } else { 0 };
+    let opacity = |p| if known.get(p).blocked() { INITIAL_VISIBILITY } else { 0 };
     let args = VisionArgs { pos, dir: dirs::NONE, opacity };
 
     ctx.env.fov.compute(&args);
@@ -474,7 +474,7 @@ fn UpdateLastSeen(ctx: &mut Ctx, kind: PathKind, valid: CellPredicate) -> Result
         let Ctx { known, me, pos, .. } = *ctx;
         let path = &mut ctx.blackboard.path;
         if path.kind == kind && let Some(&target) = path.path.last() &&
-           (target - pos).len_l1() > (path.skip as i32) &&
+           (target - pos).len_l1() > path.skip as i32 &&
            (cell.point - pos).len_l2_squared() < (target - pos).len_l2_squared() {
             let los = LOS(ctx.pos, cell.point);
             if PathIsFree(known, me.species.moves, &los) { path.replace(kind, los); }
@@ -1308,7 +1308,7 @@ fn HasLineOfSight(ctx: &Ctx, source: Point, target: Point, range: Range) -> bool
 
     if source == ctx.pos { return known.get(target).visible(); }
 
-    let opacity = |x| known.get(x).tile().map_or(INITIAL_VISIBILITY, |x| x.opacity());
+    let opacity = |p| known.get(p).tile().map_or(INITIAL_VISIBILITY, |x| x.opacity());
     let args = VisionArgs { pos: source, dir: dirs::NONE, opacity };
     VISION.with_borrow_mut(|x| x.check_point(&args, target))
 }
@@ -1365,7 +1365,7 @@ fn FindCellInRange(ctx: &mut Ctx, valid: CellPredicate) -> bool {
         Status::Occupied if (p - pos).len_l1() == 1 => Status::Blocked,
         x => x
     };
-    let valid = |x| valid(ctx, x);
+    let valid = |p| valid(ctx, p);
     let steps = Dijkstra(pos, valid, ASTAR_CELLS_ATTACK, check);
     let Some(last) = steps.and_then(|x| x.last().cloned()) else { return false };
 
@@ -1857,7 +1857,7 @@ pub fn ChooseDefenseSquare(leader: &Entity, follower: &Follower) -> Option<Point
         let los = &los[1..los.len() - 1];
 
         let moves = rival.moves;
-        let check = |&x| known.get(x).status_for(moves) == Status::Blocked;
+        let check = |&p| known.get(p).status_for(moves) == Status::Blocked;
         if los.iter().any(check) { continue; }
 
         let Delta(dx, dy) = rival.pos - leader.pos;
@@ -1939,7 +1939,7 @@ pub fn ChooseDefenseSquare(leader: &Entity, follower: &Follower) -> Option<Point
 // (even if that square is better, e.g. because it's further from the leader).
 // This "stickiness" heuristic yields more predictable behavior.
 //
-// TODO: Try to memoize or use a smaller range for CellNearLeader.
+// TODO: Try to memoize or use a smaller range for MoveNearLeader.
 
 fn ClosestRival(ctx: &Ctx) -> Option<Point> {
     let mut rivals = rivals(ctx.env.leader?);
@@ -1979,7 +1979,7 @@ fn StayNearLeader(ctx: &mut Ctx) -> Option<Point> {
 
     let moves = ctx.me.species.moves;
     let follower = Follower { pos: ctx.pos, moves };
-    let valid = |p: Point| CheckFollowerSquare(leader, &follower, p);
+    let valid = |p| CheckFollowerSquare(leader, &follower, p);
 
     let mut moves: Vec<_> = dirs::ALL.iter().filter_map(
         |&x| if valid(source + x) { Some((1, x)) } else { None }).collect();
@@ -2004,16 +2004,16 @@ fn StayNearLeader(ctx: &mut Ctx) -> Option<Point> {
 //    when we're near it again. Or: generalize this fallback to all "path to
 //    target" cases, and drop the first bullet above.
 //
-//  - We don't account for "attack moves" (i.e. what cells an attack can pass
-//    through, which may differ from what cells we can move on) correctly.
+//  - We shouldn't select an attack until after we've checked for whether we
+//    can find a path to execute it. For example, if we could take 1 step and
+//    use attack X, or 2 steps and use attack Y, and if Y is much stronger
+//    than X against the target, we should use Y.
 //
-//    For instance, we may be able to use a special attack over water even if
-//    we can't fly or swim. Note that CanReturnFrom does handle this logic.
-//
-//    The attack case is trickier because it interacts with attack range and
-//    strength. Just because we could take 1 step and use attack X doesn't
-//    make that a better option than taking 2 steps and using attack Y. Best
-//    would be to consider all pairs of (attack, closest source).
+//  - AttackEnemy and AttackRival's "target is visible" condition may be too
+//    strong. If the target is not visible, but if we think it would be if we
+//    glance in its direction, we should probably try moving to attack it.
+//    The bad case here is that the target is hidden (e.g. in shade or tall
+//    grass) and we repeatedly glance backwards each time it moves, though.
 
 macro_rules! path {
     ($n:expr, $k:expr, $v:expr, $f:expr) => {
