@@ -13,7 +13,7 @@ use crate::base::point::{Bound, Delta, DeltaLOS, LOS, Matrix, Point, dirs};
 use crate::base::util::{HashMap, HashSet, RNG, sample, weighted};
 use crate::base::vision::{INITIAL_VISIBILITY, VISIBILITY_LOSSES, Vision, VisionArgs};
 
-use super::ai::{AIEnv, AIState};
+use super::ai::{AIEnv, AIState, Update};
 use super::dex::{Attack, Range, Species};
 use super::debug::DebugFile;
 use super::effect::{CB, Effect, Frame, FT, Particle, ParticleData, RenderData, self};
@@ -607,10 +607,8 @@ impl Board {
 
         entity.known.remove_entity(oid, self.time);
 
-        let command = &entity.command;
-        if let Some(Command::Attack(_, x)) = command.get() && x.eid == Some(oid) {
-            command.take();
-        }
+        let command = &mut entity.command;
+        if let Some(Command::Attack(_, x)) = command && x.eid == Some(oid) { *command = None; }
     }
 
     fn update_known(&mut self, eid: EID, env: &mut Env) {
@@ -1027,14 +1025,27 @@ fn plan(state: &mut State, eid: EID, leader: Option<EID>) -> Action {
     let entity = &board.entities[eid];
     let leader = leader.map(|x| &board.entities[x]);
     let env = AIEnv { leader, debug, fov: vision, rng: &mut env.rng };
-    let action = ai.plan(entity, env);
+    let plan = ai.plan(entity, env);
 
     let entity = &mut board.entities[eid];
     swap(ai, &mut entity.ai);
 
     entity.known.events.clear();
 
-    action
+    plan.update.into_iter().for_each(|x| match x {
+        Update::CommandFailure | Update::CommandSuccess => {
+            if x == Update::CommandFailure && entity.leader == Some(state.player) {
+                let message = format!("{} gave up on your command.", entity.upper());
+                state.env.ui.log.log_failure(message);
+            }
+            entity.command = None;
+        }
+        Update::TargetSeen => {
+            if let Some(Command::Attack(_, x)) = &mut entity.command { x.seen = true; }
+        }
+    });
+
+    plan.action
 }
 
 fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
@@ -1359,7 +1370,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             if done { return ActionResult::success(); }
 
             let summon = &mut state.board.entities[oid];
-            summon.command.set(Some(command));
+            summon.command = Some(command);
 
             succeed(state, "")
         }
@@ -1491,18 +1502,19 @@ fn update_state(state: &mut State) {
 
         // Automatically stage the recall action.
         let player = state.get_player();
-        for (i, &summon) in player.summons.iter().enumerate() {
-            let summon = &state.board.entities[summon];
-            let Some(command) = summon.command.get() else { continue };
+        for (i, &oid) in player.summons.iter().enumerate() {
+            let summon = &state.board.entities[oid];
+            let Some(command) = &summon.command else { continue };
             if !matches!(command, Command::Return | Command::Switch(_)) { continue; }
             if !can_summon(&state.board, player, summon.pos) { continue; }
 
-            state.input = if let Command::Switch(team) = command {
+            state.input = if let Command::Switch(team) = *command {
                 Action::Switch { summon: i, team, quiet: true, fallback: true }
             } else {
                 Action::Recall { summon: i }
             };
-            summon.command.take();
+            let summon = &mut state.board.entities[oid];
+            summon.command = None;
             return true;
         }
         false
