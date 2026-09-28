@@ -4,7 +4,7 @@ resolver = "2"
 
 [profile.dev]
 incremental = true
-opt-level = 3
+opt-level = 1
 lto = "off"
 
 [profile.release]
