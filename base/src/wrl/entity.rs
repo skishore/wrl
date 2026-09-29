@@ -44,21 +44,23 @@ pub enum Command {
 // Entity:
 
 pub struct EntityArgs {
+    pub eid: EID,
     pub name: Option<Rc<str>>,
-    pub pos: Point,
     pub player: bool,
     pub leader: Option<EID>,
     pub species: &'static Species,
+    pub pos: Point,
 }
 
 pub struct Individual {
+    pub eid: EID,
     pub species: &'static Species,
     pub cur_hp: i32,
 }
 
 pub enum Teammate {
-    Out(EID),
     In(Individual),
+    Out(EID),
 }
 
 pub struct Entity {
@@ -91,16 +93,16 @@ pub struct Entity {
 }
 
 impl Entity {
-    fn new(eid: EID, args: &EntityArgs, rng: &mut RNG) -> Self {
+    fn new(args: &EntityArgs, rng: &mut RNG) -> Self {
         Self {
-            eid,
+            eid: args.eid,
             name: args.name.clone(),
             species: args.species,
             known: Default::default(),
             ai: Box::new(AIState::new(rng)),
             cur_hp: args.species.hp,
-            speed: args.species.speed,
             max_hp: args.species.hp,
+            speed: args.species.speed,
             move_timer: if args.leader.is_some() { MOVE_TIMER } else { 0 },
             turn_timer: 0,
 
@@ -165,8 +167,8 @@ impl Entity {
     }
 
     pub fn to_individual(&self) -> Individual {
-        let Self { species, cur_hp, .. } = *self;
-        Individual { species, cur_hp }
+        let Self { eid, species, cur_hp, .. } = *self;
+        Individual { eid, species, cur_hp }
     }
 
     pub fn too_big_to_hide(&self) -> bool {
@@ -184,7 +186,7 @@ impl Entity {
 
 // EID:
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
 pub struct EID(NonZeroU64);
 static_assert_size!(Option<EID>, 8);
 
@@ -200,13 +202,18 @@ pub struct EntityMap {
 }
 
 impl EntityMap {
-    pub fn add(&mut self, args: &EntityArgs, rng: &mut RNG) -> EID {
-        let eid = self.next.unwrap_or(EID(NonZeroU64::MIN));
-        self.next = Some(EID(eid.0.checked_add(1).unwrap()));
-        let prev = self.map.insert(eid, Entity::new(eid, args, rng));
+    pub fn allocate_eid(&mut self) -> EID {
+        let result = self.next.unwrap_or(EID(NonZeroU64::MIN));
+        self.next = Some(EID(result.0.checked_add(1).unwrap()));
+        result
+    }
+
+    pub fn add(&mut self, args: &EntityArgs, rng: &mut RNG) {
+        let eid = args.eid;
+        let prev = self.map.insert(eid, Entity::new(args, rng));
         assert!(prev.is_none());
         self.order.push(eid);
-        eid
+        self.order.sort();
     }
 
     pub fn remove(&mut self, eid: EID) -> Option<Entity> {

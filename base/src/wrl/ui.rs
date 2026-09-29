@@ -1315,16 +1315,16 @@ impl UI {
         for (i, key) in PARTY_KEYS.iter().enumerate() {
             let selected = menu.choice == i as i32;
             match options.get(i) {
-                Some(&Teammate::Out(x)) => {
-                    let x = me.known.entity(x).unwrap();
-                    let (hp, pp, species) = (x.hp, x.pp, x.species);
-                    self.render_option(*key, 1, selected, species, hp, pp, slice);
-                },
                 Some(Teammate::In(x)) => {
                     let (pp, species) = (1.0, x.species);
                     let hp = x.cur_hp as f64 / max(species.hp, 1) as f64;
                     self.render_option(*key, 0, selected, species, hp, pp, slice)
                 }
+                Some(&Teammate::Out(x)) => {
+                    let x = me.known.entity(x).unwrap();
+                    let (hp, pp, species) = (x.hp, x.pp, x.species);
+                    self.render_option(*key, 1, selected, species, hp, pp, slice);
+                },
                 None => self.render_empty_option(*key, UI_COL_SPACE + 1, slice),
             }
         }
