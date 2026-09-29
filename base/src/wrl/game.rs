@@ -239,7 +239,7 @@ impl FOV {
 
         // If they're hidden due to tall grass, then we can't see them.
         let cell = board.get_cell(point);
-        if cell.tile.is_cover() && !other.too_big_to_hide() { return false; }
+        if cell.tile.is_cover() && other.hidden_by_cover() { return false; }
 
         // If they're hidden due to being in shadow, we can't see them.
         let unlit = matches!(board.get_light(), Light::None);

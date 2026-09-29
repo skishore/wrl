@@ -150,7 +150,7 @@ impl EntityKnowledge {
     pub fn sneaking(&self) -> bool { self.flags.any(EF::Sneaking) }
     pub fn visible(&self) -> bool { self.flags.any(EF::Visible) }
 
-    pub fn too_big_to_hide(&self) -> bool { self.species.human() && !self.sneaking() }
+    pub fn hidden_by_cover(&self) -> bool { self.sneaking() || !self.species.human() }
 
     // Updates:
 
@@ -454,7 +454,7 @@ impl Knowledge {
             let entity = (|| {
                 if !see_big_entities { return None; }
                 let other = board.get_entity(eid?)?;
-                if !see_all_entities && !other.too_big_to_hide() { return None; }
+                if !see_all_entities && other.hidden_by_cover() { return None; }
                 Some(self.observe_entity(me, other, Sense::Sight))
             })();
 
