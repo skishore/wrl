@@ -470,9 +470,9 @@ impl Board {
 
     // Entity setters:
 
-    fn add_entity(&mut self, args: &EntityArgs, env: &mut Env) -> EID {
-        let pos = args.pos;
-        let eid = self.entities.add(args, &mut env.rng);
+    fn add_entity(&mut self, args: &EntityArgs, env: &mut Env) {
+        let EntityArgs { eid, pos, .. } = *args;
+        self.entities.add(args, &mut env.rng);
         let cell = self.map.entry_mut(pos).unwrap();
         let prev = replace(&mut cell.eid, Some(eid));
         assert!(prev.is_none());
@@ -483,8 +483,6 @@ impl Board {
 
         let light = args.species.light.radius;
         self.lighting.set_light(pos, light);
-
-        eid
     }
 
     fn move_entity(&mut self, eid: EID, target: Point) {
@@ -841,10 +839,10 @@ fn summon_entity(state: &mut State, eid: EID, target: Point, index: usize, team:
     let teammate = board.entities[eid].team.get(team);
     let Some(Teammate::In(teammate)) = teammate else { return };
 
-    let Individual { species, cur_hp } = *teammate;
+    let Individual { eid: oid, species, cur_hp } = *teammate;
     let (name, leader, player) = (None, Some(eid), false);
-    let args = EntityArgs { name, pos: target, player, leader, species };
-    let oid = board.add_entity(&args, env);
+    let args = EntityArgs { eid: oid, name, player, leader, species, pos: target };
+    board.add_entity(&args, env);
 
     let other = &mut board.entities[oid];
     other.cur_hp = cur_hp;
@@ -890,7 +888,7 @@ fn try_switch(state: &mut State, eid: EID, oid: EID, team: usize, quiet: bool) -
     let teammate = entity.team.get(team);
     let Some(Teammate::In(x)) = teammate else { return false };
 
-    let Individual { species, cur_hp } = *x;
+    let Individual { species, cur_hp, .. } = *x;
     if cur_hp == 0 { return false; }
 
     let tile = state.board.get_tile(target);
@@ -1293,8 +1291,8 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let Some(&oid) = summon else { return ActionResult::failure() };
 
             let new = match me.team.get(team) {
-                Some(Teammate::In(x)) => x.species.name,
                 Some(&Teammate::Out(x)) => state.board.entities[x].species.name,
+                Some(Teammate::In(x)) => x.species.name,
                 None => "your other teammate",
             };
             let old = state.board.entities[oid].species.name;
@@ -1315,7 +1313,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let teammate = me.team.get(team);
             let Some(Teammate::In(x)) = teammate else { return ActionResult::failure() };
 
-            let Individual { species, cur_hp } = *x;
+            let Individual { species, cur_hp, .. } = *x;
             if cur_hp == 0 { return ActionResult::failure(); }
 
             let target = source + dir;
@@ -1634,10 +1632,13 @@ impl State {
             rng,
         };
 
-        let input = Action::WaitForInput;
+        let eid = board.entities.allocate_eid();
         let (name, leader, player) = (Some("skishore".into()), None, true);
-        let args = EntityArgs { name, pos, player, leader, species };
-        let player = board.add_entity(&args, &mut env);
+        let args = EntityArgs { eid, name, player, leader, species, pos };
+        board.add_entity(&args, &mut env);
+
+        let player = eid;
+        let input = Action::WaitForInput;
 
         if matches!(mode, GameMode::Gym | GameMode::Sim | GameMode::Test) {
             board.map.entry_mut(pos).unwrap().eid = None;
@@ -1647,6 +1648,24 @@ impl State {
             me.known.mark_turn_boundary(player, speed, board.time);
             me.pos = Point(-9999, -9999);
         }
+
+        let teammate = |name: &str| {
+            let species = Species::get(name);
+            let eid = board.entities.allocate_eid();
+            Teammate::In(Individual { eid, species, cur_hp: species.hp })
+        };
+        let team = [
+            "Bulbasaur",
+            "Charmander",
+            "Squirtle",
+            "Pikachu",
+            "Pidgey",
+            "Goldeen",
+        ];
+        let team: Vec<_> = team.into_iter().map(teammate).collect();
+        let me = &mut board.entities[player];
+        me.dir = dirs::S;
+        me.team = team;
 
         let pos = |board: &Board, moves: TileFlags, rng: &mut RNG| {
             for _ in 0..100 {
@@ -1664,25 +1683,13 @@ impl State {
                 (false, _) => "Pidgey",
             };
             let species = Species::get(species);
-            let Some(x) = pos(&board, species.moves, &mut env.rng) else { continue };
+            let Some(pos) = pos(&board, species.moves, &mut env.rng) else { continue };
 
+            let eid = board.entities.allocate_eid();
             let (name, leader, player) = (None, None, false);
-            let args = EntityArgs { name, pos: x, player, leader, species };
+            let args = EntityArgs { eid, name, player, leader, species, pos };
             board.add_entity(&args, &mut env);
         }
-
-        let teammate = |name: &str| {
-            let species = Species::get(name);
-            Teammate::In(Individual { species, cur_hp: species.hp })
-        };
-        let me = &mut board.entities[player];
-        me.dir = dirs::S;
-        me.team.push(teammate("Bulbasaur"));
-        me.team.push(teammate("Charmander"));
-        me.team.push(teammate("Squirtle"));
-        me.team.push(teammate("Pikachu"));
-        me.team.push(teammate("Pidgey"));
-        me.team.push(teammate("Goldeen"));
         board.update_known(player, &mut env);
 
         let ui = &mut env.ui;

@@ -183,8 +183,8 @@ impl EntityKnowledge {
 
         self.team.clear();
         other.team.iter().for_each(|x| match x {
-            Teammate::Out(_) => self.team.push(true),
             Teammate::In(x) => self.team.push(x.cur_hp > 0),
+            Teammate::Out(_) => self.team.push(true),
         });
 
         self.hp = other.hp_fraction();
