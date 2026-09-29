@@ -1511,7 +1511,7 @@ impl UI {
         if entity.hp == 0. { return Glyph::wdfg('%', 0xff0000); }
 
         let glyph = Self::entity_glyph(entity);
-        let cover = tile.is_cover() && !entity.too_big_to_hide();
+        let cover = tile.is_cover() && entity.hidden_by_cover();
 
         if cover { glyph.with_fg(tile.glyph.fg()) } else { glyph }
     }

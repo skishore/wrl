@@ -144,6 +144,10 @@ impl Entity {
 
     // Getters:
 
+    pub fn hidden_by_cover(&self) -> bool {
+        self.sneaking || !self.species.human()
+    }
+
     pub fn hp_fraction(&self) -> f64 {
         self.cur_hp as f64 / std::cmp::max(self.max_hp, 1) as f64
     }
@@ -169,10 +173,6 @@ impl Entity {
     pub fn to_individual(&self) -> Individual {
         let Self { eid, species, cur_hp, .. } = *self;
         Individual { eid, species, cur_hp }
-    }
-
-    pub fn too_big_to_hide(&self) -> bool {
-        self.species.human() && !self.sneaking
     }
 
     // Mutators:
