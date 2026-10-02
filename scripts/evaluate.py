@@ -32,5 +32,9 @@ if __name__ == "__main__":
 
     for (species, counts) in sorted(species_counts.items()):
         print(f"{species}:")
+        if 0 not in counts:
+            counts[0] = NUM_SEEDS - sum(counts.values())
+        mean = sum(count * frequency for (count, frequency) in counts.items()) / NUM_SEEDS
+        print(f"  Mean death count: {mean}")
         for (count, frequency) in sorted(counts.items()):
             print(f"  {count} deaths: {frequency} times ({int(100 * frequency / NUM_SEEDS)}%)")
