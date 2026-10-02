@@ -70,8 +70,7 @@ const FLIGHT_PATH_TURNS: i32 = 8;
 const MIN_FLIGHT_TURNS: i32 = 16;
 const MAX_FLIGHT_TURNS: i32 = 64;
 
-const FOLLOW_TURNS: f64 = 0.5;
-const WANDER_TURNS: f64 = 2.0;
+const WANDER_TURNS: f64 = 3.0;
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -859,12 +858,10 @@ fn FollowPath(ctx: &mut Ctx) -> Result {
     if IsChasePathKind(kind) && let Some(x) = &ctx.blackboard.target {
         let limit = ctx.known.time_at_turn(MIN_SEARCH_TURNS);
         if x.target.time > limit && !x.target.slow { turns = 1. };
+    } else if matches!(kind, PathKind::Follow | PathKind::Source | PathKind::Target) {
+        turns = 1.;
     } else if kind == PathKind::Flee && any_threat_awake(ctx) {
         turns = 1.;
-    } else if kind == PathKind::Source || kind == PathKind::Target {
-        turns = 1.;
-    } else if kind == PathKind::Follow {
-        turns = FOLLOW_TURNS;
     }
 
     ctx.blackboard.path.step += 1;
