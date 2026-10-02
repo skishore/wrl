@@ -34,7 +34,6 @@ const UI_COLOR: i32 = 0xffc000;
 const UI_MOVE_ALPHA: f64 = 0.75;
 const UI_MOVE_FRAMES: i32 = 12;
 const UI_TARGET_FRAMES: i32 = 20;
-const UI_CALLOUT_FRAMES: i32 = 60;
 
 const UI_FOV_BRIGHTEN: f64 = 0.12;
 const UI_REMEMBERED: f64 = 0.20;
@@ -179,13 +178,6 @@ impl Default for Layout {
 #[derive(Copy, Clone)]
 pub struct MoveAnimation {
     pub color: Color,
-    pub frame: i32,
-    pub limit: i32,
-}
-
-#[derive(Copy, Clone)]
-pub struct TextAnimation {
-    pub text: &'static str,
     pub frame: i32,
     pub limit: i32,
 }
@@ -779,7 +771,6 @@ pub struct UI {
     layout: Layout,
 
     // Animations:
-    calls: HashMap<Point, TextAnimation>,
     moves: HashMap<Point, MoveAnimation>,
     rainfall: Option<Rainfall>,
 
@@ -824,11 +815,6 @@ impl UI {
         self.moves.insert(point, manim);
     }
 
-    pub fn animate_text(&mut self, point: Point, text: &'static str) {
-        let tanim = TextAnimation { text, frame: 0, limit: UI_CALLOUT_FRAMES };
-        self.calls.insert(point, tanim);
-    }
-
     pub fn process_input(&mut self, me: &mut Entity, input: Input) -> bool {
         process_ui_input(self, me, input)
     }
@@ -848,9 +834,6 @@ impl UI {
     pub fn update(&mut self, pos: Point, rng: &mut RNG) {
         self.frame += 1;
         self.update_weather(pos, rng);
-
-        for x in self.calls.values_mut() { x.frame += 1; }
-        self.calls.retain(|_, v| v.frame < v.limit);
 
         for x in self.moves.values_mut() { x.frame += 1; }
         self.moves.retain(|_, v| v.frame < v.limit);
@@ -988,7 +971,9 @@ impl UI {
         // Render all of the current animation's particles.
         let mut render_particle = |p: Point, r: &RenderData| match r {
             RenderData::Dummy => {},
-            RenderData::Text(_) => {},
+            &RenderData::Text(text, color) => {
+                self.render_call(me, color, p, text, slice);
+            },
             &RenderData::Flash(color) => {
                 let Some(p) = remap(p, slice) else { return };
                 slice.set(p, slice.get(p).with_fg(Color::black()).with_bg(color));
@@ -1011,11 +996,6 @@ impl UI {
         // If we're still alive, render arrows showing NPC facing.
         if effect.is_none() && me.cur_hp > 0 {
             self.render_arrows(known, offset, slice);
-        }
-
-        // Render any text animations.
-        for (&p, t) in &self.calls {
-            self.render_call(me, p, t, slice);
         }
 
         // Render the targeting UI on the map.
@@ -1093,21 +1073,19 @@ impl UI {
         }
     }
 
-    fn render_call(&self, me: &Entity, p: Point, t: &TextAnimation, slice: &mut Slice) {
-        let len = t.text.len() as i32;
+    fn render_call(&self, me: &Entity, c: Color, p: Point, t: &str, slice: &mut Slice) {
+        let len = t.len() as i32;
         let (shift, prefix, suffix) = if p.0 > me.pos.0 {
             (1, Some('-'), None)
         } else {
             (-len / 2 - 1, if len % 2 == 0 { Some(' ') } else { None }, Some('-'))
         };
-        let ratio = t.frame as f64 / t.limit as f64;
-        let color = 1. - ratio.powi(2);
         let offset = self.get_map_offset(me);
 
         slice.set_cursor(Point(2 * (p.0 + shift - offset.0), p.1 - offset.1));
-        slice.set_fg(Some(Color::white().fade(color)));
+        slice.set_fg(Some(c));
         if let Some(c) = prefix { slice.write_chr(c); }
-        slice.write_str(t.text);
+        slice.write_str(t);
         if let Some(c) = suffix { slice.write_chr(c); }
         slice.set_fg(None);
     }

@@ -16,7 +16,7 @@ use crate::base::vision::{INITIAL_VISIBILITY, VISIBILITY_LOSSES, Vision, VisionA
 use super::ai::{AIEnv, AIState, Update};
 use super::dex::{Attack, Range, Species};
 use super::debug::DebugFile;
-use super::effect::{CB, Effect, Frame, FT, Particle, ParticleData, RenderData, self};
+use super::effect::{CB, Effect, Frame, FT, Particle, ParticleData, self};
 use super::entity::{Command, Individual, Teammate};
 use super::entity::{EID, Entity, EntityArgs, EntityMap};
 use super::event::{Call, Location, Sense};
@@ -43,6 +43,8 @@ const UI_FLASH: i32 = 4;
 const UI_NOISE: i32 = 8;
 const UI_DAMAGE_FLASH: i32 = 6;
 const UI_DAMAGE_TICKS: i32 = 6;
+const UI_CALLOUT_DELAY: i32 = 4;
+const UI_CALLOUT_TICKS: i32 = 20;
 
 const SLOWED_TURNS: f64 = 1.5;
 
@@ -1065,6 +1067,12 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let event = &mut board.create_event(eid, data, source);
             for s in &sightings {
                 board.observe_event(s.eid, &s.merged, event, &mut state.env);
+                if s.eid != state.player { continue; }
+
+                let seen = s.source.seen();
+                let join = if seen { " is" } else { "" };
+                let desc = if seen { &board.entities[eid].upper() } else { "You hear something" };
+                state.env.ui.log.log(format!("{}{} tracking a scent...", desc, join));
             }
 
             let effect = apply_noise(source, 0xffff00, "*sniff*", noise.volume);
@@ -1113,20 +1121,26 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let board = &mut state.board;
             let sightings = get_sightings(board, &noise, &mut state.env);
 
+            // The callout text depends on the call type.
+            let color = 0xff8000;
+            let (text, prefix, suffix, wait) = match call {
+                Call::Command => ("*shout*", "shout", " a command!", false),
+                Call::Help    => ("*chirp*", "call", " for help!", true),
+                Call::Warning => ("*grrr*", "growl", "...", false),
+            };
+
             // Deliver a CallEvent to each other entity that heard the call.
             let data = EventData::Call(CallEvent { call, species });
             let event = &mut board.create_event(eid, data, source);
             for s in &sightings {
                 board.observe_event(s.eid, &s.merged, event, &mut state.env);
-            }
+                if s.eid != state.player { continue; }
 
-            // The callout text depends on the call type.
-            let color = 0xff8000;
-            let (text, wait) = match call {
-                Call::Command => ("*shout*", false),
-                Call::Help    => ("*chirp*", true),
-                Call::Warning => ("*grrr*",  false),
-            };
+                let seen = s.source.seen();
+                let join = if seen { "ed" } else { "" };
+                let desc = if seen { &board.entities[eid].upper() } else { "You hear something" };
+                state.env.ui.log.log(format!("{} {}{}{}", desc, prefix, join, suffix));
+            }
 
             // For some call types, we look before calling; when calling for
             // help, we shout in the direction of our allies, then look.
@@ -1409,7 +1423,13 @@ fn apply_noise<T: Copy + Into<Color>>(
         target: Point, color: T, text: &'static str, volume: Bound) -> Effect {
     let frame = vec![Particle::noise(target, color.into(), volume)];
     let mut effect = Effect::repeat(frame, UI_NOISE);
-    effect.frames[0].push(Particle::sound(target, text, volume));
+
+    for frame in 0..UI_CALLOUT_TICKS {
+        let ratio = frame as f64 / UI_CALLOUT_TICKS as f64;
+        let color = Color::white().fade(1. - ratio.powi(2));
+        let sound = Particle::sound(target, text, color, volume);
+        effect.add_particle(frame + UI_CALLOUT_DELAY, sound);
+    }
     effect
 }
 
@@ -1455,18 +1475,7 @@ fn update_player_knowledge(state: &mut State) {
     env.ui.update_focus(player);
     env.ui.update_moves(player);
 
-    let Some(frame) = board.get_frame() else { return };
-
-    let mut render_particle = |p: Point, r: &RenderData| {
-        let RenderData::Text(t) = r else { return };
-        env.ui.animate_text(p, t);
-    };
-    frame.iter().zip(&board._frame_mask).filter(|x| *x.1).for_each(|x| match &x.0.data {
-        ParticleData::Light(..) => {},
-        ParticleData::Shift(..) => {},
-        ParticleData::Sight(r) => render_particle(x.0.point, r),
-        ParticleData::Sound(_, r) => render_particle(x.0.point, r),
-    });
+    if board.get_frame().is_none() { return; }
 
     board.redo_effect_updates();
 

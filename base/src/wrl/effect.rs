@@ -29,7 +29,7 @@ pub enum RenderData {
     Dummy,
     Flash(Color),
     Glyph(Glyph),
-    Text(&'static str),
+    Text(&'static str, Color),
 }
 
 #[derive(Clone)]
@@ -67,8 +67,8 @@ impl Particle {
         Self { point: target, data: ParticleData::Shift(source) }
     }
 
-    pub fn sound(point: Point, text: &'static str, volume: Bound) -> Self {
-        Self { point, data: ParticleData::Sound(volume, RenderData::Text(text)) }
+    pub fn sound(point: Point, text: &'static str, color: Color, volume: Bound) -> Self {
+        Self { point, data: ParticleData::Sound(volume, RenderData::Text(text, color)) }
     }
 
     pub fn dummy(point: Point) -> Self {
