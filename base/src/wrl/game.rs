@@ -30,7 +30,7 @@ use super::ui::UI;
 
 // Constants
 
-pub const MOVE_TIMER: i32 = 960;
+pub const MOVE_TIMER: i32 = 480;
 pub const TURN_TIMER: i32 = 120;
 pub const WORLD_SIZE: i32 = 100;
 
@@ -60,7 +60,7 @@ pub const MOVE_VOLUME:   Bound = Bound::new(8);
 pub const SNEAK_VOLUME:  Bound = Bound::new(1);
 pub const SNIFF_VOLUME:  Bound = Bound::new(8);
 
-pub const FOLLOW_RANGE:  Bound = Bound::new(4);
+pub const FOLLOW_RANGE:  Bound = Bound::new(8);
 pub const SUMMON_RANGE:  Bound = Bound::new(12);
 
 pub const ITEM_MOVES:   TileFlags = TileFlags::CanWalkOn;
