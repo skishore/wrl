@@ -2012,6 +2012,13 @@ fn StayNearLeader(ctx: &mut Ctx) -> Option<Point> {
 //    glance in its direction, we should probably try moving to attack it.
 //    The bad case here is that the target is hidden (e.g. in shade or tall
 //    grass) and we repeatedly glance backwards each time it moves, though.
+//
+//  - Tricky hitch in MarkSafeIfLostView. This helper sets last_safe to the
+//    current time. If we resolve combat on the same turn in which we learn
+//    about a new, unknown entity (e.g. by sound), then that threat will pass
+//    the threat.time > max(last_safe, bb.prev_time) check on that turn, but
+//    we'll set last_safe to bb.turn_time during the turn, so it will fail the
+//    next one, and we won't complete the scan.
 
 macro_rules! path {
     ($n:expr, $k:expr, $v:expr, $f:expr) => {

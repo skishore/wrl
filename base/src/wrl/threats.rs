@@ -209,6 +209,17 @@ impl Threat {
     //   - When an entity is in combat it should prioritize threats that can
     //     hurt it (right now a predator may attack us even when it's under
     //     attack by prey, or vice-versa).
+    //
+    //   - Prey handling of "friendly noise sources" is quite wrong. We never
+    //     when they faint - see hit_entity() in game, which only removes
+    //     known entities, not noise sources. But we can mark them friendly
+    //     (based on Call::Help / Call::Warning species info), and if we
+    //     don't see them, we'll assume they're strong (see use of timid() in
+    //     the Threat ctor). This bugs can result in us keeping around 1-2
+    //     high-strength allies in our estimate even after they faint, and
+    //     sticking around long after we should flee.
+    //
+    //     We're fixing this by unifying entity and noise knowledge.
 
     // Threat scoring:
 
