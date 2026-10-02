@@ -181,7 +181,7 @@ struct Blackboard {
     prev_time: Timestamp,
     turn_time: Timestamp,
     last_scan: Timestamp,
-    last_warning: Timestamp,
+    last_warn: Timestamp,
 
     assess: Timer,
     hunger: Timer,
@@ -208,7 +208,7 @@ impl Blackboard {
             prev_time: Timestamp::default(),
             turn_time: Timestamp::default(),
             last_scan: Timestamp::default(),
-            last_warning: Timestamp::default(),
+            last_warn: Timestamp::default(),
 
             assess: Timer::new(rng, MAX_ASSESS),
             hunger: Timer::new(rng, MAX_HUNGER),
@@ -242,7 +242,8 @@ impl Blackboard {
         debug.append("Blackboard:");
         debug.indent(1, |debug| {
             debug.append(format!("prev_turn: {}", known.debug_time(self.prev_time)));
-            debug.append(format!("last_warning: {}", known.debug_time(self.last_warning)));
+            debug.append(format!("last_scan: {}", known.debug_time(self.last_scan)));
+            debug.append(format!("last_warn: {}", known.debug_time(self.last_warn)));
             debug.append(format!("path: {:?}{}", self.path.kind, path));
             debug.append(format!("scan: {:?}{}", self.scan.kind, scan));
             debug.newline();
@@ -613,7 +614,7 @@ fn WarnRecentThreats(ctx: &mut Ctx) -> Option<Action> {
     let bb = &mut ctx.blackboard;
     let Ctx { known, pos, .. } = *ctx;
     let limit = known.time_at_turn(WARNING_LIMIT_TURNS);
-    let stare = bb.last_warning > known.time_at_turn(WARNING_RETRY_TURNS);
+    let stare = bb.last_warn > known.time_at_turn(WARNING_RETRY_TURNS);
     let (mut call, mut scan) = (None, None);
 
     for threat in &mut bb.threats.threats {
@@ -631,7 +632,7 @@ fn WarnRecentThreats(ctx: &mut Ctx) -> Option<Action> {
             scan.get_or_insert(Action::Look { look });
         }
         if warn { threat.mark_warned(ctx.me, &mut ctx.env.rng); }
-        if warn { bb.last_warning = known.time(); }
+        if warn { bb.last_warn = known.time(); }
     }
     call.or(scan)
 }
