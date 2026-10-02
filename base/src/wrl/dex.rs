@@ -114,14 +114,14 @@ static SPECIES: LazyLock<HashMap<&'static str, Species>> = LazyLock::new(|| {
     let flies = TF::CanWalkOn | TF::CanFlyOver;
     let items = vec![
         ("Human",      0xffffff, walks, 0, 0, 0.000, 1.0, 8,   vec![]),
-        ("Bulbasaur",  0x408020, walks, 0, 0, 0.250, 1.6, 180, vec![]),
-        ("Charmander", 0xea8b24, walks, 1, 4, 0.500, 2.0, 160, vec!["Ember"]),
-        ("Squirtle",   0x80c0ff, walks, 0, 0, 0.250, 2.5, 140, vec!["Ice Beam"]),
-        ("Eevee",      0xd0a070, walks, 0, 0, 1.000, 2.0, 160, vec!["Headbutt"]),
-        ("Goldeen",    0xff7050, swims, 0, 0, 0.125, 2.0, 160, vec!["Ice Beam"]),
-        ("Pidgey",     0xd0a070, flies, 0, 0, 0.125, 3.2, 60,  vec![]),
-        ("Pikachu",    0xffff00, walks, 0, 4, 0.500, 2.0, 120, vec![]),
-        ("Rattata",    0xa060ff, walks, 1, 0, 1.000, 2.5, 120, vec!["Headbutt"]),
+        ("Bulbasaur",  0x408020, walks, 0, 0, 0.250, 1.2, 180, vec![]),
+        ("Charmander", 0xea8b24, walks, 1, 4, 0.500, 1.4, 160, vec!["Ember"]),
+        ("Squirtle",   0x80c0ff, walks, 0, 0, 0.250, 1.6, 140, vec!["Ice Beam"]),
+        ("Eevee",      0xd0a070, walks, 0, 0, 1.000, 1.4, 160, vec!["Headbutt"]),
+        ("Goldeen",    0xff7050, swims, 0, 0, 0.125, 1.4, 160, vec!["Ice Beam"]),
+        ("Pidgey",     0xd0a070, flies, 0, 0, 0.125, 1.8, 60,  vec![]),
+        ("Pikachu",    0xffff00, walks, 0, 4, 0.500, 1.4, 120, vec![]),
+        ("Rattata",    0xa060ff, walks, 1, 0, 1.000, 1.6, 120, vec!["Headbutt"]),
     ];
     let mut result = HashMap::default();
     for (name, color, moves, predator, light, scent, speed, hp, attacks) in items {
