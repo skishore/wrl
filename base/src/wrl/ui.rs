@@ -1084,7 +1084,7 @@ impl UI {
         slice.set_cursor(Point(2 * (p.0 + shift - offset.0), p.1 - offset.1));
         slice.set_fg(Some(c));
         if let Some(c) = prefix { slice.write_chr(c); }
-        slice.write_str(t);
+        t.chars().for_each(|x| { slice.write_chr(Glyph::bold(x)); });
         if let Some(c) = suffix { slice.write_chr(c); }
         slice.set_fg(None);
     }
