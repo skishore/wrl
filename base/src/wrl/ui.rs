@@ -947,8 +947,7 @@ impl UI {
         };
         let highlight = |slice: &mut Slice, point: Point, bg: Color| {
             let Some(point) = remap(point, slice) else { return };
-            let glyph = slice.get(point);
-            slice.set(point, glyph.with_fg(Color::black()).with_bg(bg));
+            slice.set(point, slice.get(point).with_fg(Color::black()).with_bg(bg));
         };
         let brighten = |slice: &mut Slice, point: Point| {
             let Some(point) = remap(point, slice) else { return };
@@ -1178,7 +1177,7 @@ impl UI {
                 let (fg, bg) = (Color::white(), Color::gray(UI_TARGET_FOV_SHADE));
                 for x in 0..UI_STATUS_SIZE {
                     let p = start + Point(x, 0);
-                    slice.set(p, Glyph::new(slice.get(p).ch(), fg, bg));
+                    slice.set(p, slice.get(p).with_fg(fg).with_bg(bg));
                 }
             }
         }

@@ -1,3 +1,4 @@
+use wrl_base::base::glyph::Char;
 use wrl_base::base::util::RNG;
 use wrl_base::wrl::game::Tile;
 use wrl_base::wrl::mapgen::{legacy_mapgen, mapgen};
@@ -24,16 +25,16 @@ fn main() {
         }
 
         let (ch, color) = if let Some(x) = Tile::try_get(ch) {
-            (x.glyph.ch().0 as u32, x.glyph.fg().0)
+            (x.glyph.ch(), x.glyph.fg().0)
         } else {
-            (ch as u32 + (0xff00 - 0x20), 0xffffff)
+            (Char::wide(ch), 0xffffff)
         };
         if Some(color) != last_color {
             let (r, g, b) = ((color >> 16) & 0xff, (color >> 8) & 0xff, color & 0xff);
             line.push_str(&format!("\x1b[38;2;{};{};{}m", r, g, b));
             last_color = Some(color);
         }
-        line.push(char::from_u32(ch).unwrap());
+        line.push(ch.get());
 
         if point.0 + 1 == map.size().0 {
             println!("{}\x1b[0m", line);
