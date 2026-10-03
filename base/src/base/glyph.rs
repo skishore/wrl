@@ -13,11 +13,18 @@ static_assert_size!(Char, 2);
 
 impl Char {
     pub fn char(ch: char) -> Self { Self(ch as u16) }
-    pub fn wide(ch: char) -> Self { Self(ch as u16 + (0xff00 - 0x20)) }
+    pub fn wide(ch: char) -> Self { Self(ch as u16 + (0x7f00 - 0x20)) }
 
-    pub fn is_wide(&self) -> bool { self.0 >= 0xff00 }
-    pub fn is_wide_space(&self) -> bool { self.0 == 0xff00 }
-    pub fn get(&self) -> char { char::from_u32(self.0 as u32).unwrap() }
+    pub fn bold(&self) -> Self { Self(self.0 | 0x8000) }
+
+    pub fn is_bold(&self) -> bool { (self.0 & 0x8000) != 0 }
+    pub fn is_wide(&self) -> bool { (self.0 & 0x7fff) >= 0x7f00 }
+    pub fn is_wide_space(&self) -> bool { (self.0 & 0x7fff) == 0x7f00 }
+
+    pub fn get(&self) -> char {
+        let code = (self.0 & 0x7fff) + if self.is_wide() { 0x8000 } else { 0 };
+        char::from_u32(code as u32).unwrap()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -78,6 +85,10 @@ impl Glyph {
 
     fn new(ch: Char, fg: Color, bg: Color) -> Self {
         Self((ch.0 as u64) | ((fg.0 as u64) << 16) | ((bg.0 as u64) << 40))
+    }
+
+    pub fn bold(ch: char) -> Self {
+        Self::new(Char::char(ch).bold(), Color::white(), Color::black())
     }
 
     pub fn char(ch: char) -> Self {

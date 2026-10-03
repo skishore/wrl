@@ -227,7 +227,7 @@ class Terminal {
     const fg = ((glyph0 >> 16) & 0xffff) | ((glyph1 & 0xff) << 16);
     const bg = (glyph1 >> 8) & 0xffffff;
 
-    let code = glyph0 & 0xffff;
+    let code = glyph0 & 0x7fff;
     code = this.boxDrawingMap.get(code) ?? code;
 
     if (code <= 0xff) {
@@ -235,8 +235,8 @@ class Terminal {
       if (cell.fgTint != fg) cell.fg.tint = cell.fgTint = fg;
       if (cell.bgTint != bg) cell.bg.tint = cell.bgTint = bg;
       return 1;
-    } else if (code >= 0xff00) {
-      const wide = code - 0xff00 + 0x20;
+    } else if (code >= 0x7f00) {
+      const wide = code - 0x7f00 + 0x20;
       const next = this.map[spriteIndex + 1];
       cell.fg.texture = this.aquariusFrames[2 * wide + 0];
       next.fg.texture = this.aquariusFrames[2 * wide + 1];

@@ -1,7 +1,7 @@
 use std::io::{self, Write};
 
 use game_loop::{game_loop, TimeTrait};
-use termion::{clear, color};
+use termion::{clear, color, style};
 use termion::cursor::{Goto, Hide, Show};
 use termion::event::{Event, Key, MouseButton, MouseEvent};
 use termion::input::{MouseTerminal, TermRead};
@@ -22,6 +22,7 @@ struct Screen {
     prev: Matrix<Glyph>,
     fg: Option<Color>,
     bg: Option<Color>,
+    bold: bool,
 }
 
 impl Screen {
@@ -33,7 +34,7 @@ impl Screen {
         let (fg, bg) = (None, None);
         let extent = Point(x as i32, y as i32);
         let offset = Delta((extent - size).0 / 2 + 1, (extent - size).1 / 2 + 1);
-        Self { extent, offset, output, next, prev, fg, bg }
+        Self { extent, offset, output, next, prev, fg, bg, bold: false }
     }
 
     fn render(&mut self, stats: &Stats, delta: f64) -> io::Result<()> {
@@ -61,6 +62,7 @@ impl Screen {
                 let glyph = self.next.get(Point(x, y));
                 self.set_foreground(glyph.fg())?;
                 self.set_background(glyph.bg())?;
+                self.set_bold(glyph.ch().is_bold())?;
                 x += self.write_char(glyph.ch())?;
             }
         }
@@ -94,7 +96,8 @@ impl Screen {
 
     fn reset_colors(&mut self) -> io::Result<()> {
         self.clear_foreground()?;
-        self.clear_background()
+        self.clear_background()?;
+        self.clear_bold()
     }
 
     fn clear_foreground(&mut self) -> io::Result<()> {
@@ -105,6 +108,11 @@ impl Screen {
     fn clear_background(&mut self) -> io::Result<()> {
         self.bg = None;
         write!(self.output, "{}", color::Bg(color::Reset))
+    }
+
+    fn clear_bold(&mut self) -> io::Result<()> {
+        self.bold = false;
+        write!(self.output, "{}", style::Reset)
     }
 
     fn set_foreground(&mut self, color: Color) -> io::Result<()> {
@@ -123,6 +131,16 @@ impl Screen {
         let g = ((color.0 >> 8) & 0xff) as u8;
         let b = (color.0 & 0xff) as u8;
         write!(self.output, "{}", color::Bg(color::Rgb(r, g, b)))
+    }
+
+    fn set_bold(&mut self, bold: bool) -> io::Result<()> {
+        if self.bold == bold { return Ok(()); }
+        self.bold = bold;
+        if bold {
+            write!(self.output, "{}", style::Bold)
+        } else {
+            write!(self.output, "{}", style::Reset)
+        }
     }
 
     fn write_char(&mut self, ch: Char) -> io::Result<i32> {
