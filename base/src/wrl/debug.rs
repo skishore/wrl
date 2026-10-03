@@ -273,13 +273,13 @@ impl DebugFile {
         let color = |map: &mut Matrix<Glyph>, p: Point, c: i32| {
             if p == me.pos { return; }
             let mut glyph = map.get(p);
-            if glyph.ch() == Glyph::wide(' ').ch() { glyph = Glyph::wide('.'); }
+            if glyph.ch().is_wide_space() { glyph = Glyph::wide('.'); }
             map.set(p, glyph.with_fg(c));
         };
         let highlight = |map: &mut Matrix<Glyph>, p: Point, c: i32| {
             if p == me.pos { return; }
             let mut glyph = map.get(p);
-            if glyph.ch() == Glyph::wide(' ').ch() { glyph = Glyph::wide('.'); }
+            if glyph.ch().is_wide_space() { glyph = Glyph::wide('.'); }
             map.set(p, glyph.with_fg(Color::black()).with_bg(c));
         };
 

@@ -126,11 +126,11 @@ impl Screen {
     }
 
     fn write_char(&mut self, ch: Char) -> io::Result<i32> {
-        if ch.0 == 0xff00 {
+        if ch.is_wide_space() {
             write!(self.output, "  ")?;
             Ok(2)
         } else {
-            write!(self.output, "{}", char::from_u32(ch.0 as u32).unwrap())?;
+            write!(self.output, "{}", ch.get())?;
             Ok(if ch.is_wide() { 2 } else { 1 })
         }
     }

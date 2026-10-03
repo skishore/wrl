@@ -8,11 +8,16 @@ use super::point::{Delta, Matrix, Point};
 // Rendering helpers: Char, Color, Glyph
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
-pub struct Char(pub u16);
+pub struct Char(u16);
 static_assert_size!(Char, 2);
 
 impl Char {
+    pub fn char(ch: char) -> Self { Self(ch as u16) }
+    pub fn wide(ch: char) -> Self { Self(ch as u16 + (0xff00 - 0x20)) }
+
     pub fn is_wide(&self) -> bool { self.0 >= 0xff00 }
+    pub fn is_wide_space(&self) -> bool { self.0 == 0xff00 }
+    pub fn get(&self) -> char { char::from_u32(self.0 as u32).unwrap() }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -71,26 +76,24 @@ impl From<char> for Glyph {
 impl Glyph {
     // Constructors:
 
-    pub fn new(ch: Char, fg: Color, bg: Color) -> Self {
+    fn new(ch: Char, fg: Color, bg: Color) -> Self {
         Self((ch.0 as u64) | ((fg.0 as u64) << 16) | ((bg.0 as u64) << 40))
     }
 
     pub fn char(ch: char) -> Self {
-        Self::new(Char(ch as u16), Color::white(), Color::black())
+        Self::new(Char::char(ch), Color::white(), Color::black())
     }
 
     pub fn chfg<T: Into<Color>>(ch: char, fg: T) -> Self {
-        Self::new(Char(ch as u16), fg.into(), Color::black())
+        Self::new(Char::char(ch), fg.into(), Color::black())
     }
 
     pub fn wide(ch: char) -> Self {
-        let ch = Char((ch as u16) + (0xff00 - 0x20));
-        Self::new(ch, Color::white(), Color::black())
+        Self::new(Char::wide(ch), Color::white(), Color::black())
     }
 
     pub fn wdfg<T: Into<Color>>(ch: char, fg: T) -> Self {
-        let ch = Char((ch as u16) + (0xff00 - 0x20));
-        Self::new(ch, fg.into(), Color::black())
+        Self::new(Char::wide(ch), fg.into(), Color::black())
     }
 
     pub fn with_fg<T: Into<Color>>(&self, color: T) -> Self {
