@@ -10,9 +10,9 @@ use crate::base::util::{HashMap, HashSet, RNG};
 use crate::base::vision::{Vision, VisionArgs};
 
 use super::ai::{ChooseDefenseSquare, CheckFollowerSquare, Follower};
-use super::dex::{Attack, Species};
+use super::dex::Attack;
 use super::effect::{Frame, ParticleData, RenderData};
-use super::entity::{AttackTarget, Command, EID, Entity, Teammate};
+use super::entity::{AttackTarget, Command, EID, Entity, Individual, Teammate};
 use super::event::{Call, Location, Sound};
 use super::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_, SUMMON_MOVES, SUMMON_RANGE};
 use super::game::{Action, Input, Tile, TileFlags, show_item};
@@ -74,6 +74,14 @@ fn get_direction(ch: char) -> Option<Delta> {
         '.' => Some(dirs::NONE),
         _ => None,
     }
+}
+
+fn describe_entity(x: &EntityKnowledge) -> &str {
+    if let Some(x) = &x.name { x.as_ref() } else { x.species.name }
+}
+
+fn describe_teammate(x: &Individual) -> &str {
+    if let Some(x) = &x.name { x.as_ref() } else { x.species.name }
 }
 
 fn describe_sound(sound: Sound) -> &'static str {
@@ -220,6 +228,18 @@ fn can_target(view: &EntityKnowledge) -> bool {
     view.visible() && !view.friend()
 }
 
+fn get_summon(me: &Entity, summon: usize) -> Option<&EntityKnowledge> {
+    if let Some(&x) = me.summons.get(summon) { me.known.entity(x) } else { None }
+}
+
+fn get_teammate(me: &Entity, team: usize) -> Option<&Individual> {
+    if let Teammate::In(x) = me.team.get(team)? { Some(x) } else { None }
+}
+
+fn get_teammate_moves(me: &Entity, team: usize) -> TileFlags {
+    get_teammate(me, team).map_or(TileFlags::Empty, |x| x.species.moves)
+}
+
 fn init_target(data: TargetData, source: Point, target: Point) -> Box<Target> {
     let (error, frame, okay_until, path) = ("".into(), 0, 0, vec![]);
     Box::new(Target { data, error, frame, okay_until, path, source, target })
@@ -228,10 +248,7 @@ fn init_target(data: TargetData, source: Point, target: Point) -> Box<Target> {
 fn init_summon_target(me: &Entity, team: usize) -> Box<Target> {
     let Entity { pos, dir, .. } = *me;
     let known = &*me.known;
-    let moves = match me.team.get(team) {
-        Some(Teammate::In(x)) => x.species.moves,
-        _ => TileFlags::Empty,
-    };
+    let moves = get_teammate_moves(me, team);
     let follower = Follower { pos, moves };
     let defender = ChooseDefenseSquare(me, &follower);
     let data = TargetData::Summon { team, range: SUMMON_RANGE };
@@ -308,11 +325,8 @@ fn update_target(me: &Entity, target: &mut Target, update: Point) {
             let okay = target.error.is_empty();
             target.okay_until = if okay { target.path.len() } else { 0 };
         }
-        TargetData::Summon { team, range } => {
-            let moves = match me.team.get(*team) {
-                Some(Teammate::In(x)) => x.species.moves,
-                _ => TileFlags::Empty,
-            };
+        &TargetData::Summon { team, range } => {
+            let moves = get_teammate_moves(me, team);
             if target.path.is_empty() {
                 target.error = "There's something in the way.".into();
             }
@@ -427,8 +441,8 @@ fn process_summon_input(ui: &mut UI, me: &Entity, input: Input) {
     let teammate = match teammate {
         Teammate::In(x) => x,
         Teammate::Out(x) => {
-            let other = me.known.entity(*x).unwrap();
-            let error = format!("{} is already out!", other.species.name);
+            let other = me.known.entity(*x);
+            let error = format!("{} is already out!", other.map_or("?", describe_entity));
             ui.log.log_failure(error);
             return;
         }
@@ -437,7 +451,7 @@ fn process_summon_input(ui: &mut UI, me: &Entity, input: Input) {
     // If the given party member has fainted, fail.
 
     if teammate.cur_hp == 0 {
-        let error = format!("{} has no strength left!", teammate.species.name);
+        let error = format!("{} has no strength left!", describe_teammate(teammate));
         ui.log.log_failure(error);
         return;
     };
@@ -452,7 +466,7 @@ fn process_summon_input(ui: &mut UI, me: &Entity, input: Input) {
     }
 
     let target = init_summon_target(me, chosen);
-    let message = format!("Choose where to summon {}:", teammate.species.name);
+    let message = format!("Choose where to summon {}:", describe_teammate(teammate));
     ui.log.log_neutral(message);
     ui.target = Some(target);
     ui.summon = None;
@@ -574,8 +588,9 @@ fn process_ui_input(ui: &mut UI, me: &mut Entity, input: Input) -> bool {
     // Mode: giving a command to a party member:
 
     if let Some(x) = &mut ui.menu {
-        let summon = me.known.entity(me.summons[x.summon as usize]).unwrap();
-        let num_attacks = summon.species.attacks.len() as i32;
+        let summon = get_summon(me, x.summon).unwrap();
+        let attacks = &summon.species.attacks;
+        let num_attacks = attacks.len() as i32;
         let max_attacks = ATTACK_KEYS.len() as i32;
 
         let count = max_attacks + ACTION_KEYS.len() as i32;
@@ -599,7 +614,7 @@ fn process_ui_input(ui: &mut UI, me: &mut Entity, input: Input) -> bool {
             }
         } else if chosen >= 0 {
             const _: () = assert!(ACTION_KEYS.len() == 2);
-            let name = summon.species.name;
+            let name = describe_entity(summon);
 
             if !valid(chosen) {
                 ui.log.log_failure(format!("{} does not have that attack.", name));
@@ -612,8 +627,8 @@ fn process_ui_input(ui: &mut UI, me: &mut Entity, input: Input) -> bool {
                 ui.summon = Some(SummonMenu { choice: 0, replacing: Some(x.summon as usize) });
                 ui.menu = None;
             } else {
+                let attack = attacks[chosen as usize];
                 let update = get_initial_target(summon.pos);
-                let attack = summon.species.attacks[chosen as usize];
                 let data = TargetData::Attack { summon: x.summon as usize, attack };
                 let mut target = init_target(data, summon.pos, update);
                 update_target(me, &mut target, update);
@@ -860,7 +875,7 @@ impl UI {
     }
 
     pub fn update_moves(&mut self, me: &Entity) {
-        let known = &me.known;
+        let known = &*me.known;
         self.moves.retain(|&pos, _| !known.get(pos).occupied())
     }
 
@@ -1111,7 +1126,7 @@ impl UI {
             if ground && !cell.visible() { continue; }
 
             let Delta(x, y) = point - offset;
-            let ch = if index == 0 { 'o' } else { rainfall.ch };
+            let ch = if ground { 'o' } else { rainfall.ch };
             let color = Self::apply_light(&cell, base, /*entity=*/false);
             let glyph = Glyph::wdfg(ch, color);
             slice.set(Point(2 * x, y), glyph);
@@ -1161,14 +1176,16 @@ impl UI {
         let rivals = rivals;
 
         for rival in rivals {
-            let EntityKnowledge { hp, species, .. } = *rival;
+            let hp = rival.hp;
             let hp_color = Self::hp_color(hp);
             let hp_text = format!("{}%", max((100.0 * hp).floor() as i32, 1));
-            let (sn, sh) = (species.name.chars().count(), hp_text.chars().count());
+
+            let name = describe_entity(rival);
+            let (sn, sh) = (name.chars().count(), hp_text.chars().count());
             let ss = max(16 - sn as i32 - sh as i32, 0) as usize;
 
             slice.newline();
-            slice.write_chr(species.glyph).space().write_str(species.name);
+            slice.write_chr(rival.species.glyph).space().write_str(name);
             slice.spaces(ss).set_fg(Some(hp_color)).write_str(&hp_text).newline();
 
             let targeted = match &self.target {
@@ -1232,15 +1249,12 @@ impl UI {
                 let header = match &x.data {
                     TargetData::FarLook => "Examining...".into(),
                     &TargetData::Attack { summon, attack } => {
-                        let summon = me.known.entity(me.summons[summon]).unwrap();
-                        format!("Using {}'s {}...", summon.species.name, attack.name)
+                        let other = get_summon(me, summon).unwrap();
+                        format!("Using {}'s {}...", describe_entity(other), attack.name)
                     },
                     &TargetData::Summon { team, .. } => {
-                        let name = match &me.team[team] {
-                            Teammate::In(x) => x.species.name,
-                            Teammate::Out(_) => "?",
-                        };
-                        format!("Sending out {}...", name)
+                        let other = get_teammate(me, team).unwrap();
+                        format!("Sending out {}...", describe_teammate(other))
                     }
                 };
                 (tile, view, source, header, seen)
@@ -1296,14 +1310,14 @@ impl UI {
             let selected = menu.choice == i as i32;
             match options.get(i) {
                 Some(Teammate::In(x)) => {
-                    let (pp, species) = (1.0, x.species);
-                    let hp = x.cur_hp as f64 / max(species.hp, 1) as f64;
-                    self.render_option(*key, 0, selected, species, hp, pp, slice)
+                    let (pp, name) = (1.0, describe_teammate(x));
+                    let hp = x.cur_hp as f64 / max(x.max_hp, 1) as f64;
+                    self.render_option(*key, 0, selected, name, hp, pp, slice)
                 }
                 Some(&Teammate::Out(x)) => {
                     let x = me.known.entity(x).unwrap();
-                    let (hp, pp, species) = (x.hp, x.pp, x.species);
-                    self.render_option(*key, 1, selected, species, hp, pp, slice);
+                    let (hp, pp, name) = (x.hp, x.pp, describe_entity(x));
+                    self.render_option(*key, 1, selected, name, hp, pp, slice);
                 },
                 None => self.render_empty_option(*key, UI_COL_SPACE + 1, slice),
             }
@@ -1346,7 +1360,7 @@ impl UI {
     }
 
     fn render_option(&self, key: char, out: i32, selected: bool,
-                     species: &Species, hp: f64, pp: f64, slice: &mut Slice) {
+                     name: &str, hp: f64, pp: f64, slice: &mut Slice) {
         let out = out != 0;
         let (hp_color, pp_color) = (Self::hp_color(hp), Self::pp_color());
         let fg = if !out && hp > 0. { None } else { Some(UI_GRAY_OPTION.into()) };
@@ -1365,7 +1379,7 @@ impl UI {
 
         slice.newline();
         slice.spaces(UI_COL_SPACE as usize).write_chr(arrow).spaces(x);
-        slice.set_fg(fg).write_str(&prefix).write_str(species.name).newline();
+        slice.set_fg(fg).write_str(&prefix).write_str(name).newline();
         status_bar_line("HP: ", hp, hp_color, slice);
         status_bar_line("PP: ", pp, pp_color, slice);
         slice.newline();
@@ -1381,10 +1395,11 @@ impl UI {
             s.newline();
         };
 
-        slice.newline();
+        let name = describe_entity(view);
         let (hp, pp) = (view.hp, view.pp);
         let (hp_color, pp_color) = (Self::hp_color(hp), Self::pp_color());
-        let name = if let Some(x) = &view.name { x.as_ref() } else { view.species.name };
+
+        slice.newline();
         slice.set_fg(fg).write_str(&prefix).write_str(name).newline();
         status_bar_line("HP: ", hp, hp_color, slice);
         if !view.species.human() {

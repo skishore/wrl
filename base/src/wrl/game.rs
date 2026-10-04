@@ -1,5 +1,6 @@
 use std::fmt::Debug;
 use std::mem::{replace, swap};
+use std::rc::Rc;
 use std::sync::LazyLock;
 
 use rand::{Rng, SeedableRng};
@@ -842,13 +843,15 @@ fn summon_entity(state: &mut State, eid: EID, target: Point, index: usize, team:
     let teammate = board.entities[eid].team.get(team);
     let Some(Teammate::In(teammate)) = teammate else { return };
 
-    let Individual { eid: oid, species, cur_hp } = *teammate;
-    let (name, leader, player) = (None, Some(eid), false);
+    let name = teammate.name.as_ref().map(Rc::clone);
+    let Individual { eid: oid, species, cur_hp, max_hp, .. } = *teammate;
+    let (leader, player) = (Some(eid), false);
     let args = EntityArgs { eid: oid, name, player, leader, species, pos: target };
     board.add_entity(&args, env);
 
     let other = &mut board.entities[oid];
     other.cur_hp = cur_hp;
+    other.max_hp = max_hp;
 
     let me = &mut board.entities[eid];
     let index = std::cmp::min(index, me.summons.len());
@@ -1662,7 +1665,8 @@ impl State {
         let teammate = |name: &str| {
             let species = Species::get(name);
             let eid = board.entities.allocate_eid();
-            Teammate::In(Individual { eid, species, cur_hp: species.hp })
+            let (cur_hp, max_hp) = (species.hp, species.hp);
+            Teammate::In(Individual { eid, name: None, species, cur_hp, max_hp })
         };
         let team = [
             "Bulbasaur",
