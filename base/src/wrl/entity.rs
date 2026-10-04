@@ -54,8 +54,10 @@ pub struct EntityArgs {
 
 pub struct Individual {
     pub eid: EID,
+    pub name: Option<Rc<str>>,
     pub species: &'static Species,
     pub cur_hp: i32,
+    pub max_hp: i32,
 }
 
 pub enum Teammate {
@@ -171,8 +173,9 @@ impl Entity {
     }
 
     pub fn to_individual(&self) -> Individual {
-        let Self { eid, species, cur_hp, .. } = *self;
-        Individual { eid, species, cur_hp }
+        let name = self.name.as_ref().map(Rc::clone);
+        let Self { eid, species, cur_hp, max_hp, .. } = *self;
+        Individual { eid, name, species, cur_hp, max_hp }
     }
 
     // Mutators:
