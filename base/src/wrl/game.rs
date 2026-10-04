@@ -474,12 +474,13 @@ impl Board {
 
     fn add_entity(&mut self, args: &EntityArgs, env: &mut Env) {
         let EntityArgs { eid, pos, .. } = *args;
-        self.entities.add(args, &mut env.rng);
         let cell = self.map.entry_mut(pos).unwrap();
         let prev = replace(&mut cell.eid, Some(eid));
         assert!(prev.is_none());
 
+        self.entities.add(args, &mut env.rng);
         self.update_known(eid, env);
+
         let entity = &mut self.entities[eid];
         entity.known.mark_turn_boundary(entity.player, entity.speed, self.time);
 
@@ -493,8 +494,8 @@ impl Board {
         let light = entity.species.light.radius;
 
         let old = replace(&mut self.map.entry_mut(source).unwrap().eid, None);
-        assert!(old == Some(eid));
         let new = replace(&mut self.map.entry_mut(target).unwrap().eid, old);
+        assert!(old == Some(eid));
         assert!(new.is_none());
 
         self.lighting.set_light(source, -1);

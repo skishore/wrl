@@ -379,7 +379,7 @@ fn select_valid_target(ui: &mut UI, me: &Entity) -> Option<EID> {
 // UI inputs
 
 fn process_summon_input(ui: &mut UI, me: &Entity, input: Input) {
-    let menu = ui.summon.as_mut().unwrap();
+    let Some(menu) = ui.summon.as_mut() else { return };
 
     // Cancel out of the dialog:
 
@@ -414,8 +414,11 @@ fn process_summon_input(ui: &mut UI, me: &Entity, input: Input) {
     // If the given index isn't a valid party member, fail.
 
     let Some(teammate) = me.team.get(chosen) else {
-        let error = format!("You are only carrying {} Pokemon!", n);
-        ui.log.log_failure(error);
+        if n > 0 {
+            ui.log.log_failure(format!("You are only carrying {} Pokemon!", n));
+        } else {
+            ui.log.log_failure("You aren't carrying any Pokemon!");
+        };
         return;
     };
 
