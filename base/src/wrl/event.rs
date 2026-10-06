@@ -36,7 +36,6 @@ pub enum EventData {
     Attack(AttackEvent),
     Call(CallEvent),
     Move(MoveEvent),
-    Forget,
     Sniff,
     Spot,
 }
@@ -69,7 +68,6 @@ impl Event {
             EventData::Call(x)   => Some(Sound::Call(x.call)),
             EventData::Move(_)   => Some(Sound::Move),
             EventData::Sniff     => Some(Sound::Sniff),
-            EventData::Forget    => None,
             EventData::Spot      => None,
         }
     }
