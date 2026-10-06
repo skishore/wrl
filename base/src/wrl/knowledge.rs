@@ -165,14 +165,13 @@ impl EntityKnowledge {
 
     fn update(&mut self, me: &Entity, other: &Entity, sense: Sense, time: Timestamp) {
         // Entities are friends iff they're both tame and in the same party.
-        let leader = |entity: &Entity| { entity.leader.unwrap_or(entity.eid) };
+        let leader = |x: &Entity| { x.leader.unwrap_or(x.eid) };
 
         // Entities are rivals iff one is tame and one is wild, or they're
         // both tame but in different parties.
-        let trainer = |entity: &Entity| {
-            if let Some(x) = entity.leader { return Some(x) };
-            if entity.species.human() { return Some(entity.eid); }
-            None
+        let trainer = |x: &Entity| {
+            if let Some(x) = x.leader { return Some(x) };
+            if x.species.human() { Some(x.eid) } else { None }
         };
 
         self.dir = other.dir;
@@ -499,10 +498,11 @@ impl Knowledge {
     fn populate_scents(&mut self, me: &Entity, board: &Board, rng: &mut RNG) {
         if me.asleep || me.player { return; }
 
-        let initial = self.scents.len();
+        let mut update = false;
+        let leader = |x: &Entity| { x.leader.unwrap_or(x.eid) };
 
         for (_, other) in &board.entities {
-            if other.eid == me.eid { continue; }
+            if leader(me) == leader(other) { continue; }
 
             let mut remainder = rng.random::<f64>();
 
@@ -513,11 +513,11 @@ impl Knowledge {
                 let species = other.species;
                 let delta = trophic_level(other) - trophic_level(me);
                 self.scents.push(ScentKnowledge { delta, loc, species });
+                update = true;
                 break;
             }
         }
-
-        if self.scents.len() == initial { return; }
+        if !update { return; }
 
         // Keep scents sorted by time and de-duplicated by species.
         let mut seen = HashSet::default();
@@ -543,7 +543,6 @@ impl Knowledge {
             let event = Event { eid, uid, loc, data: EventData::Spot, sense };
             self.events.push(event);
         }
-
         entity
     }
 
