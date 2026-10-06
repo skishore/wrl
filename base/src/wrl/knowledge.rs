@@ -295,6 +295,7 @@ pub struct Knowledge {
     moves: TileFlags,
     timer: TurnTimer,
     eid_index: HashMap<EID, EIDEntry>,
+    uid_index: HashMap<UID, SourceHandle>,
     pos_index: HashMap<Point, PointEntry>,
     last_uid: u64,
 }
@@ -315,7 +316,7 @@ impl Knowledge {
     }
 
     pub fn source(&self, uid: UID) -> Option<&SourceKnowledge> {
-        self.sources.iter().find(|&x| x.uid == uid)
+        Some(&self.sources[*self.uid_index.get(&uid)?])
     }
 
     pub fn get(&self, p: Point) -> PointLookup<'_> {
@@ -552,17 +553,9 @@ impl Knowledge {
         assert!(event.uid.is_none());
         let eid = event.eid.take();
 
-        let unknown = |event: &mut Event, last_uid: &mut u64, sources: &mut List<SourceKnowledge>| {
-            *last_uid += 1;
-            let uid = UID((*last_uid).try_into().unwrap());
-            let handle = sources.push_front(SourceKnowledge::new(uid, event));
-            event.uid = Some(uid);
-            handle
-        };
-
         // Sounds from non-entities result in new, unknown sources.
         let Some(eid) = eid else {
-            return OccupantHandle::Source(unknown(event, &mut self.last_uid, &mut self.sources))
+            return OccupantHandle::Source(self.create_source(event));
         };
 
         let limit = self.timer.time_at_turn(SOURCE_TRACKING_LIMIT);
@@ -590,12 +583,21 @@ impl Knowledge {
         };
 
         // No existing source - create a new, unknown one.
-        let result = unknown(event, &mut self.last_uid, &mut self.sources);
-        entry.source = Some(result);
+        let result = self.create_source(event);
+        if let Some(x) = self.eid_index.get_mut(&eid) { x.source = Some(result); };
         OccupantHandle::Source(result)
     }
 
     // Entity updates:
+
+    fn create_source(&mut self, event: &mut Event) -> SourceHandle {
+        self.last_uid += 1;
+        let uid = UID((self.last_uid).try_into().unwrap());
+        let handle = self.sources.push_front(SourceKnowledge::new(uid, event));
+        self.uid_index.insert(uid, handle);
+        event.uid = Some(uid);
+        handle
+    }
 
     fn identify_source(&mut self, s: SourceHandle, limit: Timestamp) -> Option<UID> {
         let source = &self.sources[s];
@@ -603,6 +605,7 @@ impl Knowledge {
 
         let SourceKnowledge { uid, loc, .. } = *source;
         self.remove_occupant(OccupantHandle::Source(s), loc.pos);
+        self.uid_index.remove(&uid);
         self.sources.remove(s);
         Some(uid)
     }
@@ -697,6 +700,7 @@ impl Knowledge {
         if let Some(e) = x.eid { self.forget_source_link(e, h); }
 
         self.remove_occupant(OccupantHandle::Source(h), x.pos);
+        self.uid_index.remove(&x.uid);
     }
 
     fn forget_old_scents(&mut self) {
