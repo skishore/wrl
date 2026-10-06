@@ -314,6 +314,10 @@ impl Knowledge {
         Some(&self.entities[self.eid_index.get(&eid)?.entity?])
     }
 
+    pub fn source(&self, uid: UID) -> Option<&SourceKnowledge> {
+        self.sources.iter().find(|&x| x.uid == uid)
+    }
+
     pub fn get(&self, p: Point) -> PointLookup<'_> {
         PointLookup { root: self, spot: self.pos_index.get(&p) }
     }
@@ -363,9 +367,8 @@ impl Knowledge {
 
         if *x == Default::default() { self.eid_index.remove(&eid); }
 
-        let pos = self.delete_entity(h);
-
-        self.forget_event(Some(eid), None, pos);
+        let x = self.entities.remove(h);
+        self.remove_occupant(OccupantHandle::Entity(h), x.pos);
 
         debug_assert!(self.check_invariants());
     }
@@ -594,24 +597,13 @@ impl Knowledge {
 
     // Entity updates:
 
-    fn delete_entity(&mut self, h: EntityHandle) -> Point {
-        let pos = self.entities.remove(h).loc.pos;
-        self.remove_occupant(OccupantHandle::Entity(h), pos);
-        pos
-    }
-
-    fn delete_source(&mut self, h: SourceHandle) -> Point {
-        let pos = self.sources.remove(h).loc.pos;
-        self.remove_occupant(OccupantHandle::Source(h), pos);
-        pos
-    }
-
     fn identify_source(&mut self, s: SourceHandle, limit: Timestamp) -> Option<UID> {
         let source = &self.sources[s];
         if source.time <= limit { return None; }
 
-        let uid = source.uid;
-        self.delete_source(s);
+        let SourceKnowledge { uid, loc, .. } = *source;
+        self.remove_occupant(OccupantHandle::Source(s), loc.pos);
+        self.sources.remove(s);
         Some(uid)
     }
 
@@ -687,12 +679,6 @@ impl Knowledge {
         }
     }
 
-    fn forget_event(&mut self, eid: Option<EID>, uid: Option<UID>, pos: Point) {
-        let loc = Location { pos, time: self.timer.time };
-        let event = Event { eid, uid, loc, data: EventData::Forget, sense: Sense::Sight };
-        self.events.push(event);
-    }
-
     fn forget_last_cell(&mut self) {
         let Some(x) = self.cells.pop_back() else { return };
         let Some(y) = self.pos_index.get_mut(&x.point) else { return };
@@ -711,8 +697,6 @@ impl Knowledge {
         if let Some(e) = x.eid { self.forget_source_link(e, h); }
 
         self.remove_occupant(OccupantHandle::Source(h), x.pos);
-
-        self.forget_event(None, Some(x.uid), x.pos);
     }
 
     fn forget_old_scents(&mut self) {

@@ -293,7 +293,6 @@ impl Threat {
             },
             EventData::Attack(_) => {},
             EventData::Move(_) => {},
-            EventData::Forget => {},
             EventData::Sniff => {},
             EventData::Spot => {},
         }
@@ -416,6 +415,15 @@ impl ThreatState {
             threat.update_for_sighting(me, other);
             if threat.certain() && threat.hostile() { self.forget_tid(TID::CID); }
         }
+        self.threat_index.retain(|&k, &mut v| {
+            let keep = match k {
+                TID::CID => true,
+                TID::EID(x) => me.known.entity(x).is_some(),
+                TID::UID(x) => me.known.source(x).is_some(),
+            };
+            if !keep { self.threats.remove(v); }
+            keep
+        });
 
         self.uncertain.clear();
         self.menacing.clear();
@@ -543,12 +551,6 @@ impl ThreatState {
 
     fn get_by_event(&mut self, me: &Entity, event: &Event) -> Option<&mut Threat> {
         let tid = event.eid.map(TID::EID).or(event.uid.map(TID::UID))?;
-
-        if matches!(event.data, EventData::Forget) {
-            self.forget_tid(tid);
-            return None;
-        }
-
         let handle = self.get_by_tid(me, tid)?;
 
         if event.eid.is_some() && let Some(x) = event.uid &&
