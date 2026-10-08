@@ -12,7 +12,7 @@ use crate::base::vision::Vision;
 
 use super::dex::Species;
 use super::entity::{EID, Entity, Teammate};
-use super::event::{Event, EventData, Location, Sense, Sound, UID};
+use super::event::{Event, Location, Sense, Sound, UID};
 use super::game::{MOVE_TIMER, Board, Cell, Item, Light, Tile, TileFlags};
 use super::list::{Handle, List};
 use super::time::{Timestamp, TurnTimer};
@@ -103,6 +103,7 @@ type EF = EntityFlags;
 
 pub struct EntityKnowledge {
     pub eid: EID,
+    pub uid: UID,
     pub dir: Delta,
     pub loc: Location,
     pub name: Option<Rc<str>>,
@@ -115,6 +116,9 @@ pub struct EntityKnowledge {
     pub hp: f64,
     pub pp: f64,
     pub delta: i32,
+
+    // Internal index:
+    uids: ThinVec<UID>,
 }
 
 impl std::ops::Deref for EntityKnowledge {
@@ -123,9 +127,10 @@ impl std::ops::Deref for EntityKnowledge {
 }
 
 impl EntityKnowledge {
-    fn new(eid: EID, species: &'static Species) -> Self {
+    fn new(eid: EID, uid: UID, species: &'static Species) -> Self {
         Self {
             eid,
+            uid,
             dir: dirs::NONE,
             loc: Default::default(),
             name: Default::default(),
@@ -138,6 +143,9 @@ impl EntityKnowledge {
             hp: 0.,
             pp: 0.,
             delta: 0,
+
+            // Internal index:
+            uids: Default::default(),
         }
     }
 
@@ -279,6 +287,11 @@ struct EIDEntry {
     source: Option<SourceHandle>,
 }
 
+pub enum Occupant<'a> {
+    Entity(&'a EntityKnowledge),
+    Source(&'a SourceKnowledge),
+}
+
 #[derive(Default)]
 pub struct Knowledge {
     // Core memories. Recent memories come first.
@@ -295,7 +308,7 @@ pub struct Knowledge {
     moves: TileFlags,
     timer: TurnTimer,
     eid_index: HashMap<EID, EIDEntry>,
-    uid_index: HashMap<UID, SourceHandle>,
+    uid_index: HashMap<UID, OccupantHandle>,
     pos_index: HashMap<Point, PointEntry>,
     last_uid: u64,
 }
@@ -315,8 +328,11 @@ impl Knowledge {
         Some(&self.entities[self.eid_index.get(&eid)?.entity?])
     }
 
-    pub fn source(&self, uid: UID) -> Option<&SourceKnowledge> {
-        Some(&self.sources[*self.uid_index.get(&uid)?])
+    pub fn occupant(&self, uid: UID) -> Option<Occupant<'_>> {
+        match *self.uid_index.get(&uid)? {
+            OccupantHandle::Entity(x) => Some(Occupant::Entity(&self.entities[x])),
+            OccupantHandle::Source(x) => Some(Occupant::Source(&self.sources[x])),
+        }
     }
 
     pub fn get(&self, p: Point) -> PointLookup<'_> {
@@ -369,7 +385,9 @@ impl Knowledge {
         if *x == Default::default() { self.eid_index.remove(&eid); }
 
         let x = self.entities.remove(h);
+        x.uids.iter().for_each(|x| { self.uid_index.remove(x); });
         self.remove_occupant(OccupantHandle::Entity(h), x.pos);
+        self.uid_index.remove(&x.uid);
 
         debug_assert!(self.check_invariants());
     }
@@ -493,7 +511,7 @@ impl Knowledge {
 
     fn observe_entity(&mut self, me: &Entity, other: &Entity, sense: Sense) -> EntityHandle {
         let time = self.timer.time;
-        let entity = self.entity_for_sighting(other, sense);
+        let entity = self.entity_for_sighting(other);
         self.update_entity(entity, |x| x.update(me, other, sense, time));
         entity
     }
@@ -530,21 +548,22 @@ impl Knowledge {
 
     // Entity identification:
 
-    fn entity_for_sighting(&mut self, other: &Entity, sense: Sense) -> EntityHandle {
+    fn entity_for_sighting(&mut self, other: &Entity) -> EntityHandle {
         let eid = other.eid;
         let limit = self.timer.time_at_turn(SOURCE_TRACKING_LIMIT);
         let entry = self.eid_index.entry(eid).or_default();
 
-        let entity = entry.entity.unwrap_or_else(
-            || self.entities.push_front(EntityKnowledge::new(eid, other.species)));
+        let entity = entry.entity.unwrap_or_else(|| {
+            self.last_uid += 1;
+            let uid = UID((self.last_uid).try_into().unwrap());
+            let result = self.entities.push_back(EntityKnowledge::new(eid, uid, other.species));
+            self.uid_index.insert(uid, OccupantHandle::Entity(result));
+            result
+        });
         entry.entity = Some(entity);
 
-        if let Some(x) = entry.source.take() &&
-           let Some(uid) = self.identify_source(x, limit) {
-            let (eid, uid) = (Some(eid), Some(uid));
-            let loc = Location { pos: other.pos, time: self.timer.time };
-            let event = Event { eid, uid, loc, data: EventData::Spot, sense };
-            self.events.push(event);
+        if let Some(source) = entry.source.take() {
+            self.identify_source(entity, source, limit);
         }
         entity
     }
@@ -570,8 +589,8 @@ impl Knowledge {
         };
         if !me.player && let Some(x) = entry.entity && link(&self.entities[x]) {
             event.eid = Some(eid);
-            if let Some(y) = entry.source.take() {
-               event.uid = self.identify_source(y, limit);
+            if let Some(source) = entry.source.take() {
+                self.identify_source(x, source, limit);
             }
             return OccupantHandle::Entity(x);
         }
@@ -593,21 +612,22 @@ impl Knowledge {
     fn create_source(&mut self, event: &mut Event) -> SourceHandle {
         self.last_uid += 1;
         let uid = UID((self.last_uid).try_into().unwrap());
-        let handle = self.sources.push_front(SourceKnowledge::new(uid, event));
-        self.uid_index.insert(uid, handle);
+        let result = self.sources.push_front(SourceKnowledge::new(uid, event));
+        self.uid_index.insert(uid, OccupantHandle::Source(result));
         event.uid = Some(uid);
-        handle
+        result
     }
 
-    fn identify_source(&mut self, s: SourceHandle, limit: Timestamp) -> Option<UID> {
+    fn identify_source(&mut self, h: EntityHandle, s: SourceHandle, limit: Timestamp) {
         let source = &self.sources[s];
-        if source.time <= limit { return None; }
+        if source.time <= limit { return; }
 
         let SourceKnowledge { uid, loc, .. } = *source;
         self.remove_occupant(OccupantHandle::Source(s), loc.pos);
-        self.uid_index.remove(&uid);
         self.sources.remove(s);
-        Some(uid)
+
+        self.uid_index.insert(uid, OccupantHandle::Entity(h));
+        self.entities[h].uids.push(uid);
     }
 
     fn remove_occupant(&mut self, h: OccupantHandle, prev: Point) {
@@ -744,6 +764,7 @@ impl Knowledge {
         check_sorted(self.events.iter().rev().map(|x| x.time).collect());
 
         // Check that every cell and entity is indexed:
+        type OH = OccupantHandle;
         for x in &self.cells {
             let entry = self.pos_index.get(&x.point);
             assert!(entry.and_then(|x| x.cell).is_some());
@@ -751,10 +772,16 @@ impl Knowledge {
         for x in &self.entities {
             let entry = self.eid_index.get(&x.eid);
             assert!(entry.and_then(|x| x.entity).is_some());
+
+            let entry = self.uid_index.get(&x.uid);
+            assert!(matches!(entry, Some(&OH::Entity(y)) if std::ptr::eq(x, &self.entities[y])));
+        }
+        for x in &self.sources {
+            let entry = self.uid_index.get(&x.uid);
+            assert!(matches!(entry, Some(&OH::Source(y)) if std::ptr::eq(x, &self.sources[y])));
         }
 
         // Check that the indices are consistent and minimal:
-        type OH = OccupantHandle;
         for (&pos, point) in &self.pos_index {
             let PointEntry { cell, occupant, status } = *point;
             assert!(cell.is_some() || occupant.is_some());

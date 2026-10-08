@@ -37,7 +37,6 @@ pub enum EventData {
     Call(CallEvent),
     Move(MoveEvent),
     Sniff,
-    Spot,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -68,7 +67,6 @@ impl Event {
             EventData::Call(x)   => Some(Sound::Call(x.call)),
             EventData::Move(_)   => Some(Sound::Move),
             EventData::Sniff     => Some(Sound::Sniff),
-            EventData::Spot      => None,
         }
     }
 }
