@@ -10,7 +10,7 @@ use super::debug::DebugLog;
 use super::dex::Species;
 use super::entity::{Entity, EID};
 use super::event::{AttackEvent, Call, CallEvent, Event, EventData, Location, Sense, UID};
-use super::knowledge::{EntityKnowledge, Knowledge};
+use super::knowledge::{EntityKnowledge, Knowledge, Occupant};
 use super::game::CALL_VOLUME;
 use super::list::{Handle, List};
 use super::time::Timestamp;
@@ -65,6 +65,7 @@ pub struct Threat {
 
     // Flags:
     pub asleep: bool,
+    pub friend: bool,
     pub rival: bool,
     pub seen: bool,
 
@@ -99,6 +100,7 @@ impl Threat {
 
             // Flags:
             asleep: false,
+            friend: false,
             rival: false,
             seen: false,
 
@@ -254,18 +256,20 @@ impl Threat {
         }
     }
 
-    fn merge_from(&mut self, other: &Threat) {
+    fn mark_combat(&mut self, time: Timestamp) {
+        if !self.seen { self.hp = 1. };
+        self.combat = time;
+    }
+
+    fn merge_from(&mut self, me: &Entity, other: &Threat) {
         // No need to update any fields that we unconditionally update in
         // update_for_event, since we merge right before processing an event.
         self.seen |= other.seen;
         self.combat = max(self.combat, other.combat);
         self.warnings = max(self.warnings, other.warnings);
         self.merge_status(other.confidence, other.valence);
-    }
 
-    fn mark_combat(&mut self, time: Timestamp) {
-        if !self.seen { self.hp = 1. };
-        self.combat = time;
+        self.update_status(me);
     }
 
     fn update_for_event(&mut self, me: &Entity, event: &Event) {
@@ -294,7 +298,6 @@ impl Threat {
             EventData::Attack(_) => {},
             EventData::Move(_) => {},
             EventData::Sniff => {},
-            EventData::Spot => {},
         }
     }
 
@@ -307,21 +310,25 @@ impl Threat {
         self.delta = other.delta;
 
         self.asleep = other.asleep();
+        self.friend = other.friend();
         self.rival = other.rival();
         self.seen = true;
 
-        let (confidence, valence) =
-        if other.friend() {
+        self.update_status(me);
+    }
+
+    fn update_status(&mut self, me: &Entity) {
+        let (confidence, valence) = if self.friend {
             (Confidence::High, Valence::Friendly)
-        } else if other.species.human() {
+        } else if self.species.map_or(false, |x| x.human()) {
             (Confidence::Low, Valence::Neutral)
-        } else if other.rival() {
+        } else if self.rival {
             (Confidence::High, Valence::Hostile)
-        } else if other.delta > 0 {
+        } else if self.delta > 0 {
             let combat = self.combat > me.known.time_at_turn(ACTIVE_THREAT_TURNS);
             let valence = if combat { Valence::Hostile } else { Valence::Menacing };
             (Confidence::High, valence)
-        } else if timid(me) && me.species == other.species {
+        } else if timid(me) && self.species == Some(me.species) {
             (Confidence::High, Valence::Friendly)
         } else {
             (Confidence::High, Valence::Neutral)
@@ -415,15 +422,31 @@ impl ThreatState {
             threat.update_for_sighting(me, other);
             if threat.certain() && threat.hostile() { self.forget_tid(TID::CID); }
         }
+
+        let mut merges = vec![];
+
         self.threat_index.retain(|&k, &mut v| {
             let keep = match k {
                 TID::CID => true,
                 TID::EID(x) => me.known.entity(x).is_some(),
-                TID::UID(x) => me.known.source(x).is_some(),
+                TID::UID(x) => match me.known.occupant(x) {
+                    Some(Occupant::Entity(y)) => { merges.push((y.eid, x)); true },
+                    Some(Occupant::Source(_)) => true,
+                    None => false,
+                },
             };
             if !keep { self.threats.remove(v); }
             keep
         });
+
+        for (eid, uid) in merges {
+            let Some(x) = self.threat_index.remove(&TID::UID(uid)) else { continue };
+            let old = self.threats.remove(x);
+
+            if let Some(&x) = self.threat_index.get(&TID::EID(eid)) {
+                self.threats[x].merge_from(me, &old);
+            }
+        }
 
         self.uncertain.clear();
         self.menacing.clear();
@@ -552,13 +575,6 @@ impl ThreatState {
     fn get_by_event(&mut self, me: &Entity, event: &Event) -> Option<&mut Threat> {
         let tid = event.eid.map(TID::EID).or(event.uid.map(TID::UID))?;
         let handle = self.get_by_tid(me, tid)?;
-
-        if event.eid.is_some() && let Some(x) = event.uid &&
-           let Some(x) = self.threat_index.remove(&TID::UID(x)) {
-            let existing = self.threats.remove(x);
-            self.threats[handle].merge_from(&existing);
-        }
-
         Some(&mut self.threats[handle])
     }
 
