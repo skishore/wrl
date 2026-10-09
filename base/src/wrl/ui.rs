@@ -333,8 +333,8 @@ fn update_target(me: &Entity, target: &mut Target, update: Point) {
             for (i, &x) in target.path.iter().enumerate() {
                 let cell = known.get(x);
                 let last = i + 1 == target.path.len();
-                let friend = cell.entity().map_or(false, |x| x.friend());
                 let moves = if last { moves } else { SUMMON_MOVES };
+                let friend = cell.entity().map_or(false, |x| x.friend());
 
                 let free = match cell.status_for(moves) {
                     Status::Blocked => false,
@@ -348,7 +348,7 @@ fn update_target(me: &Entity, target: &mut Target, update: Point) {
                     target.error = "You can't throw that far.".into();
                 } else if !cell.visible() {
                     target.error = "You can't see a clear path there.".into();
-                } else if last && !cell.can_see_entity_at() {
+                } else if last && !friend && !cell.can_see_entity_at() {
                     target.error = "That cell may be occupied.".into();
                 }
                 if !target.error.is_empty() { break; }
