@@ -12,11 +12,11 @@ use crate::base::vision::{Vision, VisionArgs};
 use super::ai::{ChooseDefenseSquare, CheckFollowerSquare, Follower};
 use super::dex::Attack;
 use super::effect::{Frame, ParticleData, RenderData};
-use super::entity::{AttackTarget, Command, EID, Entity, Individual, Teammate};
-use super::event::{Call, Location, Sound};
+use super::entity::{AttackTarget, Command, Entity, Individual, Teammate};
+use super::event::{Call, Location, Sound, UID};
 use super::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_, SUMMON_MOVES, SUMMON_RANGE};
 use super::game::{Action, Input, Tile, TileFlags, show_item};
-use super::knowledge::{EntityKnowledge, Knowledge, PointLookup};
+use super::knowledge::{EntityKnowledge, Knowledge, Occupant, PointLookup};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -80,6 +80,13 @@ fn describe_entity(x: &EntityKnowledge) -> &str {
     if let Some(x) = &x.name { x.as_ref() } else { x.species.name }
 }
 
+fn describe_occupant<'a>(x: &Occupant<'a>) -> &'a str {
+    match x {
+        Occupant::Entity(x) => describe_entity(x),
+        Occupant::Source(x) => x.sound.map_or("an unknown sound", describe_sound),
+    }
+}
+
 fn describe_teammate(x: &Individual) -> &str {
     if let Some(x) = &x.name { x.as_ref() } else { x.species.name }
 }
@@ -95,15 +102,20 @@ fn describe_sound(sound: Sound) -> &'static str {
     }
 }
 
-fn rivals(me: &Entity) -> Vec<&EntityKnowledge> {
+fn rivals(me: &Entity) -> Vec<Occupant<'_>> {
     let mut result = vec![];
     for other in &me.known.entities {
         if !other.visible() { break; }
-        if !other.friend() { result.push(other); }
+        if !other.friend() { result.push(Occupant::Entity(other)); }
+    }
+    for other in &me.known.sources {
+        let uid = me.known.get(other.pos).occupant().map(|x| x.uid());
+        if uid != Some(other.uid) { continue; }
+        result.push(Occupant::Source(other));
     }
     let pos = me.pos;
     result.sort_by_cached_key(
-        |&x| ((x.pos - pos).len_l2_squared(), x.pos.0, x.pos.1));
+        |x| ((x.pos - pos).len_l2_squared(), x.pos.0, x.pos.1));
     result
 }
 
@@ -224,8 +236,11 @@ pub struct Target {
     target: Point,
 }
 
-fn can_target(view: &EntityKnowledge) -> bool {
-    view.visible() && !view.friend()
+fn can_target(me: &Entity, occupant: &Occupant) -> bool {
+    match occupant {
+        Occupant::Entity(x) => x.visible() && !x.friend(),
+        Occupant::Source(x) => me.known.get(x.pos).occupant().map(|x| x.uid()) == Some(x.uid),
+    }
 }
 
 fn get_summon(me: &Entity, summon: usize) -> Option<&EntityKnowledge> {
@@ -358,15 +373,16 @@ fn update_target(me: &Entity, target: &mut Target, update: Point) {
     }
 }
 
-fn select_valid_target(ui: &mut UI, me: &Entity) -> Option<EID> {
+fn select_valid_target(ui: &mut UI, me: &Entity) -> Option<UID> {
     let target = ui.target.as_ref()?;
     let entity = me.known.get(target.target).entity();
     let summon = entity.and_then(|x| me.summons.iter().position(|&y| x.eid == y));
+    let occupant = me.known.get(target.target).occupant();
 
     match &target.data {
         TargetData::FarLook => {
-            let entity = entity?;
-            if can_target(entity) { Some(entity.eid) } else { None }
+            let occupant = occupant?;
+            if can_target(me, &occupant) { Some(occupant.uid()) } else { None }
         }
         &TargetData::Attack { summon, attack } => {
             let seen = false;
@@ -375,8 +391,8 @@ fn select_valid_target(ui: &mut UI, me: &Entity) -> Option<EID> {
             let command = Command::Attack(attack, AttackTarget { eid, loc, seen });
             ui.action = Some(Action::Shout { summon, command });
 
-            let entity = entity?;
-            if can_target(entity) { Some(entity.eid) } else { None }
+            let occupant = occupant?;
+            if can_target(me, &occupant) { Some(occupant.uid()) } else { None }
         }
         &TargetData::Summon { team, .. } => {
             ui.action = Some(match summon {
@@ -517,33 +533,33 @@ fn process_ui_input(ui: &mut UI, me: &mut Entity, input: Input) -> bool {
 
     // Multi-use target selection helpers:
 
-    let apply_tab = |prev: Option<EID>, off: bool| -> Option<EID> {
+    let apply_tab = |prev: Option<UID>, off: bool| -> Option<UID> {
         let rivals = rivals(me);
         if rivals.is_empty() { return None; }
 
         let t = input == Input::Char('\t');
         let n = rivals.len() + if off { 1 } else { 0 };
 
-        let next = prev.and_then(|x| rivals.iter().position(|y| y.eid == x));
+        let next = prev.and_then(|x| rivals.iter().position(|y| y.uid() == x));
         let start = next.or_else(|| if off { Some(n - 1) } else { None });
         let index = start.map(|x| if t { x + n + 1 } else { x + n - 1 } % n)
                          .unwrap_or_else(|| if t { 0 } else { n - 1 });
-        if index < rivals.len() { Some(rivals[index].eid) } else { None }
+        if index < rivals.len() { Some(rivals[index].uid()) } else { None }
     };
 
     let get_initial_target = |source: Point| -> Point {
         let known = &*me.known;
-        let focus = ui.focus.and_then(|x| known.entity(x));
-        if let Some(target) = focus && can_target(target) { return target.pos; }
+        let focus = ui.focus.and_then(|x| known.occupant(x));
+        if let Some(focus) = focus && can_target(me, &focus) { return focus.pos; }
         if let Some(rival) = rivals(me).first() { return rival.pos; }
         source
     };
 
     let get_updated_target = |target: Point| -> Option<Point> {
         if tab {
-            let old_eid = known.get(target).entity().map(|x| x.eid);
-            let new_eid = apply_tab(old_eid, false);
-            return Some(known.entity(new_eid?)?.pos);
+            let old_uid = known.get(target).occupant().map(|x| x.uid());
+            let new_uid = apply_tab(old_uid, false);
+            return Some(known.occupant(new_uid?)?.pos);
         }
 
         let ch = if let Input::Char(x) = input { Some(x) } else { None }?;
@@ -746,18 +762,18 @@ impl Default for Focused {
 }
 
 impl Focused {
-    fn update(&mut self, me: &Entity, target: &EntityKnowledge) {
+    fn update(&mut self, me: &Entity, target: &Occupant) {
         let known = &*me.known;
-        let (pos, dir) = (target.pos, target.dir);
-        self.tile = known.get(pos).tile();
+        let pos = target.pos;
 
-        if target.asleep() {
+        if let Occupant::Entity(x) = target && !x.asleep() {
+            let opacity = |x| known.get(x).tile().map_or(0, |x| x.opacity());
+            self.vision.compute(&VisionArgs { pos, dir: x.dir, opacity });
+        } else {
             self.vision.clear();
             self.vision.set_center(pos);
-        } else {
-            let opacity = |x| known.get(x).tile().map_or(0, |x| x.opacity());
-            self.vision.compute(&VisionArgs { pos, dir, opacity });
         }
+        self.tile = known.get(pos).tile();
     }
 }
 
@@ -808,7 +824,7 @@ pub struct UI {
 
     // Modal components:
     menu: Option<Menu>,
-    focus: Option<EID>,
+    focus: Option<UID>,
     summon: Option<SummonMenu>,
     target: Option<Box<Target>>,
     focused: Focused,
@@ -873,15 +889,53 @@ impl UI {
 
     pub fn update_focus(&mut self, me: &Entity) {
         let known = &*me.known;
-        let focus = self.focus.and_then(|x| known.entity(x));
-        if focus.is_none() { self.focus = None; }
+        let focus = self.focus.and_then(|x| known.occupant(x));
+
+        // TODO: Hack to clean up sounds if an entity moves into that cell.
+        //
+        // TODO: Attacking a noise source doesn't work correctly; it targets
+        // the cell, not the entity.
+        //
+        // TODO: We should probably be able to attack noise sources even if
+        // we don't have a clear line-of-sight to them.
+        //
+        // TODO: Source -> Entity tracking appears to fail if the link would
+        // be established on the turn we lose the source. Example:
+        //
+        //                <- render()
+        //     We: Idle
+        //    NPC: Calls  <- freshness = 1.0
+        //                <- render()
+        //     We: Idle
+        //    NPC: Sneaks <- freshness = 0.5
+        //                <- render()
+        //     We: Idle
+        //                <- source cleaned up here!
+        //    NPC: Moves into view
+        //                <- render()
+        //
+        // Each UI frame is drawn right *before* our turn (which is necessary
+        // to give the player the information needed to decide on an action),
+        // but sources are cleaned up right *after* our turn. The result is
+        // that, around our third turn above:
+        //   - The Call noise from two turns ago is visible in the UI
+        //   - But, we fail to link it to the NPC visible on the next frame
+        //
+        let mut focus = focus;
+        if let Some(Occupant::Source(x)) = focus && !can_target(me, &Occupant::Source(x)) {
+            self.focus = None;
+            focus = None;
+        }
+        let focus = focus;
+
+        self.focus = focus.as_ref().map(|x| x.uid());
 
         let target = match &self.target {
-            Some(x) => known.get(x.target).entity(),
+            Some(x) => known.get(x.target).occupant(),
             None => focus,
         };
-        if let Some(target) = target && can_target(target) {
-            self.focused.update(me, target);
+        if let Some(target) = target && can_target(me, &target) {
+            self.focused.update(me, &target);
             self.focused.active = true;
         } else {
             self.focused.active = false;
@@ -941,7 +995,6 @@ impl UI {
 
     fn render_map(&self, buffer: &mut Buffer, me: &Entity, effect: Option<&Effect>) {
         let size = self.get_map_size();
-        let known = effect.map_or(&*me.known, |x| x.known);
         let slice = &mut Slice::new(buffer, self.layout.map);
         let offset = self.get_map_offset(me);
         let player = me.player;
@@ -1027,7 +1080,7 @@ impl UI {
 
         // If we're still alive, render arrows showing NPC facing.
         if effect.is_none() && me.cur_hp > 0 {
-            self.render_arrows(known, offset, slice);
+            self.render_arrows(me, offset, slice);
         }
 
         // Render the targeting UI on the map.
@@ -1078,13 +1131,13 @@ impl UI {
         }
     }
 
-    fn render_arrows(&self, known: &Knowledge, offset: Point, slice: &mut Slice) {
+    fn render_arrows(&self, me: &Entity, offset: Point, slice: &mut Slice) {
         let arrow_length = 3;
         let sleep_length = 2;
         let mut arrows = vec![];
-        for other in &known.entities {
+        for other in &me.known.entities {
             if !other.visible() { continue; }
-            if !other.asleep() && !can_target(other) { continue; }
+            if !other.asleep() && !can_target(me, &Occupant::Entity(other)) { continue; }
 
             let (pos, dir) = (other.pos, other.dir);
             let mut ch = Glyph::ray(dir);
@@ -1189,24 +1242,29 @@ impl UI {
 
         let mut rivals = rivals(me);
         rivals.truncate(max(slice.size().1, 0) as usize / 2);
-        let rivals = rivals;
 
         for rival in rivals {
-            let hp = rival.hp;
-            let hp_color = Self::hp_color(hp);
-            let hp_text = format!("{}%", max((100.0 * hp).floor() as i32, 1));
+            let mut glyph = Glyph::wide('?');
+            let mut hp_color = Color::white();
+            let mut hp_text = String::default();
 
-            let name = describe_entity(rival);
+            if let Occupant::Entity(x) = rival {
+                glyph = x.species.glyph;
+                hp_color = Self::hp_color(x.hp);
+                hp_text = format!("{}%", max((100.0 * x.hp).floor() as i32, 1));
+            }
+
+            let name = describe_occupant(&rival);
             let (sn, sh) = (name.chars().count(), hp_text.chars().count());
             let ss = max(16 - sn as i32 - sh as i32, 0) as usize;
 
             slice.newline();
-            slice.write_chr(rival.species.glyph).space().write_str(name);
+            slice.write_chr(glyph).space().write_str(name);
             slice.spaces(ss).set_fg(Some(hp_color)).write_str(&hp_text).newline();
 
             let targeted = match &self.target {
                 Some(x) => x.target == rival.pos,
-                None => self.focus == Some(rival.eid),
+                None => self.focus == Some(rival.uid()),
             };
             if targeted {
                 let start = slice.get_cursor() - Point(0, 1);
@@ -1277,8 +1335,8 @@ impl UI {
             None => {
                 let tile = self.focused.tile;
                 let header = "Last target:".into();
-                let entity = self.focus.and_then(|x| known.entity(x));
-                let source = None;
+                let entity = self.focus.and_then(|x| known.occupant(x)?.entity());
+                let source = self.focus.and_then(|x| known.occupant(x)?.source());
                 (tile, header, entity, source)
             },
         };

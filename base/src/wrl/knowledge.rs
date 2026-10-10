@@ -239,6 +239,42 @@ impl SourceKnowledge {
 
 //////////////////////////////////////////////////////////////////////////////
 
+// Entity-or-Source:
+
+pub enum Occupant<'a> {
+    Entity(&'a EntityKnowledge),
+    Source(&'a SourceKnowledge),
+}
+
+impl<'a> std::ops::Deref for Occupant<'a> {
+    type Target = Location;
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Occupant::Entity(x) => &x.loc,
+            Occupant::Source(x) => &x.loc,
+        }
+    }
+}
+
+impl<'a> Occupant<'a> {
+    pub fn uid(&self) -> UID {
+        match self {
+            Occupant::Entity(x) => x.uid,
+            Occupant::Source(x) => x.uid,
+        }
+    }
+
+    pub fn entity(&self) -> Option<&'a EntityKnowledge> {
+        if let Occupant::Entity(x) = self { Some(x) } else { None }
+    }
+
+    pub fn source(&self) -> Option<&'a SourceKnowledge> {
+        if let Occupant::Source(x) = self { Some(x) } else { None }
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 // Per-scent knowledge:
 
 #[derive(Clone, Copy)]
@@ -285,11 +321,6 @@ enum OccupantHandle { Entity(EntityHandle), Source(SourceHandle) }
 struct EIDEntry {
     entity: Option<EntityHandle>,
     source: Option<SourceHandle>,
-}
-
-pub enum Occupant<'a> {
-    Entity(&'a EntityKnowledge),
-    Source(&'a SourceKnowledge),
 }
 
 #[derive(Default)]
@@ -865,6 +896,13 @@ impl<'a> PointLookup<'a> {
     pub fn source(&self) -> Option<&'a SourceKnowledge> {
         let OccupantHandle::Source(x) = self.spot?.occupant? else { return None };
         Some(&self.root.sources[x])
+    }
+
+    pub fn occupant(&self) -> Option<Occupant<'a>> {
+        match self.spot?.occupant? {
+            OccupantHandle::Entity(x) => Some(Occupant::Entity(&self.root.entities[x])),
+            OccupantHandle::Source(x) => Some(Occupant::Source(&self.root.sources[x])),
+        }
     }
 
     pub fn status(&self) -> Status {
