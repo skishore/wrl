@@ -596,13 +596,13 @@ impl Knowledge {
 
     fn delete_entity(&mut self, h: EntityHandle) -> Point {
         let pos = self.entities.remove(h).loc.pos;
-        self.update_pos(OccupantHandle::Entity(h), Some(pos), None);
+        self.remove_occupant(OccupantHandle::Entity(h), pos);
         pos
     }
 
     fn delete_source(&mut self, h: SourceHandle) -> Point {
         let pos = self.sources.remove(h).loc.pos;
-        self.update_pos(OccupantHandle::Source(h), Some(pos), None);
+        self.remove_occupant(OccupantHandle::Source(h), pos);
         pos
     }
 
@@ -615,15 +615,18 @@ impl Knowledge {
         Some(uid)
     }
 
-    fn update_pos(&mut self, h: OccupantHandle, prev: Option<Point>, next: Option<Point>) {
-        if prev != next && let Some(prev) = prev &&
-           let Some(x) = self.pos_index.get_mut(&prev) && x.occupant == Some(h) {
+    fn remove_occupant(&mut self, h: OccupantHandle, prev: Point) {
+        if let Some(x) = self.pos_index.get_mut(&prev) && x.occupant == Some(h) {
             x.occupant = None;
             match x.cell {
                 Some(_) => if x.status != Status::Blocked { x.status = Status::Free; }
                 None => { self.pos_index.remove(&prev); }
             }
         }
+    }
+
+    fn update_position(&mut self, h: OccupantHandle, prev: Point, next: Option<Point>) {
+        if next != Some(prev) { self.remove_occupant(h, prev); }
 
         if let Some(next) = next {
             let x = self.pos_index.entry(next).or_default();
@@ -640,7 +643,7 @@ impl Knowledge {
         f(entity);
         let next = entity.pos;
 
-        self.update_pos(OccupantHandle::Entity(h), Some(prev), Some(next));
+        self.update_position(OccupantHandle::Entity(h), prev, Some(next));
     }
 
     fn update_source(&mut self, h: SourceHandle, f: impl FnOnce(&mut SourceKnowledge)) {
@@ -651,7 +654,7 @@ impl Knowledge {
         f(source);
         let next = source.pos;
 
-        self.update_pos(OccupantHandle::Source(h), Some(prev), Some(next));
+        self.update_position(OccupantHandle::Source(h), prev, Some(next));
     }
 
     // Cleanup:
@@ -707,7 +710,7 @@ impl Knowledge {
 
         if let Some(e) = x.eid { self.forget_source_link(e, h); }
 
-        self.update_pos(OccupantHandle::Source(h), Some(x.pos), None);
+        self.remove_occupant(OccupantHandle::Source(h), x.pos);
 
         self.forget_event(None, Some(x.uid), x.pos);
     }
