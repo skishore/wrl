@@ -373,8 +373,7 @@ impl Knowledge {
     pub fn update_items(&mut self, pos: Point, item: &Item) {
         let Some(x) = self.pos_index.get(&pos) else { return };
         let Some(h) = x.cell else { return };
-
-        self.cells[h].items.push(item.clone());
+        self.cells[h].items.push(*item);
     }
 
     pub fn update(&mut self, me: &Entity, board: &Board, vision: &Vision, rng: &mut RNG) {
@@ -617,13 +616,12 @@ impl Knowledge {
     }
 
     fn update_pos(&mut self, h: OccupantHandle, prev: Option<Point>, next: Option<Point>) {
-        if prev != next && let Some(prev) = prev {
-            if let Some(x) = self.pos_index.get_mut(&prev) && x.occupant == Some(h) {
-                x.occupant = None;
-                match x.cell {
-                    Some(_) => if x.status != Status::Blocked { x.status = Status::Free; }
-                    None => { self.pos_index.remove(&prev); }
-                }
+        if prev != next && let Some(prev) = prev &&
+           let Some(x) = self.pos_index.get_mut(&prev) && x.occupant == Some(h) {
+            x.occupant = None;
+            match x.cell {
+                Some(_) => if x.status != Status::Blocked { x.status = Status::Free; }
+                None => { self.pos_index.remove(&prev); }
             }
         }
 

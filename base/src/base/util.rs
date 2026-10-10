@@ -25,8 +25,8 @@ macro_rules! flags {
         pub const $x: Self = Self($i);
     };
     (@go $i:expr; $x:ident $($l:tt)+) => {
-        crate::flags!(@go $i; $x);
-        crate::flags!(@go 2 * $i; $($l)+);
+        $crate::flags!(@go $i; $x);
+        $crate::flags!(@go 2 * $i; $($l)+);
     };
     (@derive $x:ident = $z:ident $(| $zs:ident)*,) => {
         #[allow(non_upper_case_globals)]
@@ -34,8 +34,8 @@ macro_rules! flags {
     };
     (@derive $x:ident = $z:ident $(| $zs:ident)*, $($l:tt)+) => {
         #[allow(non_upper_case_globals)]
-        crate::flags!(@derive $x = $z $(| $zs)*,);
-        crate::flags!(@derive $($l)+);
+        $crate::flags!(@derive $x = $z $(| $zs)*,);
+        $crate::flags!(@derive $($l)+);
     };
     ($v:vis $n:ident($t:ty) { $($x:ident $(,)?)+
      $(#[$_:meta] $($y:ident = $z:ident $(| $zs:ident)* $(,)?)+)? }) => {
@@ -44,8 +44,8 @@ macro_rules! flags {
         impl $n {
             #[allow(dead_code,non_upper_case_globals)]
             pub const Empty: Self = Self(0);
-            crate::flags!(@go 1; $($x)+);
-            $($(crate::flags!(@derive $y = $z $(| $zs)*,);)+)?
+            $crate::flags!(@go 1; $($x)+);
+            $($($crate::flags!(@derive $y = $z $(| $zs)*,);)+)?
             fn any(self: Self, r: Self) -> bool { self.0 & r.0 != 0 }
         }
         impl std::ops::Not for $n {
@@ -105,6 +105,5 @@ pub fn weighted<'a, T: Debug>(xs: &'a [(i32, T)], rng: &mut RNG) -> &'a T {
         value -= weight;
         if value <= 0 { return choice; }
     }
-    assert!(false);
-    &xs[xs.len() - 1].1
+    panic!()
 }

@@ -290,7 +290,7 @@ impl Vision {
         let push = |next: &mut SlopeRanges, s: SlopeRange| {
             if let Some(x) = next.items.last_mut() &&
                 x.max == s.min && x.visibility == s.visibility &&
-                x.transform as *const Transform == s.transform as *const Transform {
+                std::ptr::eq::<Transform>(x.transform, s.transform) {
                     x.max = s.max;
             } else {
                 next.items.push(s);

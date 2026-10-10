@@ -45,7 +45,7 @@ impl DebugLog {
         self.lines.push(DebugLine { color, depth, text: format!("{}", t) });
     }
 
-    pub fn indent(&mut self, n: usize, f: impl Fn(&mut DebugLog) -> ()) {
+    pub fn indent(&mut self, n: usize, f: impl Fn(&mut DebugLog)) {
         self.depth += n;
         f(self);
         self.depth -= n;
@@ -165,8 +165,7 @@ impl DebugFile {
                 Some((p, glyph.with_fg(Color::black()).with_bg(c)))
             },
         };
-        let mut xs = vec![];
-        xs.reserve(frame.len());
+        let mut xs = Vec::with_capacity(frame.len());
         frame.iter().for_each(|x| match &x.data {
             ParticleData::Light(_) => {},
             ParticleData::Shift(s) => xs.append(&mut render_move(*s, x.point)),
@@ -193,7 +192,7 @@ impl DebugFile {
             Self::write_bin(&mut file, &(self.detail.animation.len() as i32))?;
             for frame in &self.detail.animation {
                 Self::write_bin(&mut file, &(frame.len() as i32))?;
-                Self::write_array(&mut file, &frame)?;
+                Self::write_array(&mut file, frame)?;
             }
             file.flush()?;
         }
@@ -309,7 +308,7 @@ impl DebugFile {
 
     fn write_array<W: Write, T>(f: &mut W, t: &[T]) -> Result<()> {
         let ptr = t.as_ptr() as *const u8;
-        let len = t.len() * std::mem::size_of::<T>();
+        let len = std::mem::size_of_val(t);
         f.write_all(unsafe { std::slice::from_raw_parts(ptr, len) })
     }
 
@@ -319,7 +318,7 @@ impl DebugFile {
 
     fn write_str<W: Write>(f: &mut W, s: &str) -> Result<()> {
         f.write_all(s.as_bytes())?;
-        f.write_all(&[b'\0'])
+        f.write_all(b"\0")
     }
 
     fn entity_glyph(entity: &Entity) -> Glyph {

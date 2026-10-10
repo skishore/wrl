@@ -178,9 +178,9 @@ impl<T: Clone> Matrix<T> {
 
     // Trivial getters:
 
-    pub fn mut_data(&mut self) -> &mut [T] { &mut *self.data }
+    pub fn mut_data(&mut self) -> &mut [T] { &mut self.data }
 
-    pub fn raw_data(&self) -> &[T] { &*self.data }
+    pub fn raw_data(&self) -> &[T] { &self.data }
 
     pub fn default(&self) -> &T { &self.default }
 
@@ -223,7 +223,7 @@ impl<T: Clone> Matrix<T> {
     }
 
     pub fn entry_mut(&mut self, point: Point) -> Option<&mut T> {
-        let Some(x) = self.index(point) else { return None; };
+        let x = self.index(point)?;
         unsafe { Some(self.data.get_unchecked_mut(x)) }
     }
 

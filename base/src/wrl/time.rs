@@ -80,7 +80,7 @@ impl std::ops::Sub for Timestamp {
 impl std::ops::Sub<Timedelta> for Timestamp {
     type Output = Timestamp;
     fn sub(self, other: Timedelta) -> Self::Output {
-        Timestamp((self.0 as i64 - other.0 as i64) as u64)
+        Timestamp((self.0 as i64 - other.0) as u64)
     }
 }
 
@@ -125,7 +125,7 @@ impl TurnTimer {
 
     pub fn time_at_turn(&self, turn: i32) -> Timestamp {
         if turn <= 0 { return self.time; }
-        self.turn_times.get((turn - 1) as usize).map(|&x| x).unwrap_or_default()
+        self.turn_times.get((turn - 1) as usize).cloned().unwrap_or_default()
     }
 
     pub fn time_to_turn(&self, time: Timestamp) -> f64 {

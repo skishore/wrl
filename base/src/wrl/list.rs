@@ -65,7 +65,7 @@ pub struct IterMut<'a, T> {
 impl<T> Copy for Handle<T> {}
 
 impl<T> Clone for Handle<T> {
-    fn clone(&self) -> Self { Self(self.0, PhantomData) }
+    fn clone(&self) -> Self { *self }
 }
 
 impl<T> Eq for Handle<T> {}
@@ -111,9 +111,9 @@ impl Index {
 
     fn is_used(&self) -> bool { self.0 & 1 == 0 }
 
-    fn to_free_index(&self) -> Index { Index(self.0 | 1) }
+    fn to_free_index(self) -> Index { Index(self.0 | 1) }
 
-    fn to_used_index(&self) -> Index { Index(self.0 & !1) }
+    fn to_used_index(self) -> Index { Index(self.0 & !1) }
 }
 
 // Iterators

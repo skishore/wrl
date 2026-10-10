@@ -1,5 +1,7 @@
 #![allow(non_snake_case)]
 
+#![allow(clippy::needless_range_loop)]
+
 use std::cmp::{max, min};
 
 use rand::Rng;
@@ -359,8 +361,8 @@ pub fn EmberEffect(rng: &mut RNG, source: Point, target: Point) -> Effect {
     let light = Bound::new(4);
 
     for i in 1..line.len() - 1 {
-        let frame = (i - 1) / 2;
-        add_lit_sparkle(&mut effect, &trail(rng), frame as i32, line[i], light);
+        let frame = ((i - 1) / 2) as i32;
+        add_lit_sparkle(&mut effect, &trail(rng), frame, line[i], light);
     }
 
     let mut hit: i32 = 0;
