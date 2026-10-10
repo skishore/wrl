@@ -115,7 +115,7 @@ impl Entity {
 
             // Team:
             leader: args.leader,
-            command: None.into(),
+            command: None,
             summons: vec![],
             team: vec![],
 

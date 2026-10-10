@@ -542,7 +542,7 @@ impl ThreatState {
     }
 
     fn get_by_event(&mut self, me: &Entity, event: &Event) -> Option<&mut Threat> {
-        let tid = event.eid.map(|x| TID::EID(x)).or(event.uid.map(|x| TID::UID(x)))?;
+        let tid = event.eid.map(TID::EID).or(event.uid.map(TID::UID))?;
 
         if matches!(event.data, EventData::Forget) {
             self.forget_tid(tid);

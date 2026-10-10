@@ -146,8 +146,8 @@ impl Default for &'static Tile {
 impl Eq for &'static Tile {}
 
 impl PartialEq for &'static Tile {
-    fn eq(&self, next: &&'static Tile) -> bool {
-        *self as *const Tile == *next as *const Tile
+    fn eq(&self, other: &&'static Tile) -> bool {
+        std::ptr::eq::<Tile>(*self, *other)
     }
 }
 
@@ -476,7 +476,7 @@ impl Board {
     fn add_entity(&mut self, args: &EntityArgs, env: &mut Env) {
         let EntityArgs { eid, pos, .. } = *args;
         let cell = self.map.entry_mut(pos).unwrap();
-        let prev = replace(&mut cell.eid, Some(eid));
+        let prev = cell.eid.replace(eid);
         assert!(prev.is_none());
 
         self.entities.add(args, &mut env.rng);
@@ -494,7 +494,7 @@ impl Board {
         let source = replace(&mut entity.pos, target);
         let light = entity.species.light.radius;
 
-        let old = replace(&mut self.map.entry_mut(source).unwrap().eid, None);
+        let old = self.map.entry_mut(source).unwrap().eid.take();
         let new = replace(&mut self.map.entry_mut(target).unwrap().eid, old);
         assert!(old == Some(eid));
         assert!(new.is_none());
@@ -599,7 +599,7 @@ impl Board {
         swap(known, &mut entity.known);
 
         e.sense = if seen { Sense::Sight } else { Sense::Sound };
-        known.observe_event(&mut self.entities[eid], e);
+        known.observe_event(&self.entities[eid], e);
 
         swap(known, &mut self.entities[eid].known);
     }
@@ -620,8 +620,8 @@ impl Board {
         swap(known, &mut entity.known);
 
         let me = &self.entities[eid];
-        let vision = fov.compute(&self, me);
-        known.update(me, &self, vision, rng);
+        let vision = fov.compute(self, me);
+        known.update(me, self, vision, rng);
 
         swap(known, &mut self.entities[eid].known);
     }
@@ -1611,10 +1611,9 @@ impl Default for State {
 
 impl State {
     pub fn new(seed: Option<u64>, mode: GameMode, debug: bool) -> Self {
-        let size = Point(WORLD_SIZE, WORLD_SIZE);
-        let rng = seed.map(|x| RNG::seed_from_u64(x));
-        let rng = rng.unwrap_or_else(|| RNG::from_os_rng());
         let species = Species::get("Human");
+        let size = Point(WORLD_SIZE, WORLD_SIZE);
+        let rng = seed.map(RNG::seed_from_u64).unwrap_or_else(RNG::from_os_rng);
 
         let mut board = Board::new(size, LIGHT);
         let mut pos = Point(size.0 / 2, size.1 / 2);
@@ -1657,7 +1656,7 @@ impl State {
             board.map.entry_mut(pos).unwrap().eid = None;
             let me = &mut board.entities[player];
             let Entity { player, speed, .. } = *me;
-            me.known = Default::default();
+            *me.known = Default::default();
             me.known.mark_turn_boundary(player, speed, board.time);
             me.pos = Point(-9999, -9999);
         }
@@ -1708,7 +1707,7 @@ impl State {
 
         let ui = &mut env.ui;
         let inputs = Default::default();
-        std::mem::drop(Weather::Rain(Delta(0, 64), 32));
+        let _ = Weather::Rain(Delta(0, 64), 32);
         match WEATHER {
             Weather::Rain(angle, count) => ui.start_rain(angle, count),
             Weather::None => (),

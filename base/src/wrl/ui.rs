@@ -262,7 +262,7 @@ fn init_summon_target(me: &Entity, team: usize) -> Box<Target> {
     };
 
     let closest = |p: Point, swap: bool, target: &mut Target| {
-        let mut best = (None, std::i64::MAX);
+        let mut best = (None, i64::MAX);
         for dx in -2..=2 {
             for dy in -2..=2 {
                 let point = pos + Delta(dx, dy);
@@ -619,17 +619,17 @@ fn process_ui_input(ui: &mut UI, me: &mut Entity, input: Input) -> bool {
             if !valid(chosen) {
                 ui.log.log_failure(format!("{} does not have that attack.", name));
             } else if action == Some(RETURN_KEY) {
-                let (summon, command) = (x.summon as usize, Command::Return);
+                let (summon, command) = (x.summon, Command::Return);
                 ui.action = Some(Action::Shout { summon, command });
                 ui.menu = None;
             } else if action == Some(SWITCH_KEY) {
                 ui.log.log_neutral(format!("Choose who will replace {} with J/K:", name));
-                ui.summon = Some(SummonMenu { choice: 0, replacing: Some(x.summon as usize) });
+                ui.summon = Some(SummonMenu { choice: 0, replacing: Some(x.summon) });
                 ui.menu = None;
             } else {
                 let attack = attacks[chosen as usize];
                 let update = get_initial_target(summon.pos);
-                let data = TargetData::Attack { summon: x.summon as usize, attack };
+                let data = TargetData::Attack { summon: x.summon, attack };
                 let mut target = init_target(data, summon.pos, update);
                 update_target(me, &mut target, update);
                 ui.log.log_neutral("Use the movement keys to select a target:");
@@ -765,6 +765,12 @@ impl Focused {
 
 // UI
 
+struct Callout {
+    color: Color,
+    point: Point,
+    text: &'static str,
+}
+
 struct Menu {
     choice: i32,
     summon: usize,
@@ -773,6 +779,14 @@ struct Menu {
 struct SummonMenu {
     choice: i32,
     replacing: Option<usize>
+}
+
+struct SummonOption<'a> {
+    out: bool,
+    selected: bool,
+    name: &'a str,
+    hp: f64,
+    pp: f64,
 }
 
 pub struct Effect<'a> {
@@ -989,7 +1003,8 @@ impl UI {
         let mut render_particle = |p: Point, r: &RenderData| match r {
             RenderData::Dummy => {},
             &RenderData::Text(text, color) => {
-                self.render_call(me, color, p, text, slice);
+                let callout = Callout { color, point: p, text };
+                self.render_callout(me, &callout, slice);
             },
             &RenderData::Flash(color) => {
                 let Some(p) = remap(p, slice) else { return };
@@ -1090,19 +1105,20 @@ impl UI {
         }
     }
 
-    fn render_call(&self, me: &Entity, c: Color, p: Point, t: &str, slice: &mut Slice) {
-        let len = t.len() as i32;
-        let (shift, prefix, suffix) = if p.0 > me.pos.0 {
+    fn render_callout(&self, me: &Entity, callout: &Callout, slice: &mut Slice) {
+        let len = callout.text.len() as i32;
+        let (shift, prefix, suffix) = if callout.point.0 > me.pos.0 {
             (1, Some('-'), None)
         } else {
             (-len / 2 - 1, if len % 2 == 0 { Some(' ') } else { None }, Some('-'))
         };
         let offset = self.get_map_offset(me);
+        let Delta(dx, dy) = callout.point + Delta(shift, 0) - offset;
 
-        slice.set_cursor(Point(2 * (p.0 + shift - offset.0), p.1 - offset.1));
-        slice.set_fg(Some(c));
+        slice.set_cursor(Point(2 * dx, dy));
+        slice.set_fg(Some(callout.color));
         if let Some(c) = prefix { slice.write_chr(c); }
-        t.chars().for_each(|x| { slice.write_chr(Glyph::bold(x)); });
+        callout.text.chars().for_each(|x| { slice.write_chr(Glyph::bold(x)); });
         if let Some(c) = suffix { slice.write_chr(c); }
         slice.set_fg(None);
     }
@@ -1306,20 +1322,22 @@ impl UI {
         slice.fill(default);
 
         let options = &me.team;
-        for (i, key) in PARTY_KEYS.iter().enumerate() {
+        for (i, &key) in PARTY_KEYS.iter().enumerate() {
             let selected = menu.choice == i as i32;
             match options.get(i) {
                 Some(Teammate::In(x)) => {
                     let (pp, name) = (1.0, describe_teammate(x));
                     let hp = x.cur_hp as f64 / max(x.max_hp, 1) as f64;
-                    self.render_option(*key, 0, selected, name, hp, pp, slice)
+                    let option = SummonOption { out: false, selected, name, hp, pp };
+                    self.render_option(key, &option, slice)
                 }
                 Some(&Teammate::Out(x)) => {
                     let x = me.known.entity(x).unwrap();
                     let (hp, pp, name) = (x.hp, x.pp, describe_entity(x));
-                    self.render_option(*key, 1, selected, name, hp, pp, slice);
+                    let option = SummonOption { out: true, selected, name, hp, pp };
+                    self.render_option(key, &option, slice);
                 },
-                None => self.render_empty_option(*key, UI_COL_SPACE + 1, slice),
+                None => self.render_empty_option(key, UI_COL_SPACE + 1, slice),
             }
         }
     }
@@ -1359,9 +1377,8 @@ impl UI {
         slice.newline().newline().newline();
     }
 
-    fn render_option(&self, key: char, out: i32, selected: bool,
-                     name: &str, hp: f64, pp: f64, slice: &mut Slice) {
-        let out = out != 0;
+    fn render_option(&self, key: char, option: &SummonOption, slice: &mut Slice) {
+        let SummonOption { out, selected, name, hp, pp } = *option;
         let (hp_color, pp_color) = (Self::hp_color(hp), Self::pp_color());
         let fg = if !out && hp > 0. { None } else { Some(UI_GRAY_OPTION.into()) };
 
@@ -1387,7 +1404,7 @@ impl UI {
 
     fn render_entity(&self, key: Option<char>, fg: Option<Color>,
                      view: &EntityKnowledge, slice: &mut Slice) {
-        let prefix = key.map_or_default(|x| UI::render_key(x));
+        let prefix = key.map_or_default(UI::render_key);
         let n = prefix.chars().count();
         let w = UI_STATUS_SIZE - 6;
         let status_bar_line = |p: &str, v: f64, c: Color, s: &mut Slice| {
@@ -1561,7 +1578,7 @@ impl UI {
         let entity = if let Some(x) = entity && x.sensed() { entity } else { None };
         let entity = if is_source { None } else { entity };
 
-        let freshness = source.map(|x| x.freshness(&*me.known));
+        let freshness = source.map(|x| x.freshness(&me.known));
         let freshness = freshness.unwrap_or(if is_target { 1. } else { -1. });
 
         // Special cases for non-sight-based entity knowledge:

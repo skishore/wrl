@@ -187,7 +187,7 @@ pub fn AStarPathLength<F: Fn(Point) -> Status>(path: &[Point], f: F) -> i32 {
     let mut result = 0;
     let mut blocked = false;
     for (&prev, &next) in path.iter().zip(path.iter().skip(1)) {
-        if blocked { return std::i32::MAX; }
+        if blocked { return i32::MAX; }
 
         let status = f(next);
         blocked = status == Status::Blocked;

@@ -6,7 +6,7 @@ use super::game::Action;
 
 // Bhv
 
-pub trait CB = Fn(&mut Ctx) -> ();
+pub trait CB = Fn(&mut Ctx);
 
 impl<T: Bhv> BhvExt for T {}
 
@@ -77,7 +77,7 @@ impl<S: Label, T: Bhv> Bhv for Node<S, T> {
     }
 
     fn reset(&mut self, ctx: &mut Ctx) {
-        if self.last == None { return; }
+        if self.last.is_none() { return; }
         self.tree.reset(ctx);
         self.last = None;
     }
@@ -95,7 +95,7 @@ impl<S: Label, T: Bhv> Bhv for Node<S, T> {
 
 pub struct OnExit<S, T>(S, T);
 
-impl<S: Fn(&mut Ctx) -> (), T: Bhv> Bhv for OnExit<S, T> {
+impl<S: CB, T: Bhv> Bhv for OnExit<S, T> {
     fn debug(&self, debug: &mut DebugLog) { self.1.debug(debug) }
     fn reset(&mut self, ctx: &mut Ctx) { self.1.reset(ctx); (self.0)(ctx) }
     fn tick(&mut self, ctx: &mut Ctx) -> Result {
@@ -107,7 +107,7 @@ impl<S: Fn(&mut Ctx) -> (), T: Bhv> Bhv for OnExit<S, T> {
 
 pub struct OnFail<S, T>(S, T);
 
-impl<S: Fn(&mut Ctx) -> (), T: Bhv> Bhv for OnFail<S, T> {
+impl<S: CB, T: Bhv> Bhv for OnFail<S, T> {
     fn debug(&self, debug: &mut DebugLog) { self.1.debug(debug) }
     fn reset(&mut self, ctx: &mut Ctx) { self.1.reset(ctx) }
     fn tick(&mut self, ctx: &mut Ctx) -> Result {
@@ -119,7 +119,7 @@ impl<S: Fn(&mut Ctx) -> (), T: Bhv> Bhv for OnFail<S, T> {
 
 pub struct OnTick<S, T>(S, T);
 
-impl<S: Fn(&mut Ctx) -> (), T: Bhv> Bhv for OnTick<S, T> {
+impl<S: CB, T: Bhv> Bhv for OnTick<S, T> {
     fn debug(&self, debug: &mut DebugLog) { self.1.debug(debug) }
     fn reset(&mut self, ctx: &mut Ctx) { self.1.reset(ctx) }
     fn tick(&mut self, ctx: &mut Ctx) -> Result { (self.0)(ctx); self.1.tick(ctx) }
@@ -127,7 +127,7 @@ impl<S: Fn(&mut Ctx) -> (), T: Bhv> Bhv for OnTick<S, T> {
 
 pub struct OnRunning<S, T>(S, T);
 
-impl<S: Fn(&mut Ctx) -> (), T: Bhv> Bhv for OnRunning<S, T> {
+impl<S: CB, T: Bhv> Bhv for OnRunning<S, T> {
     fn debug(&self, debug: &mut DebugLog) { self.1.debug(debug) }
     fn reset(&mut self, ctx: &mut Ctx) { self.1.reset(ctx) }
     fn tick(&mut self, ctx: &mut Ctx) -> Result {
@@ -139,7 +139,7 @@ impl<S: Fn(&mut Ctx) -> (), T: Bhv> Bhv for OnRunning<S, T> {
 
 pub struct PostTick<S, T>(S, T);
 
-impl<S: Fn(&mut Ctx) -> (), T: Bhv> Bhv for PostTick<S, T> {
+impl<S: CB, T: Bhv> Bhv for PostTick<S, T> {
     fn debug(&self, debug: &mut DebugLog) { self.1.debug(debug) }
     fn reset(&mut self, ctx: &mut Ctx) { self.1.reset(ctx) }
     fn tick(&mut self, ctx: &mut Ctx) -> Result { let x = self.1.tick(ctx); (self.0)(ctx); x }
@@ -245,7 +245,7 @@ impl Bhv for Utility {
 
     fn reset(&mut self, ctx: &mut Ctx) {
         for x in &mut self.0 { x.reset(ctx); }
-        for x in &mut self.1 { x.1 = std::usize::MAX }
+        for x in &mut self.1 { x.1 = usize::MAX }
     }
 
     fn tick(&mut self, ctx: &mut Ctx) -> Result {

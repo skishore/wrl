@@ -55,9 +55,7 @@ impl Default for MapgenConfig {
 
 impl MapgenConfig {
     fn with_size(size: Point) -> Self {
-        let mut result = Self::default();
-        result.size = size;
-        result
+        Self { size, ..Default::default() }
     }
 }
 
@@ -178,7 +176,7 @@ fn try_place_room(map: &mut Matrix<char>, room: &Matrix<char>, rng: &mut RNG) ->
 
 fn find_closest_pairs(r1: &[Point], r2: &[Point]) -> Vec<(Point, Point)> {
     let mut result = vec![];
-    let mut best_score = std::i64::MAX;
+    let mut best_score = i64::MAX;
 
     for &p1 in r1 {
         for &p2 in r2 {
@@ -226,9 +224,9 @@ fn find_diagonal_components(map: &Matrix<char>, v: char) -> Vec<Vec<Point>> {
 //////////////////////////////////////////////////////////////////////////////
 
 fn generate_blue_noise(spacing: i32, options: &[Point], noise: &mut Matrix<f64>, rng: &mut RNG) {
-    noise.fill(0.);
-    let mut options: Vec<_> = options.iter().map(|&x| x).collect();
+    let mut options = options.to_vec();
     options.shuffle(rng);
+    noise.fill(0.);
 
     let d = ((spacing / 2) as f64).sqrt().ceil() as i32;
 
@@ -257,7 +255,7 @@ fn generate_perlin_noise(
     let mut noise = Matrix::new(size, 0.0);
 
     for octave in 0..octaves {
-        let period = scale / (2.0 as f64).powi(octave);
+        let period = scale * 0.5_f64.powi(octave);
         let frequency = 1.0 / period;
 
         // Generate a grid of random values for this octave.
@@ -377,7 +375,7 @@ fn dijkstra<F: Fn(Point) -> Vec<Point>, G: Fn(Point) -> f64, H: Fn(Point) -> boo
 
     let mut map = HashMap::default();
     let mut heap = std::collections::BinaryHeap::new();
-    let sentinel = Point(std::i32::MAX, std::i32::MAX);
+    let sentinel = Point(i32::MAX, i32::MAX);
 
     // We assume sources are distinct. We can relax this assumption later.
     for &source in sources {
@@ -460,7 +458,7 @@ fn mapgen_attempt(config: &MapgenConfig, rng: &mut RNG) -> Option<Matrix<char>> 
     // connected graph since try_place_room puts new rooms near existing ones.
     for (i, r1) in rooms.iter().enumerate() {
         for r2 in rooms.iter().skip(i) {
-            let (p1, p2) = *sample(&find_closest_pairs(&r1, &r2), rng);
+            let (p1, p2) = *sample(&find_closest_pairs(r1, r2), rng);
             let distance = (p1 - p2).len_l2();
             if distance > config.corridor_limit { continue; }
 

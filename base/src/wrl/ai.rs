@@ -631,7 +631,7 @@ fn WarnRecentThreats(ctx: &mut Ctx) -> Option<Action> {
         } else if stare {
             scan.get_or_insert(Action::Look { look });
         }
-        if warn { threat.mark_warned(ctx.me, &mut ctx.env.rng); }
+        if warn { threat.mark_warned(ctx.me, ctx.env.rng); }
         if warn { bb.last_warn = known.time(); }
     }
     call.or(scan)
@@ -691,15 +691,14 @@ fn AStarHelper(ctx: &mut Ctx, target: Point, kind: PathKind) -> Option<Vec<Point
     let los = LOS(source, target);
     let scores = &ChooseNeighborhood(ctx, kind).scores;
     while prev != source {
-        let (mut best_point, mut best_score) = (None, (std::i32::MAX, std::i32::MAX));
+        let (mut best_point, mut best_score) = (None, (i32::MAX, i32::MAX));
         for &dir in &dirs::ALL {
             let point = prev + dir;
             let Some(&score) = scores.get(&point) else { continue };
             let score = (score, AStarHeuristic(point, &los));
             if score < best_score { (best_point, best_score) = (Some(point), score); }
         }
-        let Some(next) = best_point else { return None };
-
+        let next = best_point?;
         path.push(next);
         prev = next;
     }
@@ -911,7 +910,7 @@ fn select_target_linear(scores: &[(Point, f64)], env: &mut AIEnv) -> Option<Poin
 fn select_target_softmax(scores: &[(Point, f64)], env: &mut AIEnv, temp: f64) -> Option<Point> {
     if scores.is_empty() { return None; }
 
-    let max = scores.iter().fold(std::f64::NEG_INFINITY, |acc, x| acc.max(x.1));
+    let max = scores.iter().fold(f64::NEG_INFINITY, |acc, x| acc.max(x.1));
     let scale = ((1 << 16) - 1) as f64;
     let inv_temp = 1. / temp;
     let values: Vec<_> = scores.iter().map(|&(p, score)| {
@@ -1014,7 +1013,7 @@ fn select_flight_target(ctx: &mut Ctx, hiding: bool) -> Option<Point> {
 
     let score = |p: Point, source_distance: i32| -> (f64, bool) {
         let mut threat = first;
-        let mut threat_distance = std::i32::MAX;
+        let mut threat_distance = i32::MAX;
         for x in threats {
             let z = DijkstraLength(p - x.pos);
             if z < threat_distance { (threat, threat_distance) = (x.pos, z); }
@@ -1107,7 +1106,7 @@ fn FindMatchingNeighbor(ctx: &mut Ctx, valid: CellPredicate) -> Option<Point> {
     let Ctx { pos, dir, .. } = *ctx;
     if valid(ctx, pos) { return Some(pos); }
 
-    let mut best = (std::f64::NEG_INFINITY, None);
+    let mut best = (f64::NEG_INFINITY, None);
     for &x in &dirs::ALL {
         if !valid(ctx, pos + x) { continue; }
         let score = (dir.dot(x) as f64).pow(2) / x.len_taxicab() as f64;
@@ -1244,9 +1243,9 @@ fn LookTowards(ctx: &mut Ctx, target: PathTargetSelector) {
     let path = &mut ctx.blackboard.path;
     if path.kind != PathKind::None { path.target = Some(target) };
 
-    let prev = match &ctx.action {
-        &Some(Action::Idle | Action::Look { .. }) => Some((dirs::NONE, 0.)),
-        &Some(Action::Move { step, turns, .. }) => Some((step, turns)),
+    let prev = match ctx.action {
+        Some(Action::Idle | Action::Look { .. }) => Some((dirs::NONE, 0.)),
+        Some(Action::Move { step, turns, .. }) => Some((step, turns)),
         _ => None,
     };
     let Some((step, turns)) = prev else { return };
@@ -1341,7 +1340,7 @@ fn PathMatchesTarget(ctx: &Ctx) -> bool {
 
 fn ChooseBestSource(ctx: &mut Ctx, kind: PathKind, valid: CellPredicate) -> bool {
     let path = &ctx.blackboard.path;
-    let best = path.path.iter().enumerate().filter(|&(_, &x)| valid(ctx, x)).next();
+    let best = path.path.iter().enumerate().find(|&(_, &x)| valid(ctx, x));
     let Some((limit, _)) = best else { return false };
 
     let path = &mut ctx.blackboard.path;
@@ -1477,7 +1476,7 @@ macro_rules! check_time {
     }}
 }
 
-fn List(t: impl Fn(&mut Ctx) -> ()) -> impl Fn(&mut Ctx) -> bool {
+fn List(t: impl Fn(&mut Ctx)) -> impl Fn(&mut Ctx) -> bool {
     move |x| { let n = x.tmp.targets.len(); t(x); x.tmp.targets.len() > n }
 }
 
@@ -1773,7 +1772,7 @@ fn SelectEnemyTarget(ctx: &mut Ctx) -> bool {
     let Some(eid) = target.eid else { return false };
 
     let other = ctx.known.entity(eid);
-    let other = other.and_then(|x| if x.time < target.loc.time { None } else { Some(x) });
+    let other = other.filter(|x| x.time >= target.loc.time);
 
     let loc = other.map_or(target.loc, |x| x.loc);
     let sense = other.map_or(Sense::Sound, |x| x.sense);

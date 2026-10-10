@@ -104,7 +104,7 @@ impl Eq for &'static Species {}
 
 impl PartialEq for &'static Species {
     fn eq(&self, next: &&'static Species) -> bool {
-        *self as *const Species == *next as *const Species
+        std::ptr::eq::<Species>(*self, *next)
     }
 }
 
