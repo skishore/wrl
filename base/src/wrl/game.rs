@@ -483,7 +483,7 @@ impl Board {
         self.update_known(eid, env);
 
         let actor = &mut self.actors[eid];
-        actor.known.mark_turn_boundary(actor.player, actor.speed, self.time);
+        actor.known.mark_turn_boundary(actor.speed, self.time);
 
         let light = args.species.light.radius;
         self.lighting.set_light(pos, light);
@@ -936,22 +936,27 @@ fn advance_turn(board: &mut Board) -> Option<EID> {
     for (eid, actor) in &board.actors {
         assert!(actor.speed > 0.);
         let left = (actor.turn_timer as f64) * (1. / TURN_TIMER as f64);
-        let time = Timedelta::from_seconds(left / actor.speed);
-        if let Some((_, x)) = best && time >= x { continue; }
-        best = Some((eid, time));
+        let wait = Timedelta::from_seconds(left / actor.speed);
+        if let Some((_, x)) = best && wait >= x { continue; }
+        best = Some((eid, wait));
     }
 
-    let (eid, time) = best?;
-    let time = std::cmp::max(time, Timedelta::default());
-    let charge = time.seconds() * TURN_TIMER as f64;
+    let (eid, wait) = best?;
+    let time = board.time.latch(wait);
+    let wait = std::cmp::max(wait, Timedelta::default());
+    let charge = wait.seconds() * TURN_TIMER as f64;
 
     for (_, actor) in &mut board.actors {
         let delta = (charge * actor.speed).round() as i32;
         if actor.move_timer > 0 { actor.move_timer -= delta; }
         if actor.turn_timer > 0 { actor.turn_timer -= delta; }
+
+        if actor.eid != eid { continue; }
+        actor.known.cleanup_old_events(actor.player, time);
     }
-    board.time = board.time.latch(time);
+
     board.active_actor = Some(eid);
+    board.time = time;
     Some(eid)
 }
 
@@ -1564,7 +1569,7 @@ fn update_state(state: &mut State) {
         let Some(actor) = board.actors.get_mut(eid) else { continue };
 
         let Actor { pos, speed, .. } = *actor;
-        actor.known.mark_turn_boundary(player, speed, time);
+        actor.known.mark_turn_boundary(speed, time);
 
         board.time = board.time.bump();
 
@@ -1660,9 +1665,8 @@ impl State {
         if matches!(mode, GameMode::Gym | GameMode::Sim | GameMode::Test) {
             board.map.entry_mut(pos).unwrap().eid = None;
             let me = &mut board.actors[player];
-            let Actor { player, speed, .. } = *me;
             *me.known = Default::default();
-            me.known.mark_turn_boundary(player, speed, board.time);
+            me.known.mark_turn_boundary(me.speed, board.time);
             me.pos = Point(-9999, -9999);
         }
 
