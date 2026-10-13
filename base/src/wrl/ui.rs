@@ -898,29 +898,6 @@ impl UI {
         //
         // TODO: We should probably be able to attack noise sources even if
         // we don't have a clear line-of-sight to them.
-        //
-        // TODO: Source -> Entity tracking appears to fail if the link would
-        // be established on the turn we lose the source. Example:
-        //
-        //                <- render()
-        //     We: Idle
-        //    NPC: Calls  <- freshness = 1.0
-        //                <- render()
-        //     We: Idle
-        //    NPC: Sneaks <- freshness = 0.5
-        //                <- render()
-        //     We: Idle
-        //                <- source cleaned up here!
-        //    NPC: Moves into view
-        //                <- render()
-        //
-        // Each UI frame is drawn right *before* our turn (which is necessary
-        // to give the player the information needed to decide on an action),
-        // but sources are cleaned up right *after* our turn. The result is
-        // that, around our third turn above:
-        //   - The Call noise from two turns ago is visible in the UI
-        //   - But, we fail to link it to the NPC visible on the next frame
-        //
         let mut focus = focus;
         if let Some(Occupant::Source(x)) = focus && !can_target(me, &Occupant::Source(x)) {
             self.focus = None;

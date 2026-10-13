@@ -384,13 +384,17 @@ impl Knowledge {
 
     // Writes:
 
-    pub fn mark_turn_boundary(&mut self, player: bool, speed: f64, time: Timestamp) {
-        self.timer.end_turn(MAX_TURN_MEMORY, speed, time);
+    pub fn cleanup_old_events(&mut self, player: bool, time: Timestamp) {
+        self.timer.update(time);
 
         self.forget_old_scents();
         self.forget_old_sources(player);
 
         debug_assert!(self.check_invariants());
+    }
+
+    pub fn mark_turn_boundary(&mut self, speed: f64, time: Timestamp) {
+        self.timer.end_turn(MAX_TURN_MEMORY, speed, time);
     }
 
     pub fn observe_event(&mut self, me: &Entity, event: &Event) {

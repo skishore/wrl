@@ -483,7 +483,7 @@ impl Board {
         self.update_known(eid, env);
 
         let entity = &mut self.entities[eid];
-        entity.known.mark_turn_boundary(entity.player, entity.speed, self.time);
+        entity.known.mark_turn_boundary(entity.speed, self.time);
 
         let light = args.species.light.radius;
         self.lighting.set_light(pos, light);
@@ -934,22 +934,27 @@ fn advance_turn(board: &mut Board) -> Option<EID> {
     for (eid, entity) in &board.entities {
         assert!(entity.speed > 0.);
         let left = (entity.turn_timer as f64) * (1. / TURN_TIMER as f64);
-        let time = Timedelta::from_seconds(left / entity.speed);
-        if let Some((_, x)) = best && time >= x { continue; }
-        best = Some((eid, time));
+        let wait = Timedelta::from_seconds(left / entity.speed);
+        if let Some((_, x)) = best && wait >= x { continue; }
+        best = Some((eid, wait));
     }
 
-    let (eid, time) = best?;
-    let time = std::cmp::max(time, Timedelta::default());
-    let charge = time.seconds() * TURN_TIMER as f64;
+    let (eid, wait) = best?;
+    let time = board.time.latch(wait);
+    let wait = std::cmp::max(wait, Timedelta::default());
+    let charge = wait.seconds() * TURN_TIMER as f64;
 
     for (_, entity) in &mut board.entities {
         let delta = (charge * entity.speed).round() as i32;
         if entity.move_timer > 0 { entity.move_timer -= delta; }
         if entity.turn_timer > 0 { entity.turn_timer -= delta; }
+
+        if entity.eid != eid { continue; }
+        entity.known.cleanup_old_events(entity.player, time);
     }
-    board.time = board.time.latch(time);
+
     board.active_entity = Some(eid);
+    board.time = time;
     Some(eid)
 }
 
@@ -1559,7 +1564,7 @@ fn update_state(state: &mut State) {
         let Some(entity) = board.entities.get_mut(eid) else { continue };
 
         let Entity { pos, speed, .. } = *entity;
-        entity.known.mark_turn_boundary(player, speed, time);
+        entity.known.mark_turn_boundary(speed, time);
 
         board.time = board.time.bump();
 
@@ -1655,9 +1660,8 @@ impl State {
         if matches!(mode, GameMode::Gym | GameMode::Sim | GameMode::Test) {
             board.map.entry_mut(pos).unwrap().eid = None;
             let me = &mut board.entities[player];
-            let Entity { player, speed, .. } = *me;
             *me.known = Default::default();
-            me.known.mark_turn_boundary(player, speed, board.time);
+            me.known.mark_turn_boundary(me.speed, board.time);
             me.pos = Point(-9999, -9999);
         }
 
