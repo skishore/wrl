@@ -1255,13 +1255,12 @@ impl UI {
             return;
         }
 
-        let (tile, view, source, header, seen) = match &self.target {
+        let (tile, header, entity, source) = match &self.target {
             Some(x) => {
                 let cell = known.get(x.target);
                 let tile = cell.tile();
-                let seen = cell.visible();
                 let source = cell.source();
-                let view = if cell.can_see_entity_at() { cell.entity() } else { None };
+                let entity = cell.entity().filter(|x| x.sensed());
                 let header = match &x.data {
                     TargetData::FarLook => "Examining...".into(),
                     &TargetData::Attack { summon, attack } => {
@@ -1273,44 +1272,41 @@ impl UI {
                         format!("Sending out {}...", describe_teammate(other))
                     }
                 };
-                (tile, view, source, header, seen)
+                (tile, header, entity, source)
             }
             None => {
                 let tile = self.focused.tile;
-                let view = self.focus.and_then(|x| known.entity(x));
-                let seen = view.map_or(false, |x| x.visible());
+                let header = "Last target:".into();
+                let entity = self.focus.and_then(|x| known.entity(x));
                 let source = None;
-                let header = if seen {
-                    "Last target:"
-                } else {
-                    "Last target: (remembered)"
-                }.into();
-                (tile, view, source, header, seen)
+                (tile, header, entity, source)
             },
         };
 
-        let fg = if self.target.is_some() || seen { None } else { Some(UI_GRAY_OPTION.into()) };
-        let text = if view.is_some() { "Standing on: " } else { "You see: " };
+        let gray = entity.map_or(false, |x| !x.sensed());
+        let text = if entity.is_some() { "Standing on: " } else { "You see: " };
+        let fg = if gray { Some(UI_GRAY_OPTION.into()) } else { None };
+        let suffix = if gray { " (remembered)" } else { "" };
 
         slice.newline();
-        slice.set_fg(fg).write_str(&header).newline();
+        slice.set_fg(fg).write_str(&header).write_str(suffix).newline();
 
-        if let Some(view) = view {
-            self.render_entity(None, fg, view, slice);
+        if let Some(entity) = entity {
+            self.render_entity(None, fg, entity, slice);
         } else {
             slice.newline();
         }
 
         slice.set_fg(fg).write_str(text);
-        if let Some(x) = tile {
-            slice.write_chr(x.glyph).space();
-            slice.write_chr('(').write_str(x.description).write_chr(')').newline();
+        if let Some(tile) = tile {
+            slice.write_chr(tile.glyph).space();
+            slice.write_chr('(').write_str(tile.description).write_chr(')').newline();
         } else {
             slice.write_str("(unseen location)").newline();
         }
 
-        if view.is_none() && let Some(x) = source {
-            let desc = x.sound.map_or("an unknown sound", describe_sound);
+        if entity.is_none() && let Some(source) = source {
+            let desc = source.sound.map_or("an unknown sound", describe_sound);
             slice.newline().write_str("You heard: ").write_str(desc).newline().newline();
         }
     }
