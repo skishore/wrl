@@ -103,6 +103,7 @@ type EF = EntityFlags;
 
 pub struct EntityKnowledge {
     pub eid: EID,
+    pub uid: UID,
     pub dir: Delta,
     pub loc: Location,
     pub name: Option<Rc<str>>,
@@ -123,9 +124,10 @@ impl std::ops::Deref for EntityKnowledge {
 }
 
 impl EntityKnowledge {
-    fn new(eid: EID, species: &'static Species) -> Self {
+    fn new(eid: EID, uid: UID, species: &'static Species) -> Self {
         Self {
             eid,
+            uid,
             dir: dirs::NONE,
             loc: Default::default(),
             name: Default::default(),
@@ -217,8 +219,8 @@ impl std::ops::Deref for SourceKnowledge {
 }
 
 impl SourceKnowledge {
-    fn new(uid: UID, event: &Event) -> Self {
-        let Event { eid, loc, sense, .. } = *event;
+    fn new(eid: Option<EID>, event: &Event) -> Self {
+        let Event { uid, loc, sense, .. } = *event;
         Self { eid, uid, loc, sense, sound: event.sound() }
     }
 
@@ -341,14 +343,14 @@ impl Knowledge {
         debug_assert!(self.check_invariants());
     }
 
-    pub fn observe_event(&mut self, me: &Entity, event: &Event) {
+    pub fn observe_event(&mut self, me: &Entity, eid: Option<EID>, event: &Event) {
         self.timer.update(event.time);
 
         type AH = ActorHandle;
         let mut cloned = event.clone();
-        match self.event_source(me, &mut cloned) {
-            AH::Entity(x) => self.update_entity(x, |x| x.update_for_event(event)),
-            AH::Source(x) => self.update_source(x, |x| *x = SourceKnowledge::new(x.uid, event)),
+        match self.event_source(me, eid, &mut cloned) {
+            AH::Entity(x) => self.update_entity(x, |x| x.update_for_event(&cloned)),
+            AH::Source(x) => self.update_source(x, |x| *x = SourceKnowledge::new(eid, &cloned)),
         }
         self.events.push(cloned);
 
@@ -363,9 +365,10 @@ impl Knowledge {
 
         if *x == Default::default() { self.eid_index.remove(&eid); }
 
+        let uid = self.entities[h].uid;
         let pos = self.delete_entity(h);
 
-        self.forget_event(Some(eid), None, pos);
+        self.forget_event(uid, pos);
 
         debug_assert!(self.check_invariants());
     }
@@ -531,35 +534,29 @@ impl Knowledge {
         let limit = self.timer.time_at_turn(SOURCE_TRACKING_LIMIT);
         let entry = self.eid_index.entry(eid).or_default();
 
-        let entity = entry.entity.unwrap_or_else(
-            || self.entities.push_front(EntityKnowledge::new(eid, other.species)));
+        let entity = entry.entity.unwrap_or_else(|| {
+            self.last_uid += 1;
+            let uid = UID(self.last_uid.try_into().unwrap());
+            self.entities.push_front(EntityKnowledge::new(eid, uid, other.species))
+        });
         entry.entity = Some(entity);
 
         if let Some(x) = entry.source.take() &&
-           let Some(uid) = self.identify_source(x, limit) {
-            let (eid, uid) = (Some(eid), Some(uid));
+           let Some(old) = self.identify_source(x, limit) {
+            let (uid, old) = (self.entities[entity].uid, Some(old));
             let loc = Location { pos: other.pos, time: self.timer.time };
-            let event = Event { eid, uid, loc, data: EventData::Spot, sense };
+            let event = Event { uid, old, loc, data: EventData::Spot, sense };
             self.events.push(event);
         }
         entity
     }
 
-    fn event_source(&mut self, me: &Entity, event: &mut Event) -> ActorHandle {
-        assert!(event.uid.is_none());
-        let eid = event.eid.take();
-
-        let unknown = |event: &mut Event, last_uid: &mut u64, sources: &mut List<SourceKnowledge>| {
-            *last_uid += 1;
-            let uid = UID((*last_uid).try_into().unwrap());
-            let handle = sources.push_front(SourceKnowledge::new(uid, event));
-            event.uid = Some(uid);
-            handle
-        };
+    fn event_source(&mut self, me: &Entity, eid: Option<EID>, event: &mut Event) -> ActorHandle {
+        assert!(event.old.is_none());
 
         // Sounds from non-entities result in new, unknown sources.
         let Some(eid) = eid else {
-            return ActorHandle::Source(unknown(event, &mut self.last_uid, &mut self.sources))
+            return ActorHandle::Source(self.create_source(eid, event));
         };
 
         let limit = self.timer.time_at_turn(SOURCE_TRACKING_LIMIT);
@@ -573,26 +570,32 @@ impl Knowledge {
             Sense::Sound => x.time > limit,
         };
         if !me.player && let Some(x) = entry.entity && link(&self.entities[x]) {
-            event.eid = Some(eid);
+            event.uid = self.entities[x].uid;
             if let Some(y) = entry.source.take() {
-               event.uid = self.identify_source(y, limit);
+               event.old = self.identify_source(y, limit);
             }
             return ActorHandle::Entity(x);
         }
 
         // Try to link the event to an entity we've sensed indirectly.
         if let Some(x) = entry.source && self.sources[x].time > limit {
-            event.uid = Some(self.sources[x].uid);
+            event.uid = self.sources[x].uid;
             return ActorHandle::Source(x);
         };
 
         // No existing source - create a new, unknown one.
-        let result = unknown(event, &mut self.last_uid, &mut self.sources);
-        entry.source = Some(result);
+        let result = self.create_source(Some(eid), event);
+        if let Some(x) = self.eid_index.get_mut(&eid) { x.source = Some(result); }
         ActorHandle::Source(result)
     }
 
     // Entity updates:
+
+    fn create_source(&mut self, eid: Option<EID>, event: &mut Event) -> SourceHandle {
+        self.last_uid += 1;
+        event.uid = UID(self.last_uid.try_into().unwrap());
+        self.sources.push_front(SourceKnowledge::new(eid, event))
+    }
 
     fn delete_entity(&mut self, h: EntityHandle) -> Point {
         let pos = self.entities.remove(h).loc.pos;
@@ -687,9 +690,9 @@ impl Knowledge {
         }
     }
 
-    fn forget_event(&mut self, eid: Option<EID>, uid: Option<UID>, pos: Point) {
+    fn forget_event(&mut self, uid: UID, pos: Point) {
         let loc = Location { pos, time: self.timer.time };
-        let event = Event { eid, uid, loc, data: EventData::Forget, sense: Sense::Sight };
+        let event = Event { uid, old: None, loc, data: EventData::Forget, sense: Sense::Sight };
         self.events.push(event);
     }
 
@@ -712,7 +715,7 @@ impl Knowledge {
 
         self.remove_actor(ActorHandle::Source(h), x.pos);
 
-        self.forget_event(None, Some(x.uid), x.pos);
+        self.forget_event(x.uid, x.pos);
     }
 
     fn forget_old_scents(&mut self) {

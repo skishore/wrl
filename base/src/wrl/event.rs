@@ -49,8 +49,8 @@ pub struct Location {
 
 #[derive(Clone, Debug)]
 pub struct Event {
-    pub eid: Option<EID>,
-    pub uid: Option<UID>,
+    pub uid: UID,
+    pub old: Option<UID>,
     pub loc: Location,
     pub data: EventData,
     pub sense: Sense,

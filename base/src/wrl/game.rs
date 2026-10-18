@@ -1,5 +1,6 @@
 use std::fmt::Debug;
 use std::mem::{replace, swap};
+use std::num::NonZeroU64;
 use std::rc::Rc;
 use std::sync::LazyLock;
 
@@ -20,7 +21,7 @@ use super::debug::DebugFile;
 use super::effect::{CB, Effect, Frame, FT, Particle, ParticleData, self};
 use super::entity::{Command, Individual, Teammate};
 use super::entity::{EID, Entity, EntityArgs, EntityMap};
-use super::event::{Call, Location, Sense};
+use super::event::{Call, Location, Sense, UID};
 use super::event::{AttackEvent, CallEvent, Event, EventData, MoveEvent};
 use super::knowledge::Knowledge;
 use super::mapgen::mapgen_with_size as mapgen;
@@ -583,13 +584,14 @@ impl Board {
 
     // Knowledge:
 
-    fn create_event(&self, eid: EID, data: EventData, pos: Point) -> Event {
-        let (eid, uid) = (Some(eid), None);
+    fn create_event(&self, eid: EID, data: EventData, pos: Point) -> EventSource {
+        let uid = UID(NonZeroU64::new(1).unwrap());
         let loc = Location { pos, time: self.time };
-        Event { eid, uid, loc, data, sense: Sense::Sight }
+        let event = Event { uid, old: None, loc, data, sense: Sense::Sight };
+        EventSource(Some(eid), event)
     }
 
-    fn observe_event(&mut self, eid: EID, s: &Senses, e: &mut Event, env: &mut Env) {
+    fn observe_event(&mut self, eid: EID, s: &Senses, e: &mut EventSource, env: &mut Env) {
         let Some(entity) = self.entities.get_mut(eid) else { return };
 
         let (heard, seen) = (s.heard(), s.seen() && !entity.player);
@@ -598,8 +600,9 @@ impl Board {
         let known = &mut env.known;
         swap(known, &mut entity.known);
 
-        e.sense = if seen { Sense::Sight } else { Sense::Sound };
-        known.observe_event(&self.entities[eid], e);
+        let EventSource(oid, event) = e;
+        event.sense = if seen { Sense::Sight } else { Sense::Sound };
+        known.observe_event(&self.entities[eid], *oid, event);
 
         swap(known, &mut self.entities[eid].known);
     }
@@ -655,7 +658,9 @@ impl Board {
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Event delivery
+// Event delivery:
+
+struct EventSource(Option<EID>, Event);
 
 type SenseMap = HashMap<EID, Senses>;
 
@@ -1259,7 +1264,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let mut logged = false;
             for s in &sightings {
                 let target = if s.target.seen() { tid } else { None };
-                event.data = EventData::Attack(AttackEvent { combat, target });
+                event.1.data = EventData::Attack(AttackEvent { combat, target });
                 state.board.observe_event(s.eid, &s.source, event, &mut state.env);
                 if s.eid != state.player { continue; }
 
