@@ -252,13 +252,13 @@ impl std::ops::Deref for ScentKnowledge {
 #[derive(Eq, PartialEq)]
 struct PointEntry {
     cell: Option<CellHandle>,
-    occupant: Option<OccupantHandle>,
+    actor: Option<ActorHandle>,
     status: Status,
 }
 
 impl Default for PointEntry {
     fn default() -> Self {
-        Self { cell: None, occupant: None, status: Status::Unknown }
+        Self { cell: None, actor: None, status: Status::Unknown }
     }
 }
 
@@ -271,7 +271,7 @@ type EntityHandle = Handle<EntityKnowledge>;
 type SourceHandle = Handle<SourceKnowledge>;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-enum OccupantHandle { Entity(EntityHandle), Source(SourceHandle) }
+enum ActorHandle { Entity(EntityHandle), Source(SourceHandle) }
 
 #[derive(Default, Eq, PartialEq)]
 struct EIDEntry {
@@ -344,11 +344,11 @@ impl Knowledge {
     pub fn observe_event(&mut self, me: &Entity, event: &Event) {
         self.timer.update(event.time);
 
-        type OH = OccupantHandle;
+        type AH = ActorHandle;
         let mut cloned = event.clone();
-        match self.source_for_event(me, &mut cloned) {
-            OH::Entity(x) => self.update_entity(x, |x| x.update_for_event(event)),
-            OH::Source(x) => self.update_source(x, |x| *x = SourceKnowledge::new(x.uid, event)),
+        match self.event_source(me, &mut cloned) {
+            AH::Entity(x) => self.update_entity(x, |x| x.update_for_event(event)),
+            AH::Source(x) => self.update_source(x, |x| *x = SourceKnowledge::new(x.uid, event)),
         }
         self.events.push(cloned);
 
@@ -468,12 +468,12 @@ impl Knowledge {
             memory.update(cell, flags, time, visibility);
 
             // Clear the cell's entity if it's definitely unoccupied.
-            if see_all_entities && entity.is_none() { entry.occupant = None; }
+            if see_all_entities && entity.is_none() { entry.actor = None; }
 
             // Update the cell's pathfinding status.
             entry.status = if !tile.can_move_to(moves) {
                 Status::Blocked
-            } else if entry.occupant.is_some() {
+            } else if entry.actor.is_some() {
                 Status::Occupied
             } else {
                 Status::Free
@@ -545,7 +545,7 @@ impl Knowledge {
         entity
     }
 
-    fn source_for_event(&mut self, me: &Entity, event: &mut Event) -> OccupantHandle {
+    fn event_source(&mut self, me: &Entity, event: &mut Event) -> ActorHandle {
         assert!(event.uid.is_none());
         let eid = event.eid.take();
 
@@ -559,7 +559,7 @@ impl Knowledge {
 
         // Sounds from non-entities result in new, unknown sources.
         let Some(eid) = eid else {
-            return OccupantHandle::Source(unknown(event, &mut self.last_uid, &mut self.sources))
+            return ActorHandle::Source(unknown(event, &mut self.last_uid, &mut self.sources))
         };
 
         let limit = self.timer.time_at_turn(SOURCE_TRACKING_LIMIT);
@@ -577,32 +577,32 @@ impl Knowledge {
             if let Some(y) = entry.source.take() {
                event.uid = self.identify_source(y, limit);
             }
-            return OccupantHandle::Entity(x);
+            return ActorHandle::Entity(x);
         }
 
         // Try to link the event to an entity we've sensed indirectly.
         if let Some(x) = entry.source && self.sources[x].time > limit {
             event.uid = Some(self.sources[x].uid);
-            return OccupantHandle::Source(x);
+            return ActorHandle::Source(x);
         };
 
         // No existing source - create a new, unknown one.
         let result = unknown(event, &mut self.last_uid, &mut self.sources);
         entry.source = Some(result);
-        OccupantHandle::Source(result)
+        ActorHandle::Source(result)
     }
 
     // Entity updates:
 
     fn delete_entity(&mut self, h: EntityHandle) -> Point {
         let pos = self.entities.remove(h).loc.pos;
-        self.remove_occupant(OccupantHandle::Entity(h), pos);
+        self.remove_actor(ActorHandle::Entity(h), pos);
         pos
     }
 
     fn delete_source(&mut self, h: SourceHandle) -> Point {
         let pos = self.sources.remove(h).loc.pos;
-        self.remove_occupant(OccupantHandle::Source(h), pos);
+        self.remove_actor(ActorHandle::Source(h), pos);
         pos
     }
 
@@ -615,9 +615,9 @@ impl Knowledge {
         Some(uid)
     }
 
-    fn remove_occupant(&mut self, h: OccupantHandle, prev: Point) {
-        if let Some(x) = self.pos_index.get_mut(&prev) && x.occupant == Some(h) {
-            x.occupant = None;
+    fn remove_actor(&mut self, h: ActorHandle, prev: Point) {
+        if let Some(x) = self.pos_index.get_mut(&prev) && x.actor == Some(h) {
+            x.actor = None;
             match x.cell {
                 Some(_) => if x.status != Status::Blocked { x.status = Status::Free; }
                 None => { self.pos_index.remove(&prev); }
@@ -625,13 +625,13 @@ impl Knowledge {
         }
     }
 
-    fn update_position(&mut self, h: OccupantHandle, prev: Point, next: Option<Point>) {
-        if next != Some(prev) { self.remove_occupant(h, prev); }
+    fn update_position(&mut self, h: ActorHandle, prev: Point, next: Option<Point>) {
+        if next != Some(prev) { self.remove_actor(h, prev); }
 
         if let Some(next) = next {
             let x = self.pos_index.entry(next).or_default();
             if x.status != Status::Blocked { x.status = Status::Occupied; }
-            x.occupant = Some(h);
+            x.actor = Some(h);
         }
     }
 
@@ -643,7 +643,7 @@ impl Knowledge {
         f(entity);
         let next = entity.pos;
 
-        self.update_position(OccupantHandle::Entity(h), prev, Some(next));
+        self.update_position(ActorHandle::Entity(h), prev, Some(next));
     }
 
     fn update_source(&mut self, h: SourceHandle, f: impl FnOnce(&mut SourceKnowledge)) {
@@ -654,7 +654,7 @@ impl Knowledge {
         f(source);
         let next = source.pos;
 
-        self.update_position(OccupantHandle::Source(h), prev, Some(next));
+        self.update_position(ActorHandle::Source(h), prev, Some(next));
     }
 
     // Cleanup:
@@ -698,7 +698,7 @@ impl Knowledge {
         let Some(y) = self.pos_index.get_mut(&x.point) else { return };
 
         y.cell = None;
-        match y.occupant {
+        match y.actor {
             Some(_) => y.status = Status::Occupied,
             None => { self.pos_index.remove(&x.point); }
         }
@@ -710,7 +710,7 @@ impl Knowledge {
 
         if let Some(e) = x.eid { self.forget_source_link(e, h); }
 
-        self.remove_occupant(OccupantHandle::Source(h), x.pos);
+        self.remove_actor(ActorHandle::Source(h), x.pos);
 
         self.forget_event(None, Some(x.uid), x.pos);
     }
@@ -766,21 +766,21 @@ impl Knowledge {
         }
 
         // Check that the indices are consistent and minimal:
-        type OH = OccupantHandle;
+        type AH = ActorHandle;
         for (&pos, point) in &self.pos_index {
-            let PointEntry { cell, occupant, status } = *point;
-            assert!(cell.is_some() || occupant.is_some());
+            let PointEntry { cell, actor, status } = *point;
+            assert!(cell.is_some() || actor.is_some());
 
             if let Some(x) = cell { assert!(self.cells[x].point == pos); }
-            if let Some(OH::Entity(x)) = occupant { assert!(self.entities[x].pos == pos); }
-            if let Some(OH::Source(x)) = occupant { assert!(self.sources[x].pos == pos); }
+            if let Some(AH::Entity(x)) = actor { assert!(self.entities[x].pos == pos); }
+            if let Some(AH::Source(x)) = actor { assert!(self.sources[x].pos == pos); }
 
             let lookup = PointLookup { root: self, spot: Some(point) };
             assert!(status == lookup.status_for(self.moves));
 
             let actual = if let Some(x) = cell && !self.cells[x].tile.can_move_to(self.moves) {
                 Status::Blocked
-            } else if occupant.is_some() {
+            } else if actor.is_some() {
                 Status::Occupied
             } else {
                 Status::Free
@@ -843,12 +843,12 @@ impl<'a> PointLookup<'a> {
     }
 
     pub fn entity(&self) -> Option<&'a EntityKnowledge> {
-        let OccupantHandle::Entity(x) = self.spot?.occupant? else { return None };
+        let ActorHandle::Entity(x) = self.spot?.actor? else { return None };
         Some(&self.root.entities[x])
     }
 
     pub fn source(&self) -> Option<&'a SourceKnowledge> {
-        let OccupantHandle::Source(x) = self.spot?.occupant? else { return None };
+        let ActorHandle::Source(x) = self.spot?.actor? else { return None };
         Some(&self.root.sources[x])
     }
 
@@ -866,7 +866,7 @@ impl<'a> PointLookup<'a> {
     // Predicates:
 
     pub fn occupied(&self) -> bool {
-        self.spot.map_or(false, |x| x.occupant.is_some())
+        self.spot.map_or(false, |x| x.actor.is_some())
     }
 
     pub fn blocked(&self) -> bool {
