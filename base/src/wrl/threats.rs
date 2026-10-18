@@ -8,7 +8,7 @@ use crate::base::util::{HashMap, RNG};
 
 use super::debug::DebugLog;
 use super::dex::Species;
-use super::entity::{Entity, EID};
+use super::entity::Entity;
 use super::event::{AttackEvent, Call, CallEvent, Event, EventData, Location, Sense, UID};
 use super::knowledge::{EntityKnowledge, Knowledge};
 use super::game::CALL_VOLUME;
@@ -338,7 +338,7 @@ impl Threat {
 pub type ThreatHandle = Handle<Threat>;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
-pub enum TID { CID, EID(EID), UID(UID) }
+pub enum TID { CID, UID(UID) }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub enum FightOrFlight { Fight, Flight, #[default] Safe }
@@ -402,6 +402,7 @@ impl ThreatState {
 
         for event in &me.known.events {
             let Some(threat) = self.get_by_event(me, event) else { continue };
+
             threat.update_for_event(me, event);
             if threat.certain() && threat.hostile() { self.forget_tid(TID::CID); }
 
@@ -412,7 +413,8 @@ impl ThreatState {
         }
         for other in &me.known.entities {
             if !other.sensed() { break; }
-            let Some(threat) = self.get_by_entity(me, other.eid) else { continue };
+            let Some(threat) = self.get_by_entity(me, other) else { continue };
+
             threat.update_for_sighting(me, other);
             if threat.certain() && threat.hostile() { self.forget_tid(TID::CID); }
         }
@@ -536,43 +538,37 @@ impl ThreatState {
         self.threats.remove(handle);
     }
 
-    fn get_by_entity(&mut self, me: &Entity, eid: EID) -> Option<&mut Threat> {
-        let handle = self.get_by_tid(me, TID::EID(eid))?;
+    fn get_by_entity(&mut self, me: &Entity, other: &EntityKnowledge) -> Option<&mut Threat> {
+        if other.eid == me.eid { return None; }
+
+        let handle = self.get_by_tid(me, TID::UID(other.uid));
         Some(&mut self.threats[handle])
     }
 
     fn get_by_event(&mut self, me: &Entity, event: &Event) -> Option<&mut Threat> {
-        let tid = event.eid.map(TID::EID).or(event.uid.map(TID::UID))?;
+        let tid = TID::UID(event.uid);
 
         if matches!(event.data, EventData::Forget) {
             self.forget_tid(tid);
             return None;
         }
 
-        let handle = self.get_by_tid(me, tid)?;
+        let handle = self.get_by_tid(me, tid);
 
-        if event.eid.is_some() && let Some(x) = event.uid &&
-           let Some(x) = self.threat_index.remove(&TID::UID(x)) {
+        if let Some(x) = event.old && let Some(x) = self.threat_index.remove(&TID::UID(x)) {
+            assert!(handle != x, "{:?} vs. {:?}", event.uid, event.old);
             let existing = self.threats.remove(x);
             self.threats[handle].merge_from(&existing);
         }
-
         Some(&mut self.threats[handle])
     }
 
-    fn get_by_tid(&mut self, me: &Entity, tid: TID) -> Option<ThreatHandle> {
-        if self.known_good(me, tid) { return None; }
-
-        Some(*self.threat_index.entry(tid).and_modify(|&mut x| {
+    fn get_by_tid(&mut self, me: &Entity, tid: TID) -> ThreatHandle {
+        *self.threat_index.entry(tid).and_modify(|&mut x| {
             self.threats.move_to_front(x);
         }).or_insert_with(|| {
             self.threats.push_front(Threat::prior(me))
-        }))
-    }
-
-    fn known_good(&self, me: &Entity, tid: TID) -> bool {
-        let TID::EID(x) = tid else { return false };
-        x == me.eid || me.known.entity(x).map_or(false, |x| x.friend())
+        })
     }
 
     fn friendly_call(me: &Entity, x: &CallEvent) -> bool {
@@ -584,7 +580,7 @@ impl ThreatState {
     }
 
     fn guess_threat_location(&mut self, me: &Entity, event: &Event) {
-        let Some(handle) = self.get_by_tid(me, TID::CID) else { return };
+        let handle = self.get_by_tid(me, TID::CID);
 
         let mut attack = event.clone();
         let data = AttackEvent { combat: true, target: Some(me.eid) };
