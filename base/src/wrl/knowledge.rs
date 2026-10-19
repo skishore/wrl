@@ -116,6 +116,9 @@ pub struct ActorKnowledge {
     pub hp: f64,
     pub pp: f64,
     pub delta: i32,
+
+    // Internal index:
+    uids: ThinVec<UID>,
 }
 
 impl std::ops::Deref for ActorKnowledge {
@@ -140,6 +143,9 @@ impl ActorKnowledge {
             hp: 0.,
             pp: 0.,
             delta: 0,
+
+            // Internal index:
+            uids: Default::default(),
         }
     }
 
@@ -249,6 +255,42 @@ impl std::ops::Deref for ScentKnowledge {
 
 //////////////////////////////////////////////////////////////////////////////
 
+// A Trace is either an Actor or a Noise - i.e. something we can track.
+
+pub enum Trace<'a> {
+    Actor(&'a ActorKnowledge),
+    Noise(&'a NoiseKnowledge),
+}
+
+impl<'a> std::ops::Deref for Trace<'a> {
+    type Target = Location;
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Trace::Actor(x) => &x.loc,
+            Trace::Noise(x) => &x.loc,
+        }
+    }
+}
+
+impl<'a> Trace<'a> {
+    pub fn uid(&self) -> UID {
+        match self {
+            Trace::Actor(x) => x.uid,
+            Trace::Noise(x) => x.uid,
+        }
+    }
+
+    pub fn actor(&self) -> Option<&'a ActorKnowledge> {
+        if let Trace::Actor(x) = self { Some(x) } else { None }
+    }
+
+    pub fn noise(&self) -> Option<&'a NoiseKnowledge> {
+        if let Trace::Noise(x) = self { Some(x) } else { None }
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
 // Cell state cache:
 
 #[derive(Eq, PartialEq)]
@@ -297,6 +339,7 @@ pub struct Knowledge {
     moves: TileFlags,
     timer: TurnTimer,
     eid_index: HashMap<EID, EIDEntry>,
+    uid_index: HashMap<UID, TraceHandle>,
     pos_index: HashMap<Point, PointEntry>,
     last_uid: u64,
 }
@@ -314,6 +357,13 @@ impl Knowledge {
 
     pub fn actor(&self, eid: EID) -> Option<&ActorKnowledge> {
         Some(&self.actors[self.eid_index.get(&eid)?.actor?])
+    }
+
+    pub fn trace(&self, uid: UID) -> Option<Trace<'_>> {
+        match *self.uid_index.get(&uid)? {
+            TraceHandle::Actor(x) => Some(Trace::Actor(&self.actors[x])),
+            TraceHandle::Noise(x) => Some(Trace::Noise(&self.noises[x])),
+        }
     }
 
     pub fn get(&self, p: Point) -> PointLookup<'_> {
@@ -365,10 +415,12 @@ impl Knowledge {
 
         if *x == Default::default() { self.eid_index.remove(&eid); }
 
-        let uid = self.actors[h].uid;
-        let pos = self.delete_actor(h);
+        let x = self.actors.remove(h);
+        x.uids.iter().for_each(|x| { self.uid_index.remove(x); });
+        self.remove_trace(TraceHandle::Actor(h), x.pos);
+        self.uid_index.remove(&x.uid);
 
-        self.forget_event(uid, pos);
+        self.forget_event(x.uid, x.pos);
 
         debug_assert!(self.check_invariants());
     }
@@ -537,13 +589,15 @@ impl Knowledge {
         let actor = entry.actor.unwrap_or_else(|| {
             self.last_uid += 1;
             let uid = UID(self.last_uid.try_into().unwrap());
-            self.actors.push_front(ActorKnowledge::new(eid, uid, other.species))
+            let result = self.actors.push_front(ActorKnowledge::new(eid, uid, other.species));
+            self.uid_index.insert(uid, TraceHandle::Actor(result));
+            result
         });
         entry.actor = Some(actor);
 
         if let Some(x) = entry.noise.take() &&
-           let Some(old) = self.identify_noise(x, limit) {
-            let (uid, old) = (self.actors[actor].uid, Some(old));
+           let Some(x) = self.identify_noise(actor, x, limit) {
+            let (uid, old) = (self.actors[actor].uid, Some(x));
             let loc = Location { pos: other.pos, time: self.timer.time };
             let event = Event { uid, old, loc, data: EventData::Spot, sense };
             self.events.push(event);
@@ -572,7 +626,7 @@ impl Knowledge {
         if !me.player && let Some(x) = entry.actor && link(&self.actors[x]) {
             event.uid = self.actors[x].uid;
             if let Some(y) = entry.noise.take() {
-               event.old = self.identify_noise(y, limit);
+               event.old = self.identify_noise(x, y, limit);
             }
             return TraceHandle::Actor(x);
         }
@@ -594,27 +648,21 @@ impl Knowledge {
     fn create_noise(&mut self, eid: Option<EID>, event: &mut Event) -> NoiseHandle {
         self.last_uid += 1;
         event.uid = UID(self.last_uid.try_into().unwrap());
-        self.noises.push_front(NoiseKnowledge::new(eid, event))
+        let result = self.noises.push_front(NoiseKnowledge::new(eid, event));
+        self.uid_index.insert(event.uid, TraceHandle::Noise(result));
+        result
     }
 
-    fn delete_actor(&mut self, h: ActorHandle) -> Point {
-        let pos = self.actors.remove(h).loc.pos;
-        self.remove_trace(TraceHandle::Actor(h), pos);
-        pos
-    }
-
-    fn delete_noise(&mut self, h: NoiseHandle) -> Point {
-        let pos = self.noises.remove(h).loc.pos;
-        self.remove_trace(TraceHandle::Noise(h), pos);
-        pos
-    }
-
-    fn identify_noise(&mut self, s: NoiseHandle, limit: Timestamp) -> Option<UID> {
+    fn identify_noise(&mut self, h: ActorHandle, s: NoiseHandle, limit: Timestamp) -> Option<UID> {
         let noise = &self.noises[s];
         if noise.time <= limit { return None; }
 
-        let uid = noise.uid;
-        self.delete_noise(s);
+        let NoiseKnowledge { uid, loc, .. } = *noise;
+        self.remove_trace(TraceHandle::Noise(s), loc.pos);
+        self.noises.remove(s);
+
+        self.uid_index.insert(uid, TraceHandle::Actor(h));
+        self.actors[h].uids.push(uid);
         Some(uid)
     }
 
@@ -714,6 +762,7 @@ impl Knowledge {
         if let Some(e) = x.eid { self.forget_noise_link(e, h); }
 
         self.remove_trace(TraceHandle::Noise(h), x.pos);
+        self.uid_index.remove(&x.uid);
 
         self.forget_event(x.uid, x.pos);
     }
@@ -758,18 +807,25 @@ impl Knowledge {
         check_sorted(self.scents.iter().map(|x| x.time).collect());
         check_sorted(self.events.iter().rev().map(|x| x.time).collect());
 
-        // Check that every cell and actor is indexed:
+        // Check that every cell, noise, and actor is indexed:
+        type TH = TraceHandle;
         for x in &self.cells {
             let entry = self.pos_index.get(&x.point);
             assert!(entry.and_then(|x| x.cell).is_some());
         }
+        for x in &self.noises {
+            let entry = self.uid_index.get(&x.uid);
+            assert!(matches!(entry, Some(&TH::Noise(y)) if std::ptr::eq(x, &self.noises[y])));
+        }
         for x in &self.actors {
             let entry = self.eid_index.get(&x.eid);
             assert!(entry.and_then(|x| x.actor).is_some());
+
+            let entry = self.uid_index.get(&x.uid);
+            assert!(matches!(entry, Some(&TH::Actor(y)) if std::ptr::eq(x, &self.actors[y])));
         }
 
         // Check that the indices are consistent and minimal:
-        type TH = TraceHandle;
         for (&pos, point) in &self.pos_index {
             let PointEntry { cell, trace, status } = *point;
             assert!(cell.is_some() || trace.is_some());
@@ -853,6 +909,13 @@ impl<'a> PointLookup<'a> {
     pub fn noise(&self) -> Option<&'a NoiseKnowledge> {
         let TraceHandle::Noise(x) = self.spot?.trace? else { return None };
         Some(&self.root.noises[x])
+    }
+
+    pub fn trace(&self) -> Option<Trace<'a>> {
+        match self.spot?.trace? {
+            TraceHandle::Actor(x) => Some(Trace::Actor(&self.root.actors[x])),
+            TraceHandle::Noise(x) => Some(Trace::Noise(&self.root.noises[x])),
+        }
     }
 
     pub fn status(&self) -> Status {
