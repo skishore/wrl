@@ -869,12 +869,10 @@ fn try_recall(state: &mut State, eid: EID, oid: EID, quiet: bool) -> bool {
     if summon.leader != Some(eid) { return false; }
 
     let (source, target) = (leader.pos, summon.pos);
-    let (player, name) = (leader.player, summon.species.name);
-
     if !can_summon(&state.board, leader, target) { return false; }
 
-    if player && !quiet {
-        state.env.ui.log.log_neutral(format!("You withdraw {}.", name));
+    if leader.player && !quiet {
+        state.env.ui.log.log_neutral(format!("You withdraw {}.", summon.lower()));
         state.env.ui.log.end_menu_logging();
     }
 
@@ -896,17 +894,17 @@ fn try_switch(state: &mut State, eid: EID, oid: EID, team: usize, quiet: bool) -
     let Some(index) = index else { return false };
 
     let teammate = leader.team.get(team);
-    let Some(Teammate::In(x)) = teammate else { return false };
+    let Some(Teammate::In(ind)) = teammate else { return false };
 
-    let Individual { species, cur_hp, .. } = *x;
+    let Individual { species, cur_hp, .. } = *ind;
     if cur_hp == 0 { return false; }
 
     let tile = state.board.get_tile(target);
     if !tile.can_move_to(species.moves) { return false; }
 
     if !quiet {
-        let name = summon.species.name;
-        shout(state, eid, &format!("{}, return! Go, {}!", name, species.name), "");
+        let (old, new) = (summon.upper(), ind.desc());
+        shout(state, eid, &format!("{}, return! Go, {}!", old, new), "");
     }
 
     let recall: CB = Box::new(move |x| x.board.remove_actor(oid));
@@ -1312,12 +1310,18 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let summon = me.summons.get(summon);
             let Some(&oid) = summon else { return ActionResult::failure() };
 
-            let new = match me.team.get(team) {
-                Some(&Teammate::Out(x)) => state.board.actors[x].species.name,
-                Some(Teammate::In(x)) => x.species.name,
-                None => "your other teammate",
+            // Format the failure message before we remove any actors.
+            let failure = if player {
+                let new = match me.team.get(team) {
+                    Some(&Teammate::Out(x)) => state.board.actors[x].lower(),
+                    Some(Teammate::In(x)) => x.desc().into(),
+                    None => "your teammate".into(),
+                };
+                let old = state.board.actors[oid].lower();
+                format!("You withdraw {}, but can't summon {}.", old, new)
+            } else {
+                String::default()
             };
-            let old = state.board.actors[oid].species.name;
 
             let okay = try_switch(state, eid, oid, team, quiet);
             if okay { return ActionResult::success(); }
@@ -1325,14 +1329,11 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let okay = fallback && try_recall(state, eid, oid, /*quiet=*/true);
             if !okay { return ActionResult::failure(); }
 
-            if player {
-                let msg = format!("You withdraw {}, but can't summon {}.", old, new);
-                state.env.ui.log.log_failure(msg);
-            }
+            if player { state.env.ui.log.log_failure(failure); }
             ActionResult::success()
         }
         Action::Summon { team, dir } => {
-            let teammate = me.team.get(team);
+            let teammate = state.board.actors[eid].team.get(team);
             let Some(Teammate::In(x)) = teammate else { return ActionResult::failure() };
 
             let Individual { species, cur_hp, .. } = *x;
@@ -1348,7 +1349,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let index = me.summons.len();
             let cb: CB = Box::new(move |x| summon_actor(x, eid, target, index, team));
 
-            shout(state, eid, &format!("Go, {}!", species.name), "");
+            shout(state, eid, &format!("Go, {}!", x.desc()), "");
 
             let effect = effect::SummonEffect(source, target);
             state.add_effect(apply_effect(effect, FT::Summon, cb));
@@ -1359,7 +1360,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let Some(&oid) = summon else { return ActionResult::failure() };
 
             let summon = &state.board.actors[oid];
-            let name = summon.species.name;
+            let name = summon.upper();
 
             let succeed = |state: &mut State, suffix: &str| {
                 let command = match command {

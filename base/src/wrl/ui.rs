@@ -77,11 +77,7 @@ fn get_direction(ch: char) -> Option<Delta> {
 }
 
 fn describe_actor(x: &ActorKnowledge) -> &str {
-    if let Some(x) = &x.name { x.as_ref() } else { x.species.name }
-}
-
-fn describe_teammate(x: &Individual) -> &str {
-    if let Some(x) = &x.name { x.as_ref() } else { x.species.name }
+    x.name.as_ref().map_or(x.species.name, |x| &**x)
 }
 
 fn describe_sound(sound: Sound) -> &'static str {
@@ -450,7 +446,7 @@ fn process_summon_input(ui: &mut UI, me: &Actor, input: Input) {
     // If the given party member has fainted, fail.
 
     if teammate.cur_hp == 0 {
-        let error = format!("{} has no strength left!", describe_teammate(teammate));
+        let error = format!("{} has no strength left!", teammate.desc());
         ui.log.log_failure(error);
         return;
     };
@@ -465,7 +461,7 @@ fn process_summon_input(ui: &mut UI, me: &Actor, input: Input) {
     }
 
     let target = init_summon_target(me, chosen);
-    let message = format!("Choose where to summon {}:", describe_teammate(teammate));
+    let message = format!("Choose where to summon {}:", teammate.desc());
     ui.log.log_neutral(message);
     ui.target = Some(target);
     ui.summon = None;
@@ -1268,7 +1264,7 @@ impl UI {
                     },
                     &TargetData::Summon { team, .. } => {
                         let other = get_teammate(me, team).unwrap();
-                        format!("Sending out {}...", describe_teammate(other))
+                        format!("Sending out {}...", other.desc())
                     }
                 };
                 (tile, header, actor, noise)
@@ -1320,7 +1316,7 @@ impl UI {
             let selected = menu.choice == i as i32;
             match options.get(i) {
                 Some(Teammate::In(x)) => {
-                    let (pp, name) = (1.0, describe_teammate(x));
+                    let (pp, name) = (1.0, x.desc());
                     let hp = x.cur_hp as f64 / max(x.max_hp, 1) as f64;
                     let option = SummonOption { out: false, selected, name, hp, pp };
                     self.render_option(key, &option, slice)

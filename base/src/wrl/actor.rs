@@ -41,16 +41,7 @@ pub enum Command {
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Actor:
-
-pub struct ActorArgs {
-    pub eid: EID,
-    pub name: Option<Rc<str>>,
-    pub player: bool,
-    pub leader: Option<EID>,
-    pub species: &'static Species,
-    pub pos: Point,
-}
+// Teammate:
 
 pub struct Individual {
     pub eid: EID,
@@ -63,6 +54,25 @@ pub struct Individual {
 pub enum Teammate {
     In(Individual),
     Out(EID),
+}
+
+impl Individual {
+    pub fn desc(&self) -> &str {
+        self.name.as_ref().map_or(self.species.name, |x| &**x)
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// Actor:
+
+pub struct ActorArgs {
+    pub eid: EID,
+    pub name: Option<Rc<str>>,
+    pub player: bool,
+    pub leader: Option<EID>,
+    pub species: &'static Species,
+    pub pos: Point,
 }
 
 pub struct Actor {
@@ -128,20 +138,19 @@ impl Actor {
 
     // Text formatting:
 
-    pub fn lower(&self) -> String {
-        if self.player { return "you".into() };
+    pub fn lower(&self) -> String { self.describe(/*upper=*/false) }
+
+    pub fn upper(&self) -> String { self.describe(/*upper=*/true) }
+
+    fn describe(&self, upper: bool) -> String {
+        let you = if upper { "You" } else { "you" };
+        let the = if upper { "The" } else { "the" };
+
+        if self.player { return you.into() };
         if let Some(x) = &self.name { return x.as_ref().into(); }
 
         let name = self.species.name;
-        if self.leader.is_some() { name.into() } else { format!("the wild {}", name) }
-    }
-
-    pub fn upper(&self) -> String {
-        if self.player { return "You".into() };
-        if let Some(x) = &self.name { return x.as_ref().into(); }
-
-        let name = self.species.name;
-        if self.leader.is_some() { name.into() } else { format!("The wild {}", name) }
+        if self.leader.is_some() { name.into() } else { format!("{} wild {}", the, name) }
     }
 
     // Getters:
