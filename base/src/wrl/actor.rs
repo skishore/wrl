@@ -41,9 +41,9 @@ pub enum Command {
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Entity:
+// Actor:
 
-pub struct EntityArgs {
+pub struct ActorArgs {
     pub eid: EID,
     pub name: Option<Rc<str>>,
     pub player: bool,
@@ -65,7 +65,7 @@ pub enum Teammate {
     Out(EID),
 }
 
-pub struct Entity {
+pub struct Actor {
     pub eid: EID,
     pub name: Option<Rc<str>>,
     pub species: &'static Species,
@@ -94,8 +94,8 @@ pub struct Entity {
     pub sneaking: bool,
 }
 
-impl Entity {
-    fn new(args: &EntityArgs, rng: &mut RNG) -> Self {
+impl Actor {
+    fn new(args: &ActorArgs, rng: &mut RNG) -> Self {
         Self {
             eid: args.eid,
             name: args.name.clone(),
@@ -195,40 +195,40 @@ static_assert_size!(Option<EID>, 8);
 
 //////////////////////////////////////////////////////////////////////////////
 
-// EntityMap:
+// ActorMap:
 
 #[derive(Default)]
-pub struct EntityMap {
-    map: HashMap<EID, Entity>,
+pub struct ActorMap {
+    map: HashMap<EID, Actor>,
     next: Option<EID>,
     order: Vec<EID>,
 }
 
-impl EntityMap {
+impl ActorMap {
     pub fn allocate_eid(&mut self) -> EID {
         let result = self.next.unwrap_or(EID(NonZeroU64::MIN));
         self.next = Some(EID(result.0.checked_add(1).unwrap()));
         result
     }
 
-    pub fn add(&mut self, args: &EntityArgs, rng: &mut RNG) {
+    pub fn add(&mut self, args: &ActorArgs, rng: &mut RNG) {
         let eid = args.eid;
-        let prev = self.map.insert(eid, Entity::new(args, rng));
+        let prev = self.map.insert(eid, Actor::new(args, rng));
         assert!(prev.is_none());
         self.order.push(eid);
         self.order.sort();
     }
 
-    pub fn remove(&mut self, eid: EID) -> Option<Entity> {
+    pub fn remove(&mut self, eid: EID) -> Option<Actor> {
         self.order.retain(|&x| x != eid);
         self.map.remove(&eid)
     }
 
     pub fn clear(&mut self) { *self = Default::default() }
 
-    pub fn get(&self, eid: EID) -> Option<&Entity> { self.map.get(&eid) }
+    pub fn get(&self, eid: EID) -> Option<&Actor> { self.map.get(&eid) }
 
-    pub fn get_mut(&mut self, eid: EID) -> Option<&mut Entity> { self.map.get_mut(&eid) }
+    pub fn get_mut(&mut self, eid: EID) -> Option<&mut Actor> { self.map.get_mut(&eid) }
 
     pub fn has(&self, eid: EID) -> bool { self.map.contains_key(&eid) }
 
@@ -241,54 +241,54 @@ impl EntityMap {
     }
 }
 
-impl Index<EID> for EntityMap {
-    type Output = Entity;
+impl Index<EID> for ActorMap {
+    type Output = Actor;
     fn index(&self, eid: EID) -> &Self::Output {
         self.get(eid).unwrap()
     }
 }
 
-impl IndexMut<EID> for EntityMap {
+impl IndexMut<EID> for ActorMap {
     fn index_mut(&mut self, eid: EID) -> &mut Self::Output {
         self.get_mut(eid).unwrap()
     }
 }
 
-impl<'a> IntoIterator for &'a EntityMap {
-    type Item = (EID, &'a Entity);
+impl<'a> IntoIterator for &'a ActorMap {
+    type Item = (EID, &'a Actor);
     type IntoIter = Iter<'a>;
     fn into_iter(self) -> Self::IntoIter { self.iter() }
 }
 
 
-impl<'a> IntoIterator for &'a mut EntityMap {
-    type Item = (EID, &'a mut Entity);
+impl<'a> IntoIterator for &'a mut ActorMap {
+    type Item = (EID, &'a mut Actor);
     type IntoIter = IterMut<'a>;
     fn into_iter(self) -> Self::IntoIter { self.iter_mut() }
 }
 
 //////////////////////////////////////////////////////////////////////////////
 
-// EntityMap iterators
+// ActorMap iterators
 
-pub struct Iter<'a>(&'a HashMap<EID, Entity>, std::slice::Iter<'a, EID>);
+pub struct Iter<'a>(&'a HashMap<EID, Actor>, std::slice::Iter<'a, EID>);
 
-pub struct IterMut<'a>(*mut HashMap<EID, Entity>, std::slice::Iter<'a, EID>);
+pub struct IterMut<'a>(*mut HashMap<EID, Actor>, std::slice::Iter<'a, EID>);
 
 impl<'a> FusedIterator for Iter<'a> {}
 
 impl<'a> FusedIterator for IterMut<'a> {}
 
 impl<'a> Iterator for Iter<'a> {
-    type Item = (EID, &'a Entity);
+    type Item = (EID, &'a Actor);
     fn next(&mut self) -> Option<Self::Item> {
         self.1.next().map(|&x| (x, &self.0[&x]))
     }
 }
 
-// SAFETY: add and remove ensure that EIDs in EntityMap.order are unique.
+// SAFETY: add and remove ensure that EIDs in ActorMap.order are unique.
 impl<'a> Iterator for IterMut<'a> {
-    type Item = (EID, &'a mut Entity);
+    type Item = (EID, &'a mut Actor);
     fn next(&mut self) -> Option<Self::Item> {
         self.1.next().map(|&x| (x, unsafe { &mut *self.0 }.get_mut(&x).unwrap()))
     }

@@ -1,9 +1,9 @@
+mod actor;
 mod ai;
 mod bhv;
 mod debug;
 mod dex;
 mod effect;
-mod entity;
 mod event;
 mod knowledge;
 mod list;

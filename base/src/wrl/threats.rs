@@ -6,11 +6,11 @@ use rand::Rng;
 use crate::base::point::Point;
 use crate::base::util::{HashMap, RNG};
 
+use super::actor::Actor;
 use super::debug::DebugLog;
 use super::dex::Species;
-use super::entity::Entity;
 use super::event::{AttackEvent, Call, CallEvent, Event, EventData, Location, Sense, UID};
-use super::knowledge::{EntityKnowledge, Knowledge};
+use super::knowledge::{ActorKnowledge, Knowledge};
 use super::game::CALL_VOLUME;
 use super::list::{Handle, List};
 use super::time::Timestamp;
@@ -25,7 +25,7 @@ pub const CALL_RETRY_TURNS: i32 = 16;
 const PENALTY_DECAY: f64 = 0.5;
 const PENALTY_RANGE: Range<f64> = 2.0..4.0;
 
-fn timid(me: &Entity) -> bool { !me.species.predator() }
+fn timid(me: &Actor) -> bool { !me.species.predator() }
 
 struct TimeDecay {
     current: Timestamp,
@@ -34,7 +34,7 @@ struct TimeDecay {
 }
 
 impl TimeDecay {
-    fn new(me: &Entity, turns: i32) -> Self {
+    fn new(me: &Actor, turns: i32) -> Self {
         let known = &*me.known;
         Self { current: known.time(), timeout: known.time_at_turn(turns), turns }
     }
@@ -90,7 +90,7 @@ impl std::ops::Deref for Threat {
 }
 
 impl Threat {
-    fn prior(me: &Entity) -> Self {
+    fn prior(me: &Actor) -> Self {
         Self {
             loc: Default::default(),
             sense: Sense::Sight,
@@ -170,7 +170,7 @@ impl Threat {
         self.warnings > 0
     }
 
-    pub fn mark_warned(&mut self, me: &Entity, rng: &mut RNG) {
+    pub fn mark_warned(&mut self, me: &Actor, rng: &mut RNG) {
         if !self.uncertain() { return; }
 
         let warnings = self.warnings;
@@ -206,20 +206,20 @@ impl Threat {
     //   - We currently count friendlies that we haven't seen for, say, 18
     //     turns as an ally with weight 0.75 - that's too high.
     //
-    //   - When an entity is in combat it should prioritize threats that can
+    //   - When an actor is in combat it should prioritize threats that can
     //     hurt it (right now a predator may attack us even when it's under
     //     attack by prey, or vice-versa).
     //
     //   - Prey handling of "friendly noise sources" is quite wrong. We never
-    //     when they faint - see hit_entity() in game, which only removes
-    //     known entities, not noise sources. But we can mark them friendly
-    //     (based on Call::Help / Call::Warning species info), and if we
-    //     don't see them, we'll assume they're strong (see use of timid() in
-    //     the Threat ctor). This bugs can result in us keeping around 1-2
-    //     high-strength allies in our estimate even after they faint, and
-    //     sticking around long after we should flee.
+    //     when they faint - see hit_actor() in game, which only removes
+    //     known actors, not noises. But we can mark them friendly (based on
+    //     Call::Help / Call::Warning species info), and if we don't see them,
+    //     we assume they're strong (see use of timid() in the Threat ctor).
+    //     This bug can result in us keeping around 1-2 high-strength allies
+    //     in our estimate even after they faint, and sticking around long
+    //     after we should flee.
     //
-    //     We're fixing this by unifying entity and noise knowledge.
+    //     We're fixing this by unifying actor and noise knowledge.
 
     // Threat scoring:
 
@@ -268,7 +268,7 @@ impl Threat {
         self.combat = time;
     }
 
-    fn update_for_event(&mut self, me: &Entity, event: &Event) {
+    fn update_for_event(&mut self, me: &Actor, event: &Event) {
         self.loc = event.loc;
         self.sense = event.sense;
         self.asleep = false;
@@ -299,7 +299,7 @@ impl Threat {
         }
     }
 
-    fn update_for_sighting(&mut self, me: &Entity, other: &EntityKnowledge) {
+    fn update_for_sighting(&mut self, me: &Actor, other: &ActorKnowledge) {
         self.loc = other.loc;
         self.sense = other.sense;
         self.species = Some(other.species);
@@ -397,7 +397,7 @@ impl ThreatState {
         self.last_call = time;
     }
 
-    pub fn update(&mut self, me: &Entity) {
+    pub fn update(&mut self, me: &Actor) {
         let time = me.known.time();
 
         for event in &me.known.events {
@@ -411,9 +411,9 @@ impl ThreatState {
                 self.guess_threat_location(me, event);
             }
         }
-        for other in &me.known.entities {
+        for other in &me.known.actors {
             if !other.sensed() { break; }
-            let Some(threat) = self.get_by_entity(me, other) else { continue };
+            let Some(threat) = self.get_by_actor(me, other) else { continue };
 
             threat.update_for_sighting(me, other);
             if threat.certain() && threat.hostile() { self.forget_tid(TID::CID); }
@@ -538,14 +538,14 @@ impl ThreatState {
         self.threats.remove(handle);
     }
 
-    fn get_by_entity(&mut self, me: &Entity, other: &EntityKnowledge) -> Option<&mut Threat> {
+    fn get_by_actor(&mut self, me: &Actor, other: &ActorKnowledge) -> Option<&mut Threat> {
         if other.eid == me.eid { return None; }
 
         let handle = self.get_by_tid(me, TID::UID(other.uid));
         Some(&mut self.threats[handle])
     }
 
-    fn get_by_event(&mut self, me: &Entity, event: &Event) -> Option<&mut Threat> {
+    fn get_by_event(&mut self, me: &Actor, event: &Event) -> Option<&mut Threat> {
         let tid = TID::UID(event.uid);
 
         if matches!(event.data, EventData::Forget) {
@@ -563,7 +563,7 @@ impl ThreatState {
         Some(&mut self.threats[handle])
     }
 
-    fn get_by_tid(&mut self, me: &Entity, tid: TID) -> ThreatHandle {
+    fn get_by_tid(&mut self, me: &Actor, tid: TID) -> ThreatHandle {
         *self.threat_index.entry(tid).and_modify(|&mut x| {
             self.threats.move_to_front(x);
         }).or_insert_with(|| {
@@ -571,15 +571,15 @@ impl ThreatState {
         })
     }
 
-    fn friendly_call(me: &Entity, x: &CallEvent) -> bool {
+    fn friendly_call(me: &Actor, x: &CallEvent) -> bool {
        x.species == me.species
     }
 
-    fn friendly_call_for_help(me: &Entity, x: &CallEvent) -> bool {
+    fn friendly_call_for_help(me: &Actor, x: &CallEvent) -> bool {
         x.call == Call::Help && Self::friendly_call(me, x)
     }
 
-    fn guess_threat_location(&mut self, me: &Entity, event: &Event) {
+    fn guess_threat_location(&mut self, me: &Actor, event: &Event) {
         let handle = self.get_by_tid(me, TID::CID);
 
         let mut attack = event.clone();

@@ -9,14 +9,14 @@ use crate::base::pathing::Status;
 use crate::base::util::{HashMap, HashSet, RNG};
 use crate::base::vision::{Vision, VisionArgs};
 
+use super::actor::{Actor, AttackTarget, Command, EID, Individual, Teammate};
 use super::ai::{ChooseDefenseSquare, CheckFollowerSquare, Follower};
 use super::dex::Attack;
 use super::effect::{Frame, ParticleData, RenderData};
-use super::entity::{AttackTarget, Command, EID, Entity, Individual, Teammate};
 use super::event::{Call, Location, Sound};
 use super::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_, SUMMON_MOVES, SUMMON_RANGE};
 use super::game::{Action, Input, Tile, TileFlags, show_item};
-use super::knowledge::{EntityKnowledge, Knowledge, PointLookup};
+use super::knowledge::{ActorKnowledge, Knowledge, PointLookup};
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -76,7 +76,7 @@ fn get_direction(ch: char) -> Option<Delta> {
     }
 }
 
-fn describe_entity(x: &EntityKnowledge) -> &str {
+fn describe_actor(x: &ActorKnowledge) -> &str {
     if let Some(x) = &x.name { x.as_ref() } else { x.species.name }
 }
 
@@ -95,19 +95,18 @@ fn describe_sound(sound: Sound) -> &'static str {
     }
 }
 
-fn rivals(me: &Entity) -> Vec<&EntityKnowledge> {
+fn rivals(me: &Actor) -> Vec<&ActorKnowledge> {
     let mut result = vec![];
-    for other in &me.known.entities {
+    for other in &me.known.actors {
         if !other.visible() { break; }
         if !other.friend() { result.push(other); }
     }
     let pos = me.pos;
-    result.sort_by_cached_key(
-        |&x| ((x.pos - pos).len_l2_squared(), x.pos.0, x.pos.1));
+    result.sort_by_cached_key(|&x| ((x.pos - pos).len_l2_squared(), x.pos.0, x.pos.1));
     result
 }
 
-fn within_map_bounds(ui: &UI, me: &Entity, point: Point) -> bool {
+fn within_map_bounds(ui: &UI, me: &Actor, point: Point) -> bool {
     let size = ui.get_map_size();
     let Delta(x, y) = point - ui.get_map_offset(me);
     0 <= x && x < size.0 && 0 <= y && y < size.1
@@ -224,19 +223,19 @@ pub struct Target {
     target: Point,
 }
 
-fn can_target(view: &EntityKnowledge) -> bool {
-    view.visible() && !view.friend()
+fn can_target(actor: &ActorKnowledge) -> bool {
+    actor.visible() && !actor.friend()
 }
 
-fn get_summon(me: &Entity, summon: usize) -> Option<&EntityKnowledge> {
-    if let Some(&x) = me.summons.get(summon) { me.known.entity(x) } else { None }
+fn get_summon(me: &Actor, summon: usize) -> Option<&ActorKnowledge> {
+    me.summons.get(summon).and_then(|&x| me.known.actor(x))
 }
 
-fn get_teammate(me: &Entity, team: usize) -> Option<&Individual> {
+fn get_teammate(me: &Actor, team: usize) -> Option<&Individual> {
     if let Teammate::In(x) = me.team.get(team)? { Some(x) } else { None }
 }
 
-fn get_teammate_moves(me: &Entity, team: usize) -> TileFlags {
+fn get_teammate_moves(me: &Actor, team: usize) -> TileFlags {
     get_teammate(me, team).map_or(TileFlags::Empty, |x| x.species.moves)
 }
 
@@ -245,8 +244,8 @@ fn init_target(data: TargetData, source: Point, target: Point) -> Box<Target> {
     Box::new(Target { data, error, frame, okay_until, path, source, target })
 }
 
-fn init_summon_target(me: &Entity, team: usize) -> Box<Target> {
-    let Entity { pos, dir, .. } = *me;
+fn init_summon_target(me: &Actor, team: usize) -> Box<Target> {
+    let Actor { pos, dir, .. } = *me;
     let known = &*me.known;
     let moves = get_teammate_moves(me, team);
     let follower = Follower { pos, moves };
@@ -297,7 +296,7 @@ fn init_summon_target(me: &Entity, team: usize) -> Box<Target> {
     target
 }
 
-fn update_target(me: &Entity, target: &mut Target, update: Point) {
+fn update_target(me: &Actor, target: &mut Target, update: Point) {
     let known = &*me.known;
     let los = LOS(target.source, update);
 
@@ -319,7 +318,7 @@ fn update_target(me: &Entity, target: &mut Target, update: Point) {
             let cell = known.get(update);
             if !cell.visible() {
                 target.error = "You can't see a clear path there.".into();
-            } else if let Some(x) = cell.entity() && x.friend() {
+            } else if let Some(x) = cell.actor() && x.friend() {
                 target.error = "That target is friendly.".into();
             }
             let okay = target.error.is_empty();
@@ -334,7 +333,7 @@ fn update_target(me: &Entity, target: &mut Target, update: Point) {
                 let cell = known.get(x);
                 let last = i + 1 == target.path.len();
                 let moves = if last { moves } else { SUMMON_MOVES };
-                let friend = cell.entity().map_or(false, |x| x.friend());
+                let friend = cell.actor().map_or(false, |x| x.friend());
 
                 let free = match cell.status_for(moves) {
                     Status::Blocked => false,
@@ -348,7 +347,7 @@ fn update_target(me: &Entity, target: &mut Target, update: Point) {
                     target.error = "You can't throw that far.".into();
                 } else if !cell.visible() {
                     target.error = "You can't see a clear path there.".into();
-                } else if last && !friend && !cell.can_see_entity_at() {
+                } else if last && !friend && !cell.can_see_actor_at() {
                     target.error = "That cell may be occupied.".into();
                 }
                 if !target.error.is_empty() { break; }
@@ -358,25 +357,25 @@ fn update_target(me: &Entity, target: &mut Target, update: Point) {
     }
 }
 
-fn select_valid_target(ui: &mut UI, me: &Entity) -> Option<EID> {
+fn select_valid_target(ui: &mut UI, me: &Actor) -> Option<EID> {
     let target = ui.target.as_ref()?;
-    let entity = me.known.get(target.target).entity();
-    let summon = entity.and_then(|x| me.summons.iter().position(|&y| x.eid == y));
+    let actor = me.known.get(target.target).actor();
+    let summon = actor.and_then(|x| me.summons.iter().position(|&y| x.eid == y));
 
     match &target.data {
         TargetData::FarLook => {
-            let entity = entity?;
-            if can_target(entity) { Some(entity.eid) } else { None }
+            let actor = actor?;
+            if can_target(actor) { Some(actor.eid) } else { None }
         }
         &TargetData::Attack { summon, attack } => {
             let seen = false;
-            let eid = entity.map(|x| x.eid);
+            let eid = actor.map(|x| x.eid);
             let loc = Location { pos: target.target, time: me.known.time() };
             let command = Command::Attack(attack, AttackTarget { eid, loc, seen });
             ui.action = Some(Action::Shout { summon, command });
 
-            let entity = entity?;
-            if can_target(entity) { Some(entity.eid) } else { None }
+            let actor = actor?;
+            if can_target(actor) { Some(actor.eid) } else { None }
         }
         &TargetData::Summon { team, .. } => {
             ui.action = Some(match summon {
@@ -392,7 +391,7 @@ fn select_valid_target(ui: &mut UI, me: &Entity) -> Option<EID> {
 
 // UI inputs
 
-fn process_summon_input(ui: &mut UI, me: &Entity, input: Input) {
+fn process_summon_input(ui: &mut UI, me: &Actor, input: Input) {
     let Some(menu) = ui.summon.as_mut() else { return };
 
     // Cancel out of the dialog:
@@ -441,8 +440,8 @@ fn process_summon_input(ui: &mut UI, me: &Entity, input: Input) {
     let teammate = match teammate {
         Teammate::In(x) => x,
         Teammate::Out(x) => {
-            let other = me.known.entity(*x);
-            let error = format!("{} is already out!", other.map_or("?", describe_entity));
+            let other = me.known.actor(*x);
+            let error = format!("{} is already out!", other.map_or("?", describe_actor));
             ui.log.log_failure(error);
             return;
         }
@@ -472,7 +471,7 @@ fn process_summon_input(ui: &mut UI, me: &Entity, input: Input) {
     ui.summon = None;
 }
 
-fn process_regular_input(ui: &mut UI, me: &mut Entity, input: Input) -> bool {
+fn process_regular_input(ui: &mut UI, me: &mut Actor, input: Input) -> bool {
     let index = SUMMON_KEYS.iter().position(|&x| input == Input::Char(x));
     if let Some(i) = index && i >= me.summons.len() {
         ui.log.log_neutral("Choose a Pokemon to send out with J/K:");
@@ -503,7 +502,7 @@ fn process_regular_input(ui: &mut UI, me: &mut Entity, input: Input) -> bool {
     true
 }
 
-fn process_ui_input(ui: &mut UI, me: &mut Entity, input: Input) -> bool {
+fn process_ui_input(ui: &mut UI, me: &mut Actor, input: Input) -> bool {
     let known = &*me.known;
     let tab = input == Input::Char('\t') || input == Input::BackTab;
     let enter = input == Input::Char('\n') || input == Input::Char('.');
@@ -533,7 +532,7 @@ fn process_ui_input(ui: &mut UI, me: &mut Entity, input: Input) -> bool {
 
     let get_initial_target = |source: Point| -> Point {
         let known = &*me.known;
-        let focus = ui.focus.and_then(|x| known.entity(x));
+        let focus = ui.focus.and_then(|x| known.actor(x));
         if let Some(target) = focus && can_target(target) { return target.pos; }
         if let Some(rival) = rivals(me).first() { return rival.pos; }
         source
@@ -541,9 +540,9 @@ fn process_ui_input(ui: &mut UI, me: &mut Entity, input: Input) -> bool {
 
     let get_updated_target = |target: Point| -> Option<Point> {
         if tab {
-            let old_eid = known.get(target).entity().map(|x| x.eid);
+            let old_eid = known.get(target).actor().map(|x| x.eid);
             let new_eid = apply_tab(old_eid, false);
-            return Some(known.entity(new_eid?)?.pos);
+            return Some(known.actor(new_eid?)?.pos);
         }
 
         let ch = if let Input::Char(x) = input { Some(x) } else { None }?;
@@ -614,7 +613,7 @@ fn process_ui_input(ui: &mut UI, me: &mut Entity, input: Input) -> bool {
             }
         } else if chosen >= 0 {
             const _: () = assert!(ACTION_KEYS.len() == 2);
-            let name = describe_entity(summon);
+            let name = describe_actor(summon);
 
             if !valid(chosen) {
                 ui.log.log_failure(format!("{} does not have that attack.", name));
@@ -746,7 +745,7 @@ impl Default for Focused {
 }
 
 impl Focused {
-    fn update(&mut self, me: &Entity, target: &EntityKnowledge) {
+    fn update(&mut self, me: &Actor, target: &ActorKnowledge) {
         let known = &*me.known;
         let (pos, dir) = (target.pos, target.dir);
         self.tile = known.get(pos).tile();
@@ -821,7 +820,7 @@ pub struct UI {
 impl UI {
     // Rendering entry point:
 
-    pub fn render(&self, buffer: &mut Buffer, me: &Entity, effect: Option<&Effect>) {
+    pub fn render(&self, buffer: &mut Buffer, me: &Actor, effect: Option<&Effect>) {
         if buffer.size() == Point::ORIGIN {
             *buffer = Matrix::new(self.layout.bounds, ' '.into());
         }
@@ -847,7 +846,7 @@ impl UI {
         self.moves.insert(point, manim);
     }
 
-    pub fn process_input(&mut self, me: &mut Entity, input: Input) -> bool {
+    pub fn process_input(&mut self, me: &mut Actor, input: Input) -> bool {
         process_ui_input(self, me, input)
     }
 
@@ -871,13 +870,13 @@ impl UI {
         self.moves.retain(|_, v| v.frame < v.limit);
     }
 
-    pub fn update_focus(&mut self, me: &Entity) {
+    pub fn update_focus(&mut self, me: &Actor) {
         let known = &*me.known;
-        let focus = self.focus.and_then(|x| known.entity(x));
+        let focus = self.focus.and_then(|x| known.actor(x));
         if focus.is_none() { self.focus = None; }
 
         let target = match &self.target {
-            Some(x) => known.get(x.target).entity(),
+            Some(x) => known.get(x.target).actor(),
             None => focus,
         };
         if let Some(target) = target && can_target(target) {
@@ -888,12 +887,12 @@ impl UI {
         }
     }
 
-    pub fn update_moves(&mut self, me: &Entity) {
+    pub fn update_moves(&mut self, me: &Actor) {
         let known = &*me.known;
         self.moves.retain(|&pos, _| !known.get(pos).occupied())
     }
 
-    pub fn update_target(&mut self, me: &Entity) -> bool {
+    pub fn update_target(&mut self, me: &Actor) -> bool {
         let Some(target) = &mut self.target else { return false };
         target.frame = (target.frame + 1) % UI_TARGET_FRAMES;
         self.update_focus(me);
@@ -939,7 +938,7 @@ impl UI {
 
     // Rendering the map
 
-    fn render_map(&self, buffer: &mut Buffer, me: &Entity, effect: Option<&Effect>) {
+    fn render_map(&self, buffer: &mut Buffer, me: &Actor, effect: Option<&Effect>) {
         let size = self.get_map_size();
         let known = effect.map_or(&*me.known, |x| x.known);
         let slice = &mut Slice::new(buffer, self.layout.map);
@@ -989,7 +988,7 @@ impl UI {
             slice.set(point, glyph);
         };
 
-        // Render the focused entity on the map.
+        // Render the focused actor on the map.
         let mut skip_first = false;
         let focused_vision = self.focused.vision.get_points_seen();
         if self.focused.active &&
@@ -1069,7 +1068,7 @@ impl UI {
             }
         }
 
-        // Render an estimate of the focused entity's FOV on the map.
+        // Render an estimate of the focused actor's FOV on the map.
         if self.focused.active {
             let skip = if skip_first { 1 } else { 0 };
             for &point in focused_vision.iter().skip(skip) {
@@ -1082,7 +1081,7 @@ impl UI {
         let arrow_length = 3;
         let sleep_length = 2;
         let mut arrows = vec![];
-        for other in &known.entities {
+        for other in &known.actors {
             if !other.visible() { continue; }
             if !other.asleep() && !can_target(other) { continue; }
 
@@ -1105,7 +1104,7 @@ impl UI {
         }
     }
 
-    fn render_callout(&self, me: &Entity, callout: &Callout, slice: &mut Slice) {
+    fn render_callout(&self, me: &Actor, callout: &Callout, slice: &mut Slice) {
         let len = callout.text.len() as i32;
         let (shift, prefix, suffix) = if callout.point.0 > me.pos.0 {
             (1, Some('-'), None)
@@ -1123,7 +1122,7 @@ impl UI {
         slice.set_fg(None);
     }
 
-    fn render_weather(&self, buffer: &mut Buffer, me: &Entity, effect: Option<&Effect>) {
+    fn render_weather(&self, buffer: &mut Buffer, me: &Actor, effect: Option<&Effect>) {
         let Some(rainfall) = &self.rainfall else { return };
 
         let slice = &mut Slice::new(buffer, self.layout.map);
@@ -1143,7 +1142,7 @@ impl UI {
 
             let Delta(x, y) = point - offset;
             let ch = if ground { 'o' } else { rainfall.ch };
-            let color = Self::apply_light(&cell, base, /*entity=*/false);
+            let color = Self::apply_light(&cell, base, /*actor=*/false);
             let glyph = Glyph::wdfg(ch, color);
             slice.set(Point(2 * x, y), glyph);
         }
@@ -1184,7 +1183,7 @@ impl UI {
         for x in &self.log.lines { slice.set_fg(Some(x.color)).write_str(&x.text).newline(); }
     }
 
-    fn render_rivals(&self, buffer: &mut Buffer, me: &Entity) {
+    fn render_rivals(&self, buffer: &mut Buffer, me: &Actor) {
         let slice = &mut Slice::new(buffer, self.layout.rivals);
 
         let mut rivals = rivals(me);
@@ -1196,7 +1195,7 @@ impl UI {
             let hp_color = Self::hp_color(hp);
             let hp_text = format!("{}%", max((100.0 * hp).floor() as i32, 1));
 
-            let name = describe_entity(rival);
+            let name = describe_actor(rival);
             let (sn, sh) = (name.chars().count(), hp_text.chars().count());
             let ss = max(16 - sn as i32 - sh as i32, 0) as usize;
 
@@ -1219,22 +1218,22 @@ impl UI {
         }
     }
 
-    fn render_status(&self, buffer: &mut Buffer, me: &Entity) {
+    fn render_status(&self, buffer: &mut Buffer, me: &Actor) {
         let slice = &mut Slice::new(buffer, self.layout.status);
         let known = &*me.known;
 
-        if let Some(view) = known.entity(me.eid) {
+        if let Some(actor) = known.actor(me.eid) {
             let key = if self.menu.is_some() { '-' } else { PLAYER_KEY };
-            self.render_entity(Some(key), None, view, slice);
+            self.render_actor(Some(key), None, actor, slice);
         }
 
         for (i, &key) in SUMMON_KEYS.iter().enumerate() {
             let key = if self.menu.is_some() { '-' } else { key };
             let eid = me.summons.get(i);
-            if let Some(view) = eid.and_then(|&x| known.entity(x)) {
-                self.render_entity(Some(key), None, view, slice);
+            if let Some(actor) = eid.and_then(|&x| known.actor(x)) {
+                self.render_actor(Some(key), None, actor, slice);
                 if let Some(x) = &self.menu && x.summon == i {
-                    self.render_menu(slice, x.choice, view);
+                    self.render_menu(slice, x.choice, actor);
                 }
             } else {
                 self.render_empty_option(key, 0, slice);
@@ -1242,7 +1241,7 @@ impl UI {
         }
     }
 
-    fn render_target(&self, buffer: &mut Buffer, me: &Entity) {
+    fn render_target(&self, buffer: &mut Buffer, me: &Actor) {
         let slice = &mut Slice::new(buffer, self.layout.target);
         let known = &*me.known;
 
@@ -1255,44 +1254,43 @@ impl UI {
             return;
         }
 
-        let (tile, header, entity, source) = match &self.target {
+        let (tile, header, actor, noise) = match &self.target {
             Some(x) => {
                 let cell = known.get(x.target);
                 let tile = cell.tile();
-                let source = cell.source();
-                let entity = cell.entity().filter(|x| x.sensed());
+                let noise = cell.noise();
+                let actor = cell.actor().filter(|x| x.sensed());
                 let header = match &x.data {
                     TargetData::FarLook => "Examining...".into(),
                     &TargetData::Attack { summon, attack } => {
                         let other = get_summon(me, summon).unwrap();
-                        format!("Using {}'s {}...", describe_entity(other), attack.name)
+                        format!("Using {}'s {}...", describe_actor(other), attack.name)
                     },
                     &TargetData::Summon { team, .. } => {
                         let other = get_teammate(me, team).unwrap();
                         format!("Sending out {}...", describe_teammate(other))
                     }
                 };
-                (tile, header, entity, source)
+                (tile, header, actor, noise)
             }
             None => {
                 let tile = self.focused.tile;
                 let header = "Last target:".into();
-                let entity = self.focus.and_then(|x| known.entity(x));
-                let source = None;
-                (tile, header, entity, source)
+                let actor = self.focus.and_then(|x| known.actor(x));
+                (tile, header, actor, None)
             },
         };
 
-        let gray = entity.map_or(false, |x| !x.sensed());
-        let text = if entity.is_some() { "Standing on: " } else { "You see: " };
+        let gray = actor.map_or(false, |x| !x.sensed());
+        let text = if actor.is_some() { "Standing on: " } else { "You see: " };
         let fg = if gray { Some(UI_GRAY_OPTION.into()) } else { None };
         let suffix = if gray { " (remembered)" } else { "" };
 
         slice.newline();
         slice.set_fg(fg).write_str(&header).write_str(suffix).newline();
 
-        if let Some(entity) = entity {
-            self.render_entity(None, fg, entity, slice);
+        if let Some(actor) = actor {
+            self.render_actor(None, fg, actor, slice);
         } else {
             slice.newline();
         }
@@ -1305,13 +1303,13 @@ impl UI {
             slice.write_str("(unseen location)").newline();
         }
 
-        if entity.is_none() && let Some(source) = source {
-            let desc = source.sound.map_or("an unknown sound", describe_sound);
+        if actor.is_none() && let Some(noise) = noise {
+            let desc = noise.sound.map_or("an unknown sound", describe_sound);
             slice.newline().write_str("You heard: ").write_str(desc).newline().newline();
         }
     }
 
-    fn render_summon_menu(&self, buffer: &mut Buffer, me: &Entity, menu: &SummonMenu) {
+    fn render_summon_menu(&self, buffer: &mut Buffer, me: &Actor, menu: &SummonMenu) {
         let default = *buffer.default();
         self.render_box(buffer, &self.layout.choice);
         let slice = &mut Slice::new(buffer, self.layout.choice);
@@ -1328,8 +1326,8 @@ impl UI {
                     self.render_option(key, &option, slice)
                 }
                 Some(&Teammate::Out(x)) => {
-                    let x = me.known.entity(x).unwrap();
-                    let (hp, pp, name) = (x.hp, x.pp, describe_entity(x));
+                    let x = me.known.actor(x).unwrap();
+                    let (hp, pp, name) = (x.hp, x.pp, describe_actor(x));
                     let option = SummonOption { out: true, selected, name, hp, pp };
                     self.render_option(key, &option, slice);
                 },
@@ -1340,7 +1338,7 @@ impl UI {
 
     // High-level private rendering helpers
 
-    fn render_menu(&self, slice: &mut Slice, index: i32, summon: &EntityKnowledge) {
+    fn render_menu(&self, slice: &mut Slice, index: i32, summon: &ActorKnowledge) {
         let spaces = UI::render_key('-').chars().count();
 
         for (i, &key) in ATTACK_KEYS.iter().chain(&ACTION_KEYS).enumerate() {
@@ -1398,8 +1396,8 @@ impl UI {
         slice.newline();
     }
 
-    fn render_entity(&self, key: Option<char>, fg: Option<Color>,
-                     view: &EntityKnowledge, slice: &mut Slice) {
+    fn render_actor(&self, key: Option<char>, fg: Option<Color>,
+                    actor: &ActorKnowledge, slice: &mut Slice) {
         let prefix = key.map_or_default(UI::render_key);
         let n = prefix.chars().count();
         let w = UI_STATUS_SIZE - 6;
@@ -1408,18 +1406,18 @@ impl UI {
             s.newline();
         };
 
-        let name = describe_entity(view);
-        let (hp, pp) = (view.hp, view.pp);
+        let name = describe_actor(actor);
+        let (hp, pp) = (actor.hp, actor.pp);
         let (hp_color, pp_color) = (Self::hp_color(hp), Self::pp_color());
 
         slice.newline();
         slice.set_fg(fg).write_str(&prefix).write_str(name).newline();
         status_bar_line("HP: ", hp, hp_color, slice);
-        if !view.species.human() {
+        if !actor.species.human() {
             status_bar_line("PP: ", pp, pp_color, slice);
         } else {
             slice.spaces(n + 4);
-            for &ready in &view.team {
+            for &ready in &actor.team {
                 slice.set_fg(if ready { None } else { Some(UI_GRAY_OPTION.into()) });
                 slice.write_str("* ");
             }
@@ -1434,7 +1432,7 @@ impl UI {
         Point(self.layout.map.size.0 / 2, self.layout.map.size.1)
     }
 
-    fn get_map_offset(&self, me: &Entity) -> Point {
+    fn get_map_offset(&self, me: &Actor) -> Point {
         let size = self.get_map_size();
         me.pos - Delta(size.0 / 2, size.1 / 2)
     }
@@ -1510,26 +1508,26 @@ impl UI {
 
     // Static helpers
 
-    fn entity_glyph(entity: &EntityKnowledge) -> Glyph {
-        let sneaking = entity.species.human() && entity.sneaking();
-        if sneaking { Glyph::wide('e') } else { entity.species.glyph }
-    }
-
-    fn knowledge_glyph(entity: &EntityKnowledge, tile: &Tile) -> Glyph {
-        if entity.hp == 0. { return Glyph::wdfg('%', 0xff0000); }
-
-        let glyph = Self::entity_glyph(entity);
-        let cover = tile.is_cover() && entity.hidden_by_cover();
-
-        if cover { glyph.with_fg(tile.glyph.fg()) } else { glyph }
+    fn actor_glyph(actor: &ActorKnowledge) -> Glyph {
+        let sneaking = actor.species.human() && actor.sneaking();
+        if sneaking { Glyph::wide('e') } else { actor.species.glyph }
     }
 
     fn noise_glyph(freshness: f64) -> Glyph {
         Glyph::wdfg('?', Color::white().fade(0.25 + 0.5 * freshness))
     }
 
-    fn teammate_glyph(entity: &EntityKnowledge) -> Glyph {
-        Glyph::wdfg('?', entity.species.glyph.fg())
+    fn teammate_glyph(actor: &ActorKnowledge) -> Glyph {
+        Glyph::wdfg('?', actor.species.glyph.fg())
+    }
+
+    fn combined_glyph(actor: &ActorKnowledge, tile: &Tile) -> Glyph {
+        if actor.hp == 0. { return Glyph::wdfg('%', 0xff0000); }
+
+        let glyph = Self::actor_glyph(actor);
+        let cover = tile.is_cover() && actor.hidden_by_cover();
+
+        if cover { glyph.with_fg(tile.glyph.fg()) } else { glyph }
     }
 
     fn hp_color(hp: f64) -> Color {
@@ -1546,13 +1544,13 @@ impl UI {
         format!("[{}] ", key)
     }
 
-    fn apply_light(cell: &PointLookup, color: Color, entity: bool) -> Color {
+    fn apply_light(cell: &PointLookup, color: Color, actor: bool) -> Color {
         let light = cell.light();
         let shade = cell.shade();
 
         if shade && !light { return color.fade(UI_SHADOW); }
 
-        if entity { return color; }
+        if actor { return color; }
 
         let base = if shade { UI_SHADOW } else { UI_SUNLIGHT };
         let extra = base + if light { UI_EXTRA_LIGHT } else { 0. };
@@ -1560,33 +1558,32 @@ impl UI {
         color.apply_light(r, g, b)
     }
 
-    pub fn render_tile(me: &Entity, point: Point, effect: Option<&Effect>) -> Glyph {
+    pub fn render_tile(me: &Actor, point: Point, effect: Option<&Effect>) -> Glyph {
         let known = effect.map_or(&*me.known, |x| x.known);
         let is_source = effect.map_or(false, |x| x.sources.contains(&point));
         let is_target = effect.map_or(false, |x| x.targets.contains(&point));
         let is_source = is_source && !is_target;
 
         let cell = known.get(point);
-        let source = me.known.get(point).source();
-        let source = if is_source { None } else { source };
+        let noise = me.known.get(point).noise();
+        let noise = if is_source { None } else { noise };
 
-        let entity = cell.entity();
-        let entity = if let Some(x) = entity && x.sensed() { entity } else { None };
-        let entity = if is_source { None } else { entity };
+        let actor = cell.actor().filter(|x| x.sensed());
+        let actor = if is_source { None } else { actor };
 
-        let freshness = source.map(|x| x.freshness(&me.known));
+        let freshness = noise.map(|x| x.freshness(&me.known));
         let freshness = freshness.unwrap_or(if is_target { 1. } else { -1. });
 
-        // Special cases for non-sight-based entity knowledge:
-        if let Some(x) = entity && !x.visible() { return Self::teammate_glyph(x); }
-        if entity.is_none() && freshness >= 0. { return Self::noise_glyph(freshness); }
+        // Special cases for non-sight-based actor knowledge:
+        if let Some(x) = actor && !x.visible() { return Self::teammate_glyph(x); }
+        if actor.is_none() && freshness >= 0. { return Self::noise_glyph(freshness); }
 
         // Unseen cells are shown as a blank space:
         let Some(tile) = cell.tile() else { return Glyph::wide(' ') };
 
         // Default case: a visible cell.
-        let glyph = if let Some(x) = entity && x.visible() {
-            Self::knowledge_glyph(x, tile)
+        let glyph = if let Some(x) = actor && x.visible() {
+            Self::combined_glyph(x, tile)
         } else if let Some(x) = cell.items().last() {
             show_item(x)
         } else {
@@ -1595,7 +1592,7 @@ impl UI {
 
         let mut color = glyph.fg();
         if cell.visible() {
-            color = Self::apply_light(&cell, color, entity.is_some());
+            color = Self::apply_light(&cell, color, actor.is_some());
         } else {
             color = Color::white().fade(UI_REMEMBERED);
         }

@@ -15,12 +15,11 @@ use crate::base::point::{Bound, Delta, DeltaLOS, LOS, Matrix, Point, dirs};
 use crate::base::util::{HashMap, HashSet, RNG, sample, weighted};
 use crate::base::vision::{INITIAL_VISIBILITY, VISIBILITY_LOSSES, Vision, VisionArgs};
 
+use super::actor::{Actor, ActorArgs, ActorMap, Command, Individual, EID, Teammate};
 use super::ai::{AIEnv, AIState, Update};
 use super::dex::{Attack, Range, Species};
 use super::debug::DebugFile;
 use super::effect::{CB, Effect, Frame, FT, Particle, ParticleData, self};
-use super::entity::{Command, Individual, Teammate};
-use super::entity::{EID, Entity, EntityArgs, EntityMap};
 use super::event::{Call, Location, Sense, UID};
 use super::event::{AttackEvent, CallEvent, Event, EventData, MoveEvent};
 use super::knowledge::Knowledge;
@@ -216,12 +215,12 @@ impl Default for FOV {
 }
 
 impl FOV {
-    fn select_vision(&mut self, me: &Entity) -> &mut Vision {
+    fn select_vision(&mut self, me: &Actor) -> &mut Vision {
         if me.player { &mut self._pc_vision } else { &mut self.npc_vision }
     }
 
-    fn can_see(&mut self, board: &Board, me: &Entity, point: Point) -> bool {
-        let Entity { pos, dir, asleep, player, .. } = *me;
+    fn can_see(&mut self, board: &Board, me: &Actor, point: Point) -> bool {
+        let Actor { pos, dir, asleep, player, .. } = *me;
         if asleep { return pos == point; }
 
         let vision = self.select_vision(me);
@@ -232,12 +231,12 @@ impl FOV {
         vision.check_point(&VisionArgs { pos, dir, opacity }, point)
     }
 
-    fn can_see_entity(&mut self, board: &Board, me: &Entity, other: &Entity) -> bool {
-        // If we can't see the cell at all, we can't see entities there.
+    fn can_see_actor(&mut self, board: &Board, me: &Actor, other: &Actor) -> bool {
+        // If we can't see the cell at all, we can't see actors there.
         let point = other.pos;
         if !self.can_see(board, me, point) { return false; }
 
-        // Entities can't hide if we're adjacent to them.
+        // Actors can't hide if we're adjacent to them.
         let nearby = (point - me.pos).len_l1() <= 1;
         if nearby { return true; }
 
@@ -251,9 +250,9 @@ impl FOV {
         !shade || board.is_cell_lit(point)
     }
 
-    fn compute(&mut self, board: &Board, me: &Entity) -> &Vision {
+    fn compute(&mut self, board: &Board, me: &Actor) -> &Vision {
         let vision = self.select_vision(me);
-        let Entity { pos, dir, asleep, player, .. } = *me;
+        let Actor { pos, dir, asleep, player, .. } = *me;
         if asleep {
             vision.clear();
         } else {
@@ -280,8 +279,8 @@ pub struct Cell {
 
 pub struct Board {
     map: Matrix<Cell>,
-    active_entity: Option<EID>,
-    pub entities: EntityMap,
+    active_actor: Option<EID>,
+    pub actors: ActorMap,
     pub time: Timestamp,
 
     // Animation:
@@ -306,8 +305,8 @@ impl Board {
 
         let mut result = Self {
             map: Matrix::new(size, cell),
-            active_entity: None,
-            entities: EntityMap::default(),
+            active_actor: None,
+            actors: ActorMap::default(),
             time: Timestamp::default().latch(time),
 
             // Animation:
@@ -352,7 +351,7 @@ impl Board {
 
     fn pov_sees_effect(&mut self, pov: EID, fov: &mut FOV) -> bool {
         let Some(frame) = self.get_frame() else { return false };
-        let Some(me) = self.entities.get(pov) else { return false };
+        let Some(me) = self.actors.get(pov) else { return false };
         let count = frame.len();
 
         if self._frame_mask.is_empty() {
@@ -381,7 +380,7 @@ impl Board {
         self._enter_effect_frame(false);
     }
 
-    fn _compute_frame_mask(&self, me: &Entity, frame: &Frame, fov: &mut FOV) -> Vec<bool> {
+    fn _compute_frame_mask(&self, me: &Actor, frame: &Frame, fov: &mut FOV) -> Vec<bool> {
         assert!(self._frame_mask.is_empty());
 
         let vision = fov.select_vision(me);
@@ -402,7 +401,7 @@ impl Board {
         frame.iter().for_each(|x| match &x.data {
             &ParticleData::Light(light) => {
                 let eid = self.get_cell(x.point).eid;
-                let prev = eid.map_or(-1, |x| self.entities[x].species.light.radius);
+                let prev = eid.map_or(-1, |x| self.actors[x].species.light.radius);
                 let next = std::cmp::max(prev, light.radius);
                 if prev == next { return; }
 
@@ -418,7 +417,7 @@ impl Board {
                 let None = self.get_cell(target).eid else { return };
                 let Some(eid) = self.get_cell(source).eid else { return };
 
-                self.move_entity(eid, target);
+                self.move_actor(eid, target);
             },
             ParticleData::Sight(..) => {},
             ParticleData::Sound(..) => {},
@@ -431,7 +430,7 @@ impl Board {
 
     pub fn get_cell(&self, p: Point) -> &Cell { self.map.entry_ref(p) }
 
-    pub fn get_entity(&self, eid: EID) -> Option<&Entity> { self.entities.get(eid) }
+    pub fn get_actor(&self, eid: EID) -> Option<&Actor> { self.actors.get(eid) }
 
     pub fn get_frame(&self) -> Option<&Frame> { self._effect.frames.first() }
 
@@ -458,10 +457,10 @@ impl Board {
         cell.items.push(item);
 
         let Some(eid) = eid else { return };
-        let Some(entity) = self.entities.get_mut(eid) else { return };
+        let Some(actor) = self.actors.get_mut(eid) else { return };
 
-        entity.known.update_items(pos, &item);
-        entity.ai.notify_item(pos, &item);
+        actor.known.update_items(pos, &item);
+        actor.ai.notify_item(pos, &item);
     }
 
     fn remove_item(&mut self, pos: Point, item: Item) -> bool {
@@ -472,28 +471,28 @@ impl Board {
         true
     }
 
-    // Entity setters:
+    // Actor setters:
 
-    fn add_entity(&mut self, args: &EntityArgs, env: &mut Env) {
-        let EntityArgs { eid, pos, .. } = *args;
+    fn add_actor(&mut self, args: &ActorArgs, env: &mut Env) {
+        let ActorArgs { eid, pos, .. } = *args;
         let cell = self.map.entry_mut(pos).unwrap();
         let prev = cell.eid.replace(eid);
         assert!(prev.is_none());
 
-        self.entities.add(args, &mut env.rng);
+        self.actors.add(args, &mut env.rng);
         self.update_known(eid, env);
 
-        let entity = &mut self.entities[eid];
-        entity.known.mark_turn_boundary(entity.player, entity.speed, self.time);
+        let actor = &mut self.actors[eid];
+        actor.known.mark_turn_boundary(actor.player, actor.speed, self.time);
 
         let light = args.species.light.radius;
         self.lighting.set_light(pos, light);
     }
 
-    fn move_entity(&mut self, eid: EID, target: Point) {
-        let entity = &mut self.entities[eid];
-        let source = replace(&mut entity.pos, target);
-        let light = entity.species.light.radius;
+    fn move_actor(&mut self, eid: EID, target: Point) {
+        let actor = &mut self.actors[eid];
+        let light = actor.species.light.radius;
+        let source = replace(&mut actor.pos, target);
 
         let old = self.map.entry_mut(source).unwrap().eid.take();
         let new = replace(&mut self.map.entry_mut(target).unwrap().eid, old);
@@ -504,19 +503,19 @@ impl Board {
         self.lighting.set_light(target, light);
     }
 
-    fn swap_entities(&mut self, source: Point, target: Point) {
+    fn swap_actors(&mut self, source: Point, target: Point) {
         assert!(source != target);
 
         let old = self.map.entry_mut(source).unwrap().eid.unwrap();
         let new = self.map.entry_mut(target).unwrap().eid.unwrap();
 
-        let old_entity = &mut self.entities[old];
-        let old_light = old_entity.species.light.radius;
-        old_entity.pos = target;
+        let old_actor = &mut self.actors[old];
+        let old_light = old_actor.species.light.radius;
+        old_actor.pos = target;
 
-        let new_entity = &mut self.entities[new];
-        let new_light  = new_entity.species.light.radius;
-        new_entity.pos = source;
+        let new_actor = &mut self.actors[new];
+        let new_light  = new_actor.species.light.radius;
+        new_actor.pos = source;
 
         self.map.entry_mut(source).unwrap().eid = Some(new);
         self.map.entry_mut(target).unwrap().eid = Some(old);
@@ -525,32 +524,32 @@ impl Board {
         self.lighting.set_light(target, old_light);
     }
 
-    fn remove_entity(&mut self, eid: EID) {
-        // The player entity is not removed, since it's the player's POV.
-        let entity = &mut self.entities[eid];
-        let &mut Entity { pos, player, leader, .. } = entity;
-        let team: Vec<_> = entity.team.iter().filter_map(
+    fn remove_actor(&mut self, eid: EID) {
+        // The player is not removed, since we render from its POV.
+        let actor = &mut self.actors[eid];
+        let &mut Actor { pos, player, leader, .. } = actor;
+        let team: Vec<_> = actor.team.iter().filter_map(
             |x| if let &Teammate::Out(oid) = x { Some(oid) } else { None }).collect();
-        let ind = entity.to_individual();
+        let ind = actor.to_individual();
         if player { return; }
 
-        // Remove the entity's light source.
+        // Remove the actor's light source.
         self.lighting.set_light(pos, -1);
 
-        // Remove the entity from the spatial map.
+        // Remove the actor from the spatial map.
         let existing = self.map.entry_mut(pos).unwrap().eid.take();
         assert!(existing == Some(eid));
 
-        // Remove the entity from the entities SlotMap.
-        let okay = self.entities.remove(eid).is_some();
+        // Remove the actor from the ActorMap.
+        let okay = self.actors.remove(eid).is_some();
         assert!(okay);
 
-        // Mark the entity as inactive, if it was active.
-        if self.active_entity == Some(eid) { self.active_entity = None; }
+        // Mark the actor as inactive, if it was active.
+        if self.active_actor == Some(eid) { self.active_actor = None; }
 
-        // Delete edges between this entity and its teammates.
+        // Delete edges between this actor and its teammates.
         if let Some(x) = leader {
-            let leader = &mut self.entities[x];
+            let leader = &mut self.actors[x];
             for edge in &mut leader.team {
                 if !matches!(edge, Teammate::Out(x) if *x == eid) { continue; }
                 *edge = Teammate::In(ind);
@@ -558,14 +557,14 @@ impl Board {
             }
             leader.summons.retain(|&x| x != eid);
         }
-        for x in team { self.entities[x].leader = None; }
+        for x in team { self.actors[x].leader = None; }
     }
 
     fn reset(&mut self, tile: &'static Tile) {
         self.map.fill(Cell { tile, ..Default::default() });
         self.update_edge_shadows();
-        self.active_entity = None;
-        self.entities.clear();
+        self.active_actor = None;
+        self.actors.clear();
     }
 
     fn set_tile(&mut self, point: Point, tile: &'static Tile) {
@@ -592,41 +591,41 @@ impl Board {
     }
 
     fn observe_event(&mut self, eid: EID, s: &Senses, e: &mut EventSource, env: &mut Env) {
-        let Some(entity) = self.entities.get_mut(eid) else { return };
+        let Some(actor) = self.actors.get_mut(eid) else { return };
 
-        let (heard, seen) = (s.heard(), s.seen() && !entity.player);
+        let (heard, seen) = (s.heard(), s.seen() && !actor.player);
         if !heard && !seen { return; }
 
         let known = &mut env.known;
-        swap(known, &mut entity.known);
+        swap(known, &mut actor.known);
 
         let EventSource(oid, event) = e;
         event.sense = if seen { Sense::Sight } else { Sense::Sound };
-        known.observe_event(&self.entities[eid], *oid, event);
+        known.observe_event(&self.actors[eid], *oid, event);
 
-        swap(known, &mut self.entities[eid].known);
+        swap(known, &mut self.actors[eid].known);
     }
 
-    fn remove_known_entity(&mut self, eid: EID, oid: EID) {
-        let Some(entity) = self.entities.get_mut(eid) else { return };
+    fn remove_known_actor(&mut self, eid: EID, oid: EID) {
+        let Some(actor) = self.actors.get_mut(eid) else { return };
 
-        entity.known.remove_entity(oid, self.time);
+        actor.known.remove_actor(oid, self.time);
 
-        let command = &mut entity.command;
+        let command = &mut actor.command;
         if let Some(Command::Attack(_, x)) = command && x.eid == Some(oid) { *command = None; }
     }
 
     fn update_known(&mut self, eid: EID, env: &mut Env) {
-        let Some(entity) = self.entities.get_mut(eid) else { return };
+        let Some(actor) = self.actors.get_mut(eid) else { return };
 
         let Env { known, fov, rng, .. } = env;
-        swap(known, &mut entity.known);
+        swap(known, &mut actor.known);
 
-        let me = &self.entities[eid];
+        let me = &self.actors[eid];
         let vision = fov.compute(self, me);
         known.update(me, self, vision, rng);
 
-        swap(known, &mut self.entities[eid].known);
+        swap(known, &mut self.actors[eid].known);
     }
 
     // Lighting:
@@ -701,11 +700,11 @@ impl Noise {
         Self { cause: Some(eid), check: Some(eid), point, volume }
     }
 
-    fn from_entity(me: &Entity, volume: Bound) -> Self {
+    fn from_actor(me: &Actor, volume: Bound) -> Self {
         Self::from_eid(me.eid, me.pos, volume)
     }
 
-    fn for_target(me: &Entity, point: Point, volume: Bound, target: Option<EID>) -> Self {
+    fn for_target(me: &Actor, point: Point, volume: Bound, target: Option<EID>) -> Self {
         Self { cause: Some(me.eid), check: target, point, volume }
     }
 }
@@ -714,14 +713,14 @@ fn detect(board: &Board, noise: &Noise, env: &mut Env) -> SenseMap {
     let Noise { cause, check, point, volume } = *noise;
     let mut result = SenseMap::default();
 
-    let other = check.and_then(|x| board.entities.get(x));
+    let other = check.and_then(|x| board.actors.get(x));
 
-    for (eid, me) in &board.entities {
+    for (eid, me) in &board.actors {
         if cause == Some(eid) { continue; }
         if me.asleep && volume.radius == 1 && point != me.pos { continue; }
 
         let seen = if let Some(other) = other {
-            env.fov.can_see_entity(board, me, other)
+            env.fov.can_see_actor(board, me, other)
         } else {
             env.fov.can_see(board, me, point)
         };
@@ -738,7 +737,7 @@ fn detect(board: &Board, noise: &Noise, env: &mut Env) -> SenseMap {
 fn merge_views(board: &Board, saw_source: &SenseMap, saw_target: &SenseMap) -> Vec<Sighting> {
     let mut result = vec![];
 
-    for (eid, _) in &board.entities {
+    for (eid, _) in &board.actors {
         let source = saw_source.get(&eid).copied();
         let target = saw_target.get(&eid).copied();
         if source.is_none() && target.is_none() { continue; }
@@ -761,7 +760,7 @@ fn get_sightings(board: &Board, noise: &Noise, env: &mut Env) -> Vec<Sighting> {
 
 fn shout(state: &mut State, eid: EID, shout: &str, suffix: &str) {
     let board = &mut state.board;
-    let Entity { pos: source, player, species, .. } = board.entities[eid];
+    let Actor { pos: source, player, species, .. } = board.actors[eid];
     let noise = Noise::from_eid(eid, source, CALL_VOLUME);
     let sightings = get_sightings(board, &noise, &mut state.env);
 
@@ -776,14 +775,14 @@ fn shout(state: &mut State, eid: EID, shout: &str, suffix: &str) {
     let data = EventData::Call(CallEvent { call: Call::Command, species });
     let event = &mut board.create_event(eid, data, source);
 
-    // Deliver the CallEvent to each other entity that heard the shout.
+    // Deliver the CallEvent to each other actor that heard the shout.
     for s in &sightings {
         board.observe_event(s.eid, &s.merged, event, &mut state.env);
         if s.eid != state.player { continue; }
 
         let log = &mut state.env.ui.log;
-        let entity = &board.entities[eid];
-        let source = if s.merged.seen() { entity.upper() } else { "Someone".into() };
+        let actor = &board.actors[eid];
+        let source = if s.merged.seen() { actor.upper() } else { "Someone".into() };
         log.log_notable(format!("{} shouts: \"{}\"", source, shout));
     }
 }
@@ -800,9 +799,9 @@ fn hit_tile(state: &mut State, eid: EID, target: Point) {
     }
 }
 
-fn hit_entity(state: &mut State, eid: EID, attack: &Attack, logged: bool, tid: EID) {
+fn hit_actor(state: &mut State, eid: EID, attack: &Attack, logged: bool, tid: EID) {
     let State { board, env, .. } = state;
-    let Some(target) = board.entities.get_mut(tid) else { return; };
+    let Some(target) = board.actors.get_mut(tid) else { return; };
 
     let (pos, lower, upper) = (target.pos, target.lower(), target.upper());
 
@@ -815,11 +814,11 @@ fn hit_entity(state: &mut State, eid: EID, attack: &Attack, logged: bool, tid: E
     target.cur_hp = std::cmp::max(target.cur_hp - damage, 0);
     let fainted = target.cur_hp == 0;
 
-    let noise = Noise::from_entity(target, ATTACK_VOLUME);
+    let noise = Noise::from_actor(target, ATTACK_VOLUME);
     let sightings = get_sightings(board, &noise, env);
 
     if fainted {
-        board.remove_entity(tid);
+        board.remove_actor(tid);
         board.add_item(Some(eid), pos, Item::Corpse);
     }
 
@@ -831,7 +830,7 @@ fn hit_entity(state: &mut State, eid: EID, attack: &Attack, logged: bool, tid: E
     }
 
     for s in &sightings {
-        if fainted { board.remove_known_entity(s.eid, tid); }
+        if fainted { board.remove_known_actor(s.eid, tid); }
         if s.eid != state.player || !s.source.seen() { continue; }
 
         let log = &mut env.ui.log;
@@ -843,60 +842,60 @@ fn hit_entity(state: &mut State, eid: EID, attack: &Attack, logged: bool, tid: E
     if fainted { state.record_remove(tid, pos, species); }
 }
 
-fn summon_entity(state: &mut State, eid: EID, target: Point, index: usize, team: usize) {
+fn summon_actor(state: &mut State, eid: EID, target: Point, index: usize, team: usize) {
     let State { board, env, .. } = state;
-    let teammate = board.entities[eid].team.get(team);
+    let teammate = board.actors[eid].team.get(team);
     let Some(Teammate::In(teammate)) = teammate else { return };
 
     let name = teammate.name.as_ref().map(Rc::clone);
     let Individual { eid: oid, species, cur_hp, max_hp, .. } = *teammate;
     let (leader, player) = (Some(eid), false);
-    let args = EntityArgs { eid: oid, name, player, leader, species, pos: target };
-    board.add_entity(&args, env);
+    let args = ActorArgs { eid: oid, name, player, leader, species, pos: target };
+    board.add_actor(&args, env);
 
-    let other = &mut board.entities[oid];
+    let other = &mut board.actors[oid];
     other.cur_hp = cur_hp;
     other.max_hp = max_hp;
 
-    let me = &mut board.entities[eid];
+    let me = &mut board.actors[eid];
     let index = std::cmp::min(index, me.summons.len());
     me.team[team] = Teammate::Out(oid);
     me.summons.insert(index, oid);
 }
 
 fn try_recall(state: &mut State, eid: EID, oid: EID, quiet: bool) -> bool {
-    let entity = &state.board.entities[eid];
-    let summon = &state.board.entities[oid];
+    let leader = &state.board.actors[eid];
+    let summon = &state.board.actors[oid];
     if summon.leader != Some(eid) { return false; }
 
-    let (source, target) = (entity.pos, summon.pos);
-    let (player, name) = (entity.player, summon.species.name);
+    let (source, target) = (leader.pos, summon.pos);
+    let (player, name) = (leader.player, summon.species.name);
 
-    if !can_summon(&state.board, entity, target) { return false; }
+    if !can_summon(&state.board, leader, target) { return false; }
 
     if player && !quiet {
         state.env.ui.log.log_neutral(format!("You withdraw {}.", name));
         state.env.ui.log.end_menu_logging();
     }
 
-    let cb: CB = Box::new(move |x| x.board.remove_entity(oid));
-    let effect = effect::WithdrawEffect(source, target);
-    state.add_effect(apply_effect(effect, FT::Withdraw, cb));
+    let cb: CB = Box::new(move |x| x.board.remove_actor(oid));
+    let effect = effect::RecallEffect(source, target);
+    state.add_effect(apply_effect(effect, FT::Recall, cb));
     true
 }
 
 fn try_switch(state: &mut State, eid: EID, oid: EID, team: usize, quiet: bool) -> bool {
-    let entity = &state.board.entities[eid];
-    let summon = &state.board.entities[oid];
+    let leader = &state.board.actors[eid];
+    let summon = &state.board.actors[oid];
     if summon.leader != Some(eid) { return false; }
 
-    let (source, target) = (entity.pos, summon.pos);
-    if !can_summon(&state.board, entity, target) { return false; }
+    let (source, target) = (leader.pos, summon.pos);
+    if !can_summon(&state.board, leader, target) { return false; }
 
-    let index = entity.summons.iter().position(|&x| x == oid);
+    let index = leader.summons.iter().position(|&x| x == oid);
     let Some(index) = index else { return false };
 
-    let teammate = entity.team.get(team);
+    let teammate = leader.team.get(team);
     let Some(Teammate::In(x)) = teammate else { return false };
 
     let Individual { species, cur_hp, .. } = *x;
@@ -910,12 +909,12 @@ fn try_switch(state: &mut State, eid: EID, oid: EID, team: usize, quiet: bool) -
         shout(state, eid, &format!("{}, return! Go, {}!", name, species.name), "");
     }
 
-    let cb: CB = Box::new(move |x| x.board.remove_entity(oid));
+    let recall: CB = Box::new(move |x| x.board.remove_actor(oid));
+    let summon: CB = Box::new(move |x| summon_actor(x, eid, target, index, team));
     let effect = effect::SwitchEffect(source, target);
-    let effect = apply_effect(effect, FT::Withdraw, cb);
-
-    let cb: CB = Box::new(move |x| summon_entity(x, eid, target, index, team));
-    state.add_effect(apply_effect(effect, FT::Summon, cb));
+    let effect = apply_effect(effect, FT::Recall, recall);
+    let effect = apply_effect(effect, FT::Summon, summon);
+    state.add_effect(effect);
     true
 }
 
@@ -923,23 +922,23 @@ fn try_switch(state: &mut State, eid: EID, oid: EID, team: usize, quiet: bool) -
 
 // Turn-taking
 
-pub fn move_ready(me: &Entity) -> bool { me.move_timer <= 0 }
+pub fn move_ready(me: &Actor) -> bool { me.move_timer <= 0 }
 
-pub fn turn_ready(me: &Entity) -> bool { me.turn_timer <= 0 }
+pub fn turn_ready(me: &Actor) -> bool { me.turn_timer <= 0 }
 
-fn drain(me: &mut Entity, result: &ActionResult) {
+fn drain(me: &mut Actor, result: &ActionResult) {
     me.move_timer += (MOVE_TIMER as f64 * result.moves).round() as i32;
     me.turn_timer += (TURN_TIMER as f64 * result.turns).round() as i32;
 }
 
 fn advance_turn(board: &mut Board) -> Option<EID> {
-    if let Some(x) = board.active_entity { return Some(x); }
+    if let Some(x) = board.active_actor { return Some(x); }
 
     let mut best = None;
-    for (eid, entity) in &board.entities {
-        assert!(entity.speed > 0.);
-        let left = (entity.turn_timer as f64) * (1. / TURN_TIMER as f64);
-        let time = Timedelta::from_seconds(left / entity.speed);
+    for (eid, actor) in &board.actors {
+        assert!(actor.speed > 0.);
+        let left = (actor.turn_timer as f64) * (1. / TURN_TIMER as f64);
+        let time = Timedelta::from_seconds(left / actor.speed);
         if let Some((_, x)) = best && time >= x { continue; }
         best = Some((eid, time));
     }
@@ -948,13 +947,13 @@ fn advance_turn(board: &mut Board) -> Option<EID> {
     let time = std::cmp::max(time, Timedelta::default());
     let charge = time.seconds() * TURN_TIMER as f64;
 
-    for (_, entity) in &mut board.entities {
-        let delta = (charge * entity.speed).round() as i32;
-        if entity.move_timer > 0 { entity.move_timer -= delta; }
-        if entity.turn_timer > 0 { entity.turn_timer -= delta; }
+    for (_, actor) in &mut board.actors {
+        let delta = (charge * actor.speed).round() as i32;
+        if actor.move_timer > 0 { actor.move_timer -= delta; }
+        if actor.turn_timer > 0 { actor.turn_timer -= delta; }
     }
     board.time = board.time.latch(time);
-    board.active_entity = Some(eid);
+    board.active_actor = Some(eid);
     Some(eid)
 }
 
@@ -993,7 +992,7 @@ impl ActionResult {
     fn success_turns(turns: f64) -> Self { Self { success: true,  moves: 0., turns } }
 }
 
-fn can_attack(board: &Board, me: &Entity, target: Point, range: Range) -> bool {
+fn can_attack(board: &Board, me: &Actor, target: Point, range: Range) -> bool {
     let moves = range.moves;
     let (known, source) = (&*me.known, me.pos);
 
@@ -1008,8 +1007,8 @@ fn can_attack(board: &Board, me: &Entity, target: Point, range: Range) -> bool {
     })
 }
 
-fn can_summon(board: &Board, me: &Entity, target: Point) -> bool {
-    if !me.known.get(target).can_see_entity_at() { return false; }
+fn can_summon(board: &Board, me: &Actor, target: Point) -> bool {
+    if !me.known.get(target).can_see_actor_at() { return false; }
 
     let range = Range { bound: SUMMON_RANGE, moves: SUMMON_MOVES };
     can_attack(board, me, target, range)
@@ -1026,31 +1025,31 @@ fn plan(state: &mut State, eid: EID, leader: Option<EID>) -> Action {
     let State { board, env, .. } = state;
     let debug = env.debug.as_deref_mut();
     let vision = &mut env.fov.npc_vision;
-    let entity = &mut board.entities[eid];
+    let actor = &mut board.actors[eid];
     let ai = &mut env.ai;
 
-    swap(ai, &mut entity.ai);
+    swap(ai, &mut actor.ai);
 
-    let entity = &board.entities[eid];
-    let leader = leader.map(|x| &board.entities[x]);
+    let actor = &board.actors[eid];
+    let leader = leader.map(|x| &board.actors[x]);
     let env = AIEnv { leader, debug, fov: vision, rng: &mut env.rng };
-    let plan = ai.plan(entity, env);
+    let plan = ai.plan(actor, env);
 
-    let entity = &mut board.entities[eid];
-    swap(ai, &mut entity.ai);
+    let actor = &mut board.actors[eid];
+    swap(ai, &mut actor.ai);
 
-    entity.known.events.clear();
+    actor.known.events.clear();
 
     plan.update.into_iter().for_each(|x| match x {
         Update::CommandFailure | Update::CommandSuccess => {
-            if x == Update::CommandFailure && entity.leader == Some(state.player) {
-                let message = format!("{} gave up on your command.", entity.upper());
+            if x == Update::CommandFailure && actor.leader == Some(state.player) {
+                let message = format!("{} gave up on your command.", actor.upper());
                 state.env.ui.log.log_failure(message);
             }
-            entity.command = None;
+            actor.command = None;
         }
         Update::TargetSeen => {
-            if let Some(Command::Attack(_, x)) = &mut entity.command { x.seen = true; }
+            if let Some(Command::Attack(_, x)) = &mut actor.command { x.seen = true; }
         }
     });
 
@@ -1058,7 +1057,7 @@ fn plan(state: &mut State, eid: EID, leader: Option<EID>) -> Action {
 }
 
 fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
-    let me = &mut state.board.entities[eid];
+    let me = &mut state.board.actors[eid];
     me.asleep = matches!(action, Action::Rest);
     let source = me.pos;
 
@@ -1067,11 +1066,11 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
         Action::Rest => ActionResult::success(),
         Action::WaitForInput => ActionResult::failure(),
         Action::SniffAround => {
-            let noise = Noise::from_entity(me, SNIFF_VOLUME);
+            let noise = Noise::from_actor(me, SNIFF_VOLUME);
             let board = &mut state.board;
             let sightings = get_sightings(board, &noise, &mut state.env);
 
-            // Deliver a SniffEvent to each other entity that heard the sniff.
+            // Deliver a SniffEvent to each other actor that heard the sniff.
             let data = EventData::Sniff;
             let event = &mut board.create_event(eid, data, source);
             for s in &sightings {
@@ -1080,7 +1079,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
                 let seen = s.source.seen();
                 let join = if seen { " is" } else { "" };
-                let desc = if seen { &board.entities[eid].upper() } else { "You hear something" };
+                let desc = if seen { &board.actors[eid].upper() } else { "You hear something" };
                 state.env.ui.log.log(format!("{}{} tracking a scent...", desc, join));
             }
 
@@ -1126,7 +1125,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
         }
         Action::Call { call, look } => {
             let species = me.species;
-            let noise = Noise::from_entity(me, CALL_VOLUME);
+            let noise = Noise::from_actor(me, CALL_VOLUME);
             let board = &mut state.board;
             let sightings = get_sightings(board, &noise, &mut state.env);
 
@@ -1138,7 +1137,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 Call::Warning => ("*grrr*", "growl", "...", false),
             };
 
-            // Deliver a CallEvent to each other entity that heard the call.
+            // Deliver a CallEvent to each other actor that heard the call.
             let data = EventData::Call(CallEvent { call, species });
             let event = &mut board.create_event(eid, data, source);
             for s in &sightings {
@@ -1147,14 +1146,14 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
                 let seen = s.source.seen();
                 let join = if seen { "ed" } else { "" };
-                let desc = if seen { &board.entities[eid].upper() } else { "You hear something" };
+                let desc = if seen { &board.actors[eid].upper() } else { "You hear something" };
                 state.env.ui.log.log(format!("{} {}{}{}", desc, prefix, join, suffix));
             }
 
             // For some call types, we look before calling; when calling for
             // help, we shout in the direction of our allies, then look.
             let cb = move |state: &mut State| {
-                let Some(me) = state.board.entities.get_mut(eid) else { return };
+                let Some(me) = state.board.actors.get_mut(eid) else { return };
                 me.face_direction(look);
             };
             let mut effect = apply_noise(source, color, text, CALL_VOLUME);
@@ -1188,12 +1187,12 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let swap = cell.eid.is_some();
 
             if !cell.tile.can_move_to(moves) {
-                board.entities[eid].face_direction(step);
+                board.actors[eid].face_direction(step);
                 return ActionResult::failure();
             }
 
-            if let Some(x) = cell.eid && board.entities[x].leader != Some(eid) {
-                board.entities[eid].face_direction(step);
+            if let Some(x) = cell.eid && board.actors[x].leader != Some(eid) {
+                board.actors[eid].face_direction(step);
                 if player { log.log_failure("There's something in the way!"); }
                 return ActionResult::failure();
             }
@@ -1205,16 +1204,16 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let saw_source = detect(board, &noise, &mut state.env);
 
             if swap {
-                board.swap_entities(source, target);
+                board.swap_actors(source, target);
             } else {
-                board.move_entity(eid, target);
+                board.move_actor(eid, target);
             }
 
             let noise = Noise::from_eid(eid, target, volume);
             let saw_target = detect(board, &noise, &mut state.env);
             let sightings = merge_views(board, &saw_source, &saw_target);
 
-            // Deliver a MoveEvent to each other entity that saw the move.
+            // Deliver a MoveEvent to each other actor that saw the move.
             let data = EventData::Move(MoveEvent { from: source });
             let event = &mut board.create_event(eid, data, target);
             for s in &sightings {
@@ -1229,34 +1228,34 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
         }
         Action::Attack { attack, target } => {
             let board = &mut state.board;
-            let me = &board.entities[eid];
+            let me = &board.actors[eid];
             let range = me.species.range(attack);
 
             if !can_attack(board, me, target, range) {
-                board.entities[eid].face_direction(target - source);
+                board.actors[eid].face_direction(target - source);
                 return ActionResult::failure();
             }
 
             board.time = board.time.bump();
 
             let volume = ATTACK_VOLUME;
-            let noise = Noise::from_entity(me, volume);
+            let noise = Noise::from_actor(me, volume);
             let saw_source = detect(board, &noise, &mut state.env);
 
             let dir = target - source;
             let tid = board.get_cell(target).eid;
-            let me = &mut board.entities[eid];
+            let me = &mut board.actors[eid];
             me.face_direction(dir);
 
             let noise = Noise::for_target(me, target, volume, tid);
             let saw_target = detect(board, &noise, &mut state.env);
             let sightings = merge_views(board, &saw_source, &saw_target);
 
-            // Deliver an AttackEvent to each other entity that heard the attack.
+            // Deliver an AttackEvent to each other actor that heard the attack.
             //
-            // TODO: Also deliver an event revealing the targeted entity.
+            // TODO: Also deliver an event revealing the targeted actor.
             // Maybe also do this for warnings, and calls for help? As-is, if
-            // we identify an entity and it then attacks / warns / etc. we may
+            // we identify an actor and it then attacks / warns / etc. we may
             // completely ignore those events.
             let combat = tid.is_some();
             let data = EventData::Attack(AttackEvent { combat, target: None });
@@ -1268,9 +1267,9 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 state.board.observe_event(s.eid, &s.source, event, &mut state.env);
                 if s.eid != state.player { continue; }
 
-                let entities = &state.board.entities;
-                let attacker = if s.source.seen() { Some(&entities[eid]) } else { None };
-                let attacked = if s.target.seen() { tid.map(|x| &entities[x]) } else { None };
+                let actors = &state.board.actors;
+                let attacker = if s.source.seen() { Some(&actors[eid]) } else { None };
+                let attacked = if s.target.seen() { tid.map(|x| &actors[x]) } else { None };
                 logged = true;
 
                 let line = if let Some(a) = attacker && let Some(b) = attacked {
@@ -1289,9 +1288,9 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 hit_tile(state, eid, target);
                 let Some(tid) = tid else { return; };
 
-                // TODO: When we animate the HP bar, execute hit_entity now
-                // and only defer remove_entity to the post-damage callback.
-                let cb: CB = Box::new(move |x| { hit_entity(x, eid, attack, logged, tid); });
+                // TODO: When we animate the HP bar, execute hit_actor now
+                // and only defer remove_actor to the post-damage callback.
+                let cb: CB = Box::new(move |x| { hit_actor(x, eid, attack, logged, tid); });
                 state.add_effect(apply_damage(target, cb));
             });
 
@@ -1314,11 +1313,11 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let Some(&oid) = summon else { return ActionResult::failure() };
 
             let new = match me.team.get(team) {
-                Some(&Teammate::Out(x)) => state.board.entities[x].species.name,
+                Some(&Teammate::Out(x)) => state.board.actors[x].species.name,
                 Some(Teammate::In(x)) => x.species.name,
                 None => "your other teammate",
             };
-            let old = state.board.entities[oid].species.name;
+            let old = state.board.actors[oid].species.name;
 
             let okay = try_switch(state, eid, oid, team, quiet);
             if okay { return ActionResult::success(); }
@@ -1343,11 +1342,11 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let status = state.board.get_status(target, species.moves);
             if status != Status::Free { return ActionResult::failure(); }
 
-            let me = &state.board.entities[eid];
+            let me = &state.board.actors[eid];
             if !can_summon(&state.board, me, target) { return ActionResult::failure(); }
 
             let index = me.summons.len();
-            let cb: CB = Box::new(move |x| summon_entity(x, eid, target, index, team));
+            let cb: CB = Box::new(move |x| summon_actor(x, eid, target, index, team));
 
             shout(state, eid, &format!("Go, {}!", species.name), "");
 
@@ -1359,13 +1358,13 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let summon = me.summons.get(summon);
             let Some(&oid) = summon else { return ActionResult::failure() };
 
-            let summon = &state.board.entities[oid];
+            let summon = &state.board.actors[oid];
             let name = summon.species.name;
 
             let succeed = |state: &mut State, suffix: &str| {
                 let command = match command {
                     Command::Attack(attack, target) => {
-                        let foe = target.eid.and_then(|x| state.board.entities.get(x));
+                        let foe = target.eid.and_then(|x| state.board.actors.get(x));
                         if let Some(foe) = foe.map(|x| x.species.name) {
                             format!("{}, attack {} with {}!", name, foe, attack.name)
                         } else {
@@ -1390,7 +1389,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             };
             if done { return ActionResult::success(); }
 
-            let summon = &mut state.board.entities[oid];
+            let summon = &mut state.board.actors[oid];
             summon.command = Some(command);
 
             succeed(state, "")
@@ -1402,7 +1401,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
 // Animation
 
-fn flash_entity<T: Into<Color>>(target: Point, color: T) -> Effect {
+fn flash_actor<T: Into<Color>>(target: Point, color: T) -> Effect {
     let frame = vec![
         Particle::shift(target, target),
         Particle::flash(target, color.into()),
@@ -1424,7 +1423,7 @@ fn apply_flash<T: Into<Color>>(source: Point, target: Point, color: T, cb: Optio
 
     Effect::serial(vec![
         flash_tile(target, color, cb).scale(scale),
-        flash_entity(source, color).delay(delay),
+        flash_actor(source, color).delay(delay),
     ])
 }
 
@@ -1470,7 +1469,7 @@ fn apply_effect(mut effect: Effect, what: FT, callback: CB) -> Effect {
 // Update
 
 fn process_input(state: &mut State, input: Input) {
-    let player = &mut state.board.entities[state.player];
+    let player = &mut state.board.actors[state.player];
     state.env.ui.process_input(player, input);
     state.input = state.env.ui.action.take().unwrap_or(Action::WaitForInput);
 }
@@ -1480,7 +1479,7 @@ fn update_player_knowledge(state: &mut State) {
     let State { board, env, .. } = state;
 
     board.update_known(eid, env);
-    let player = &board.entities[eid];
+    let player = &board.actors[eid];
     env.ui.update_focus(player);
     env.ui.update_moves(player);
 
@@ -1488,9 +1487,9 @@ fn update_player_knowledge(state: &mut State) {
 
     board.redo_effect_updates();
 
-    swap(&mut env.known, &mut board.entities[eid].known);
+    swap(&mut env.known, &mut board.actors[eid].known);
     board.update_known(eid, env);
-    swap(&mut env.known, &mut board.entities[eid].known);
+    swap(&mut env.known, &mut board.actors[eid].known);
 
     board.undo_effect_updates();
 }
@@ -1519,7 +1518,7 @@ fn update_state(state: &mut State) {
         // Automatically stage the recall action.
         let player = state.get_player();
         for (i, &oid) in player.summons.iter().enumerate() {
-            let summon = &state.board.entities[oid];
+            let summon = &state.board.actors[oid];
             let Some(command) = &summon.command else { continue };
             if !matches!(command, Command::Return | Command::Switch(_)) { continue; }
             if !can_summon(&state.board, player, summon.pos) { continue; }
@@ -1529,7 +1528,7 @@ fn update_state(state: &mut State) {
             } else {
                 Action::Recall { summon: i }
             };
-            let summon = &mut state.board.entities[oid];
+            let summon = &mut state.board.actors[oid];
             summon.command = None;
             return true;
         }
@@ -1542,7 +1541,7 @@ fn update_state(state: &mut State) {
         process_input(state, input);
         update = true;
     }
-    let player = &state.board.entities[state.player];
+    let player = &state.board.actors[state.player];
     if state.env.ui.update_target(player) { return; }
 
     while game_loop_active(state) {
@@ -1550,8 +1549,8 @@ fn update_state(state: &mut State) {
         let Some(eid) = advance_turn(board) else { break };
 
         let time = board.time;
-        let entity = &board.entities[eid];
-        let Entity { leader, player, .. } = *entity;
+        let actor = &board.actors[eid];
+        let Actor { leader, player, .. } = *actor;
         if player && !stage_input(state) { break; }
 
         update = true;
@@ -1561,19 +1560,19 @@ fn update_state(state: &mut State) {
         if player && !result.success { break; }
 
         let board = &mut state.board;
-        let Some(entity) = board.entities.get_mut(eid) else { continue };
+        let Some(actor) = board.actors.get_mut(eid) else { continue };
 
-        let Entity { pos, speed, .. } = *entity;
-        entity.known.mark_turn_boundary(player, speed, time);
+        let Actor { pos, speed, .. } = *actor;
+        actor.known.mark_turn_boundary(player, speed, time);
 
         board.time = board.time.bump();
 
-        let trail = &mut entity.trail;
+        let trail = &mut actor.trail;
         if trail.len() == trail.capacity() { trail.pop_back(); }
         trail.push_front(Location { pos, time: board.time });
 
-        board.active_entity = None;
-        drain(entity, &result);
+        board.active_actor = None;
+        drain(actor, &result);
 
         state.start_effect();
     }
@@ -1588,7 +1587,7 @@ fn update_state(state: &mut State) {
 pub enum GameMode { Gym, Play, Sim, Test }
 
 pub struct Env {
-    // Used for in-place Entity state updates:
+    // Used for in-place Actor state updates:
     ai: Box<AIState>,
     debug: Option<Box<DebugFile>>,
     known: Box<Knowledge>,
@@ -1649,18 +1648,18 @@ impl State {
             rng,
         };
 
-        let eid = board.entities.allocate_eid();
+        let eid = board.actors.allocate_eid();
         let (name, leader, player) = (Some("skishore".into()), None, true);
-        let args = EntityArgs { eid, name, player, leader, species, pos };
-        board.add_entity(&args, &mut env);
+        let args = ActorArgs { eid, name, player, leader, species, pos };
+        board.add_actor(&args, &mut env);
 
         let player = eid;
         let input = Action::WaitForInput;
 
         if matches!(mode, GameMode::Gym | GameMode::Sim | GameMode::Test) {
             board.map.entry_mut(pos).unwrap().eid = None;
-            let me = &mut board.entities[player];
-            let Entity { player, speed, .. } = *me;
+            let me = &mut board.actors[player];
+            let Actor { player, speed, .. } = *me;
             *me.known = Default::default();
             me.known.mark_turn_boundary(player, speed, board.time);
             me.pos = Point(-9999, -9999);
@@ -1668,7 +1667,7 @@ impl State {
 
         let teammate = |name: &str| {
             let species = Species::get(name);
-            let eid = board.entities.allocate_eid();
+            let eid = board.actors.allocate_eid();
             let (cur_hp, max_hp) = (species.hp, species.hp);
             Teammate::In(Individual { eid, name: None, species, cur_hp, max_hp })
         };
@@ -1681,7 +1680,7 @@ impl State {
             "Goldeen",
         ];
         let team: Vec<_> = team.into_iter().map(teammate).collect();
-        let me = &mut board.entities[player];
+        let me = &mut board.actors[player];
         me.dir = dirs::S;
         me.team = team;
 
@@ -1703,10 +1702,10 @@ impl State {
             let species = Species::get(species);
             let Some(pos) = pos(&board, species.moves, &mut env.rng) else { continue };
 
-            let eid = board.entities.allocate_eid();
+            let eid = board.actors.allocate_eid();
             let (name, leader, player) = (None, None, false);
-            let args = EntityArgs { eid, name, player, leader, species, pos };
-            board.add_entity(&args, &mut env);
+            let args = ActorArgs { eid, name, player, leader, species, pos };
+            board.add_actor(&args, &mut env);
         }
         board.update_known(player, &mut env);
 
@@ -1733,7 +1732,7 @@ impl State {
     pub fn update(&mut self) { update_state(self); }
 
     pub fn render(&self, buffer: &mut Buffer) {
-        let entity = self.get_player();
+        let actor = self.get_player();
         let effect = self.board.get_frame().map(|frame| {
             let known = &*self.env.known;
             let mask = &self.board._frame_mask;
@@ -1751,18 +1750,18 @@ impl State {
             }
             super::ui::Effect { frame, known, mask, sources, targets }
         });
-        self.env.ui.render(buffer, entity, effect.as_ref());
+        self.env.ui.render(buffer, actor, effect.as_ref());
     }
 
     // Private helpers:
 
-    fn get_player(&self) -> &Entity { &self.board.entities[self.player] }
+    fn get_player(&self) -> &Actor { &self.board.actors[self.player] }
 
     fn record_action(&mut self, action: &Action, eid: EID) {
         if matches!(action, Action::WaitForInput) { return; }
 
         if self.env.mode == GameMode::Sim && eid != self.player {
-            let pos = self.board.entities[eid].pos;
+            let pos = self.board.actors[eid].pos;
             let eid = unsafe { std::mem::transmute::<EID, u64>(eid) };
             println!("  EID {:2} @ {:>2?}: {:?}", eid, pos, action);
         }
@@ -1770,8 +1769,8 @@ impl State {
         let Some(debug) = &mut self.env.debug else { return };
 
         let board = &self.board;
-        let entity = &board.entities[eid];
-        debug.record(action, board, entity);
+        let actor = &board.actors[eid];
+        debug.record(action, board, actor);
     }
 
     fn record_remove(&mut self, eid: EID, pos: Point, species: &Species) {
@@ -1818,7 +1817,7 @@ impl State {
     }
 
     fn _arm_animation_fov(&mut self, pov: EID) {
-        let Some(me) = self.board.get_entity(pov) else { return };
+        let Some(me) = self.board.get_actor(pov) else { return };
         self.env.fov.compute(&self.board, me);
     }
 

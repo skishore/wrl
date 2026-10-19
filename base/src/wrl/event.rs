@@ -2,8 +2,8 @@ use std::num::NonZeroU64;
 
 use crate::base::point::Point;
 
+use super::actor::EID;
 use super::dex::Species;
-use super::entity::EID;
 use super::time::Timestamp;
 
 //////////////////////////////////////////////////////////////////////////////
