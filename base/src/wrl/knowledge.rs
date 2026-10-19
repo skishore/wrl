@@ -10,8 +10,8 @@ use crate::base::util::{HashMap, HashSet, RNG, clamp};
 use crate::base::pathing::Status;
 use crate::base::vision::Vision;
 
+use super::actor::{Actor, EID, Teammate};
 use super::dex::Species;
-use super::entity::{EID, Entity, Teammate};
 use super::event::{Event, EventData, Location, Sense, Sound, UID};
 use super::game::{MOVE_TIMER, Board, Cell, Item, Light, Tile, TileFlags};
 use super::list::{Handle, List};
@@ -21,8 +21,8 @@ use super::time::{Timestamp, TurnTimer};
 
 // Constants
 
-const MAX_ENTITY_MEMORY: usize = 64;
-const MAX_SOURCE_MEMORY: usize = 64;
+const MAX_ACTOR_MEMORY: usize = 64;
+const MAX_NOISE_MEMORY: usize = 64;
 const MAX_TILE_MEMORY: usize = 4096;
 const MAX_TURN_MEMORY: usize = 256;
 
@@ -32,7 +32,7 @@ const SOURCE_TRACKING_LIMIT: i32 = 16;
 
 const SCENT_TRACKING_LIMIT: i32 = 64;
 
-fn trophic_level(x: &Entity) -> i32 {
+fn trophic_level(x: &Actor) -> i32 {
     if x.species.human() { 0 } else if !x.species.predator() { 1 } else { 2 }
 }
 
@@ -40,7 +40,7 @@ fn trophic_level(x: &Entity) -> i32 {
 
 // Per-cell knowledge:
 
-flags! { pub CellFlags(u32) { Light, Shade, Visible, SeeEntityAt } }
+flags! { pub CellFlags(u32) { Light, Shade, Visible, SeeActorAt } }
 
 type CF = CellFlags;
 
@@ -53,7 +53,7 @@ pub struct CellKnowledge {
     pub visibility: i32,
 
     pub last_seen: Timestamp,
-    pub last_see_entity_at: Timestamp,
+    pub last_see_actor_at: Timestamp,
 }
 
 impl CellKnowledge {
@@ -66,12 +66,12 @@ impl CellKnowledge {
     pub fn light(&self) -> bool { self.flags.any(CF::Light) }
     pub fn shade(&self) -> bool { self.flags.any(CF::Shade) }
     pub fn visible(&self) -> bool { self.flags.any(CF::Visible) }
-    pub fn see_entity_at(&self) -> bool { self.flags.any(CF::SeeEntityAt) }
+    pub fn see_actor_at(&self) -> bool { self.flags.any(CF::SeeActorAt) }
 
     // Updates:
 
     fn clear_visibility_flags(&mut self) {
-        self.flags &= !(CF::Visible | CF::SeeEntityAt);
+        self.flags &= !(CF::Visible | CF::SeeActorAt);
     }
 
     fn update(&mut self, cell: &Cell, flags: CellFlags, time: Timestamp, visibility: i32) {
@@ -80,11 +80,11 @@ impl CellKnowledge {
         self.visibility = visibility;
         self.last_seen = time;
 
-        if self.see_entity_at() {
+        if self.see_actor_at() {
             // Used in hunting: we know the cell was unoccupied at this time.
-            self.last_see_entity_at = time;
+            self.last_see_actor_at = time;
 
-            // Items have visibility of a small entity.
+            // Items have visibility of a small actor.
             //
             // Clone the items list, but reuse the existing allocation, if any.
             self.items.clear();
@@ -95,19 +95,19 @@ impl CellKnowledge {
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Per-entity knowledge:
+// Per-Actor knowledge:
 
-flags! { pub EntityFlags(u32) { Asleep, Friend, Rival, Sensed, Sneaking, Visible } }
+flags! { pub ActorFlags(u32) { Asleep, Friend, Rival, Sensed, Sneaking, Visible } }
 
-type EF = EntityFlags;
+type AF = ActorFlags;
 
-pub struct EntityKnowledge {
+pub struct ActorKnowledge {
     pub eid: EID,
     pub uid: UID,
     pub dir: Delta,
     pub loc: Location,
     pub name: Option<Rc<str>>,
-    pub flags: EntityFlags,
+    pub flags: ActorFlags,
     pub sense: Sense,
     pub species: &'static Species,
     pub team: ThinVec<bool>,
@@ -118,12 +118,12 @@ pub struct EntityKnowledge {
     pub delta: i32,
 }
 
-impl std::ops::Deref for EntityKnowledge {
+impl std::ops::Deref for ActorKnowledge {
     type Target = Location;
     fn deref(&self) -> &Self::Target { &self.loc }
 }
 
-impl EntityKnowledge {
+impl ActorKnowledge {
     fn new(eid: EID, uid: UID, species: &'static Species) -> Self {
         Self {
             eid,
@@ -131,7 +131,7 @@ impl EntityKnowledge {
             dir: dirs::NONE,
             loc: Default::default(),
             name: Default::default(),
-            flags: EF::Empty,
+            flags: AF::Empty,
             sense: Sense::Sight,
             species,
             team: Default::default(),
@@ -145,19 +145,19 @@ impl EntityKnowledge {
 
     // Raw flags-based predicates:
 
-    pub fn asleep(&self) -> bool { self.flags.any(EF::Asleep) }
-    pub fn friend(&self) -> bool { self.flags.any(EF::Friend) }
-    pub fn rival(&self) -> bool { self.flags.any(EF::Rival) }
-    pub fn sensed(&self) -> bool { self.flags.any(EF::Sensed) }
-    pub fn sneaking(&self) -> bool { self.flags.any(EF::Sneaking) }
-    pub fn visible(&self) -> bool { self.flags.any(EF::Visible) }
+    pub fn asleep(&self) -> bool { self.flags.any(AF::Asleep) }
+    pub fn friend(&self) -> bool { self.flags.any(AF::Friend) }
+    pub fn rival(&self) -> bool { self.flags.any(AF::Rival) }
+    pub fn sensed(&self) -> bool { self.flags.any(AF::Sensed) }
+    pub fn sneaking(&self) -> bool { self.flags.any(AF::Sneaking) }
+    pub fn visible(&self) -> bool { self.flags.any(AF::Visible) }
 
     pub fn hidden_by_cover(&self) -> bool { self.sneaking() || !self.species.human() }
 
     // Updates:
 
     fn clear_visibility_flags(&mut self) {
-        self.flags &= !(EF::Sensed | EF::Visible);
+        self.flags &= !(AF::Sensed | AF::Visible);
     }
 
     fn update_for_event(&mut self, event: &Event) {
@@ -165,13 +165,13 @@ impl EntityKnowledge {
         self.sense = event.sense;
     }
 
-    fn update(&mut self, me: &Entity, other: &Entity, sense: Sense, time: Timestamp) {
-        // Entities are friends iff they're both tame and in the same party.
-        let leader = |x: &Entity| { x.leader.unwrap_or(x.eid) };
+    fn update(&mut self, me: &Actor, other: &Actor, sense: Sense, time: Timestamp) {
+        // Actors are friends iff they're both tame and in the same party.
+        let leader = |x: &Actor| { x.leader.unwrap_or(x.eid) };
 
-        // Entities are rivals iff one is tame and one is wild, or they're
-        // both tame but in different parties.
-        let trainer = |x: &Entity| {
+        // Actors are rivals iff one is tame and one is wild, or they're both
+        // tame but in different parties.
+        let trainer = |x: &Actor| {
             if let Some(x) = x.leader { return Some(x) };
             if x.species.human() { Some(x.eid) } else { None }
         };
@@ -192,20 +192,20 @@ impl EntityKnowledge {
         self.pp = 1. - clamp(other.move_timer as f64 / MOVE_TIMER as f64, 0., 1.);
         self.delta = trophic_level(other) - trophic_level(me);
 
-        self.flags = EF::Sensed;
-        if other.asleep { self.flags |= EF::Asleep; }
-        if other.sneaking { self.flags |= EF::Sneaking; }
-        if sense == Sense::Sight { self.flags |= EF::Visible; }
-        if leader(me) == leader(other) { self.flags |= EF::Friend; }
-        if trainer(me) != trainer(other) { self.flags |= EF::Rival; }
+        self.flags = AF::Sensed;
+        if other.asleep { self.flags |= AF::Asleep; }
+        if other.sneaking { self.flags |= AF::Sneaking; }
+        if sense == Sense::Sight { self.flags |= AF::Visible; }
+        if leader(me) == leader(other) { self.flags |= AF::Friend; }
+        if trainer(me) != trainer(other) { self.flags |= AF::Rival; }
     }
 }
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Per-source knowledge:
+// Per-noise knowledge:
 
-pub struct SourceKnowledge {
+pub struct NoiseKnowledge {
     eid: Option<EID>,
     pub uid: UID,
     pub loc: Location,
@@ -213,12 +213,12 @@ pub struct SourceKnowledge {
     pub sound: Option<Sound>,
 }
 
-impl std::ops::Deref for SourceKnowledge {
+impl std::ops::Deref for NoiseKnowledge {
     type Target = Location;
     fn deref(&self) -> &Self::Target { &self.loc }
 }
 
-impl SourceKnowledge {
+impl NoiseKnowledge {
     fn new(eid: Option<EID>, event: &Event) -> Self {
         let Event { uid, loc, sense, .. } = *event;
         Self { eid, uid, loc, sense, sound: event.sound() }
@@ -254,13 +254,13 @@ impl std::ops::Deref for ScentKnowledge {
 #[derive(Eq, PartialEq)]
 struct PointEntry {
     cell: Option<CellHandle>,
-    actor: Option<ActorHandle>,
+    trace: Option<TraceHandle>,
     status: Status,
 }
 
 impl Default for PointEntry {
     fn default() -> Self {
-        Self { cell: None, actor: None, status: Status::Unknown }
+        Self { cell: None, trace: None, status: Status::Unknown }
     }
 }
 
@@ -269,24 +269,24 @@ impl Default for PointEntry {
 // Overall knowledge index:
 
 type CellHandle = Handle<CellKnowledge>;
-type EntityHandle = Handle<EntityKnowledge>;
-type SourceHandle = Handle<SourceKnowledge>;
+type ActorHandle = Handle<ActorKnowledge>;
+type NoiseHandle = Handle<NoiseKnowledge>;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-enum ActorHandle { Entity(EntityHandle), Source(SourceHandle) }
+enum TraceHandle { Actor(ActorHandle), Noise(NoiseHandle) }
 
 #[derive(Default, Eq, PartialEq)]
 struct EIDEntry {
-    entity: Option<EntityHandle>,
-    source: Option<SourceHandle>,
+    actor: Option<ActorHandle>,
+    noise: Option<NoiseHandle>,
 }
 
 #[derive(Default)]
 pub struct Knowledge {
     // Core memories. Recent memories come first.
     pub cells: List<CellKnowledge>,
-    pub entities: List<EntityKnowledge>,
-    pub sources: List<SourceKnowledge>,
+    pub actors: List<ActorKnowledge>,
+    pub noises: List<NoiseKnowledge>,
 
     // Scents. Recent scents come first.
     pub scents: Vec<ScentKnowledge>,
@@ -312,8 +312,8 @@ impl Knowledge {
         PointLookup { root: self, spot: None }
     }
 
-    pub fn entity(&self, eid: EID) -> Option<&EntityKnowledge> {
-        Some(&self.entities[self.eid_index.get(&eid)?.entity?])
+    pub fn actor(&self, eid: EID) -> Option<&ActorKnowledge> {
+        Some(&self.actors[self.eid_index.get(&eid)?.actor?])
     }
 
     pub fn get(&self, p: Point) -> PointLookup<'_> {
@@ -338,35 +338,35 @@ impl Knowledge {
         self.timer.end_turn(MAX_TURN_MEMORY, speed, time);
 
         self.forget_old_scents();
-        self.forget_old_sources(player);
+        self.forget_old_noises(player);
 
         debug_assert!(self.check_invariants());
     }
 
-    pub fn observe_event(&mut self, me: &Entity, eid: Option<EID>, event: &Event) {
+    pub fn observe_event(&mut self, me: &Actor, eid: Option<EID>, event: &Event) {
         self.timer.update(event.time);
 
-        type AH = ActorHandle;
+        type TH = TraceHandle;
         let mut cloned = event.clone();
-        match self.event_source(me, eid, &mut cloned) {
-            AH::Entity(x) => self.update_entity(x, |x| x.update_for_event(&cloned)),
-            AH::Source(x) => self.update_source(x, |x| *x = SourceKnowledge::new(eid, &cloned)),
+        match self.event_noise(me, eid, &mut cloned) {
+            TH::Actor(x) => self.update_actor(x, |x| x.update_for_event(&cloned)),
+            TH::Noise(x) => self.update_noise(x, |x| *x = NoiseKnowledge::new(eid, &cloned)),
         }
         self.events.push(cloned);
 
         debug_assert!(self.check_invariants());
     }
 
-    pub fn remove_entity(&mut self, eid: EID, time: Timestamp) {
+    pub fn remove_actor(&mut self, eid: EID, time: Timestamp) {
         self.timer.update(time);
 
         let Some(x) = self.eid_index.get_mut(&eid) else { return };
-        let Some(h) = x.entity.take() else { return };
+        let Some(h) = x.actor.take() else { return };
 
         if *x == Default::default() { self.eid_index.remove(&eid); }
 
-        let uid = self.entities[h].uid;
-        let pos = self.delete_entity(h);
+        let uid = self.actors[h].uid;
+        let pos = self.delete_actor(h);
 
         self.forget_event(uid, pos);
 
@@ -379,7 +379,7 @@ impl Knowledge {
         self.cells[h].items.push(*item);
     }
 
-    pub fn update(&mut self, me: &Entity, board: &Board, vision: &Vision, rng: &mut RNG) {
+    pub fn update(&mut self, me: &Actor, board: &Board, vision: &Vision, rng: &mut RNG) {
         self.timer.update(board.time);
 
         let (pos, time) = (me.pos, board.time);
@@ -387,32 +387,32 @@ impl Knowledge {
         let moves = me.species.moves;
         self.moves = moves;
 
-        // Detect entities that were recently nearby by scent.
+        // Detect actors that were recently nearby by scent.
         self.populate_scents(me, board, rng);
 
         // Clear visibility flags. Visible cells come first in the list so we
         // can stop when we see the first one that's not visible.
         //
-        // We can't apply the same optimization to entities, because we may
-        // sense them via off-turn event updates.
+        // We can't apply this optimization to actors, because we may sense
+        // them via off-turn event updates.
         for cell in &mut self.cells {
             if !cell.visible() { break; }
             cell.clear_visibility_flags();
         }
-        for entity in &mut self.entities {
-            entity.clear_visibility_flags();
+        for actor in &mut self.actors {
+            actor.clear_visibility_flags();
         }
 
-        // Entities know where their allies are, even if they can't see them.
+        // Actors know where their allies are, even if they can't see them.
         for &oid in me.leader.iter().chain(&me.summons) {
-            let other = &board.entities[oid];
-            self.observe_entity(me, other, Sense::Sound);
+            let other = &board.actors[oid];
+            self.observe_actor(me, other, Sense::Sound);
         }
 
         // If we're asleep, just update knowledge about ourself.
         if me.asleep {
             assert!(vision.get_points_seen().is_empty());
-            self.observe_entity(me, me, Sense::Sight);
+            self.observe_actor(me, me, Sense::Sight);
         }
 
         // Compute a sorted list of points we've seen and their visibility.
@@ -422,7 +422,7 @@ impl Knowledge {
             seen.sort_by_key(|&(x, _)| (x - pos).len_l2_squared());
         }
 
-        // Entities have exact knowledge about anything they can see.
+        // Actors have exact knowledge about anything they can see.
         //
         // We want self.cells to be sorted by recency, and if there are ties,
         // by distance. Closer and more recently seen points come first.
@@ -441,22 +441,22 @@ impl Knowledge {
             let visible = true;
             let shade = unlit || cell.shadow > 0;
             let is_shadow_cover = shade && !light;
-            let see_big_entities = nearby || !is_shadow_cover;
-            let see_all_entities = nearby || !(is_shadow_cover || tile.is_cover());
+            let see_big_actors = nearby || !is_shadow_cover;
+            let see_all_actors = nearby || !(is_shadow_cover || tile.is_cover());
 
             // Compute the cell's new flags.
             let mut flags = CF::Empty;
             if light { flags |= CF::Light; }
             if shade { flags |= CF::Shade; }
             if visible { flags |= CF::Visible; }
-            if see_all_entities { flags |= CF::SeeEntityAt; }
+            if see_all_actors { flags |= CF::SeeActorAt; }
 
-            // Check if we can see the entity at the given cell.
-            let entity = (|| {
-                if !see_big_entities { return None; }
-                let other = board.get_entity(eid?)?;
-                if !see_all_entities && other.hidden_by_cover() { return None; }
-                Some(self.observe_entity(me, other, Sense::Sight))
+            // Check if we can see the actor at the given cell.
+            let actor = (|| {
+                if !see_big_actors { return None; }
+                let other = board.get_actor(eid?)?;
+                if !see_all_actors && other.hidden_by_cover() { return None; }
+                Some(self.observe_actor(me, other, Sense::Sight))
             })();
 
             // Update this point's cell, or create a new one.
@@ -470,13 +470,13 @@ impl Knowledge {
             let memory = &mut self.cells[handle];
             memory.update(cell, flags, time, visibility);
 
-            // Clear the cell's entity if it's definitely unoccupied.
-            if see_all_entities && entity.is_none() { entry.actor = None; }
+            // Clear the cell's trace if it's definitely unoccupied.
+            if see_all_actors && actor.is_none() { entry.trace = None; }
 
             // Update the cell's pathfinding status.
             entry.status = if !tile.can_move_to(moves) {
                 Status::Blocked
-            } else if entry.actor.is_some() {
+            } else if entry.trace.is_some() {
                 Status::Occupied
             } else {
                 Status::Free
@@ -490,20 +490,20 @@ impl Knowledge {
 
     // Miscellaneous update helpers:
 
-    fn observe_entity(&mut self, me: &Entity, other: &Entity, sense: Sense) -> EntityHandle {
+    fn observe_actor(&mut self, me: &Actor, other: &Actor, sense: Sense) -> ActorHandle {
         let time = self.timer.time;
-        let entity = self.entity_for_sighting(other, sense);
-        self.update_entity(entity, |x| x.update(me, other, sense, time));
-        entity
+        let actor = self.actor_for_sighting(other, sense);
+        self.update_actor(actor, |x| x.update(me, other, sense, time));
+        actor
     }
 
-    fn populate_scents(&mut self, me: &Entity, board: &Board, rng: &mut RNG) {
+    fn populate_scents(&mut self, me: &Actor, board: &Board, rng: &mut RNG) {
         if me.asleep || me.player { return; }
 
         let mut update = false;
-        let leader = |x: &Entity| { x.leader.unwrap_or(x.eid) };
+        let leader = |x: &Actor| { x.leader.unwrap_or(x.eid) };
 
-        for (_, other) in &board.entities {
+        for (_, other) in &board.actors {
             if leader(me) == leader(other) { continue; }
 
             let mut remainder = rng.random::<f64>();
@@ -527,100 +527,100 @@ impl Knowledge {
         self.scents.retain(|x| seen.insert(x.species as *const Species));
     }
 
-    // Entity identification:
+    // Actor identification:
 
-    fn entity_for_sighting(&mut self, other: &Entity, sense: Sense) -> EntityHandle {
+    fn actor_for_sighting(&mut self, other: &Actor, sense: Sense) -> ActorHandle {
         let eid = other.eid;
         let limit = self.timer.time_at_turn(SOURCE_TRACKING_LIMIT);
         let entry = self.eid_index.entry(eid).or_default();
 
-        let entity = entry.entity.unwrap_or_else(|| {
+        let actor = entry.actor.unwrap_or_else(|| {
             self.last_uid += 1;
             let uid = UID(self.last_uid.try_into().unwrap());
-            self.entities.push_front(EntityKnowledge::new(eid, uid, other.species))
+            self.actors.push_front(ActorKnowledge::new(eid, uid, other.species))
         });
-        entry.entity = Some(entity);
+        entry.actor = Some(actor);
 
-        if let Some(x) = entry.source.take() &&
-           let Some(old) = self.identify_source(x, limit) {
-            let (uid, old) = (self.entities[entity].uid, Some(old));
+        if let Some(x) = entry.noise.take() &&
+           let Some(old) = self.identify_noise(x, limit) {
+            let (uid, old) = (self.actors[actor].uid, Some(old));
             let loc = Location { pos: other.pos, time: self.timer.time };
             let event = Event { uid, old, loc, data: EventData::Spot, sense };
             self.events.push(event);
         }
-        entity
+        actor
     }
 
-    fn event_source(&mut self, me: &Entity, eid: Option<EID>, event: &mut Event) -> ActorHandle {
+    fn event_noise(&mut self, me: &Actor, eid: Option<EID>, event: &mut Event) -> TraceHandle {
         assert!(event.old.is_none());
 
-        // Sounds from non-entities result in new, unknown sources.
+        // Sounds from non-actors result in new, unknown noises.
         let Some(eid) = eid else {
-            return ActorHandle::Source(self.create_source(eid, event));
+            return TraceHandle::Noise(self.create_noise(eid, event));
         };
 
         let limit = self.timer.time_at_turn(SOURCE_TRACKING_LIMIT);
         let entry = self.eid_index.entry(eid).or_default();
         let sense = event.sense;
 
-        // Try to link this event to an entity we've seen.
-        let link = |x: &EntityKnowledge| match sense {
+        // Try to link this event to an actor we've seen.
+        let link = |x: &ActorKnowledge| match sense {
             Sense::Sight => true,
             Sense::Smell => false,
             Sense::Sound => x.time > limit,
         };
-        if !me.player && let Some(x) = entry.entity && link(&self.entities[x]) {
-            event.uid = self.entities[x].uid;
-            if let Some(y) = entry.source.take() {
-               event.old = self.identify_source(y, limit);
+        if !me.player && let Some(x) = entry.actor && link(&self.actors[x]) {
+            event.uid = self.actors[x].uid;
+            if let Some(y) = entry.noise.take() {
+               event.old = self.identify_noise(y, limit);
             }
-            return ActorHandle::Entity(x);
+            return TraceHandle::Actor(x);
         }
 
-        // Try to link the event to an entity we've sensed indirectly.
-        if let Some(x) = entry.source && self.sources[x].time > limit {
-            event.uid = self.sources[x].uid;
-            return ActorHandle::Source(x);
+        // Try to link the event to an actor we've sensed indirectly.
+        if let Some(x) = entry.noise && self.noises[x].time > limit {
+            event.uid = self.noises[x].uid;
+            return TraceHandle::Noise(x);
         };
 
-        // No existing source - create a new, unknown one.
-        let result = self.create_source(Some(eid), event);
-        if let Some(x) = self.eid_index.get_mut(&eid) { x.source = Some(result); }
-        ActorHandle::Source(result)
+        // No existing noise - create a new, unknown one.
+        let result = self.create_noise(Some(eid), event);
+        if let Some(x) = self.eid_index.get_mut(&eid) { x.noise = Some(result); }
+        TraceHandle::Noise(result)
     }
 
-    // Entity updates:
+    // Actor updates:
 
-    fn create_source(&mut self, eid: Option<EID>, event: &mut Event) -> SourceHandle {
+    fn create_noise(&mut self, eid: Option<EID>, event: &mut Event) -> NoiseHandle {
         self.last_uid += 1;
         event.uid = UID(self.last_uid.try_into().unwrap());
-        self.sources.push_front(SourceKnowledge::new(eid, event))
+        self.noises.push_front(NoiseKnowledge::new(eid, event))
     }
 
-    fn delete_entity(&mut self, h: EntityHandle) -> Point {
-        let pos = self.entities.remove(h).loc.pos;
-        self.remove_actor(ActorHandle::Entity(h), pos);
+    fn delete_actor(&mut self, h: ActorHandle) -> Point {
+        let pos = self.actors.remove(h).loc.pos;
+        self.remove_trace(TraceHandle::Actor(h), pos);
         pos
     }
 
-    fn delete_source(&mut self, h: SourceHandle) -> Point {
-        let pos = self.sources.remove(h).loc.pos;
-        self.remove_actor(ActorHandle::Source(h), pos);
+    fn delete_noise(&mut self, h: NoiseHandle) -> Point {
+        let pos = self.noises.remove(h).loc.pos;
+        self.remove_trace(TraceHandle::Noise(h), pos);
         pos
     }
 
-    fn identify_source(&mut self, s: SourceHandle, limit: Timestamp) -> Option<UID> {
-        let source = &self.sources[s];
-        if source.time <= limit { return None; }
+    fn identify_noise(&mut self, s: NoiseHandle, limit: Timestamp) -> Option<UID> {
+        let noise = &self.noises[s];
+        if noise.time <= limit { return None; }
 
-        let uid = source.uid;
-        self.delete_source(s);
+        let uid = noise.uid;
+        self.delete_noise(s);
         Some(uid)
     }
 
-    fn remove_actor(&mut self, h: ActorHandle, prev: Point) {
-        if let Some(x) = self.pos_index.get_mut(&prev) && x.actor == Some(h) {
-            x.actor = None;
+    fn remove_trace(&mut self, h: TraceHandle, prev: Point) {
+        if let Some(x) = self.pos_index.get_mut(&prev) && x.trace == Some(h) {
+            x.trace = None;
             match x.cell {
                 Some(_) => if x.status != Status::Blocked { x.status = Status::Free; }
                 None => { self.pos_index.remove(&prev); }
@@ -628,36 +628,36 @@ impl Knowledge {
         }
     }
 
-    fn update_position(&mut self, h: ActorHandle, prev: Point, next: Option<Point>) {
-        if next != Some(prev) { self.remove_actor(h, prev); }
+    fn update_position(&mut self, h: TraceHandle, prev: Point, next: Option<Point>) {
+        if next != Some(prev) { self.remove_trace(h, prev); }
 
         if let Some(next) = next {
             let x = self.pos_index.entry(next).or_default();
             if x.status != Status::Blocked { x.status = Status::Occupied; }
-            x.actor = Some(h);
+            x.trace = Some(h);
         }
     }
 
-    fn update_entity(&mut self, h: EntityHandle, f: impl FnOnce(&mut EntityKnowledge)) {
-        self.entities.move_to_front(h);
+    fn update_actor(&mut self, h: ActorHandle, f: impl FnOnce(&mut ActorKnowledge)) {
+        self.actors.move_to_front(h);
 
-        let entity = &mut self.entities[h];
-        let prev = entity.pos;
-        f(entity);
-        let next = entity.pos;
+        let actor = &mut self.actors[h];
+        let prev = actor.pos;
+        f(actor);
+        let next = actor.pos;
 
-        self.update_position(ActorHandle::Entity(h), prev, Some(next));
+        self.update_position(TraceHandle::Actor(h), prev, Some(next));
     }
 
-    fn update_source(&mut self, h: SourceHandle, f: impl FnOnce(&mut SourceKnowledge)) {
-        self.sources.move_to_front(h);
+    fn update_noise(&mut self, h: NoiseHandle, f: impl FnOnce(&mut NoiseKnowledge)) {
+        self.noises.move_to_front(h);
 
-        let source = &mut self.sources[h];
-        let prev = source.pos;
-        f(source);
-        let next = source.pos;
+        let noise = &mut self.noises[h];
+        let prev = noise.pos;
+        f(noise);
+        let next = noise.pos;
 
-        self.update_position(ActorHandle::Source(h), prev, Some(next));
+        self.update_position(TraceHandle::Noise(h), prev, Some(next));
     }
 
     // Cleanup:
@@ -677,16 +677,16 @@ impl Knowledge {
             self.forget_last_cell();
         }
 
-        // Clean up entities, but not any that we can currently sense.
-        while self.entities.len() > MAX_ENTITY_MEMORY {
-            let entity = self.entities.back().unwrap();
-            if entity.sensed() { break; }
-            self.remove_entity(entity.eid, self.timer.time);
+        // Clean up actors, but not any that we can currently sense.
+        while self.actors.len() > MAX_ACTOR_MEMORY {
+            let actor = self.actors.back().unwrap();
+            if actor.sensed() { break; }
+            self.remove_actor(actor.eid, self.timer.time);
         }
 
-        // Clean up sources by count. On turn boundaries, we drop them by age.
-        while self.sources.len() > MAX_SOURCE_MEMORY {
-            self.forget_last_source();
+        // Clean up noises by count. On turn boundaries, we drop them by age.
+        while self.noises.len() > MAX_NOISE_MEMORY {
+            self.forget_last_noise();
         }
     }
 
@@ -701,19 +701,19 @@ impl Knowledge {
         let Some(y) = self.pos_index.get_mut(&x.point) else { return };
 
         y.cell = None;
-        match y.actor {
+        match y.trace {
             Some(_) => y.status = Status::Occupied,
             None => { self.pos_index.remove(&x.point); }
         }
     }
 
-    fn forget_last_source(&mut self) {
-        let Some(h) = self.sources.back_handle() else { return };
-        let Some(x) = self.sources.pop_back() else { return };
+    fn forget_last_noise(&mut self) {
+        let Some(h) = self.noises.back_handle() else { return };
+        let Some(x) = self.noises.pop_back() else { return };
 
-        if let Some(e) = x.eid { self.forget_source_link(e, h); }
+        if let Some(e) = x.eid { self.forget_noise_link(e, h); }
 
-        self.remove_actor(ActorHandle::Source(h), x.pos);
+        self.remove_trace(TraceHandle::Noise(h), x.pos);
 
         self.forget_event(x.uid, x.pos);
     }
@@ -726,20 +726,20 @@ impl Knowledge {
         }
     }
 
-    fn forget_old_sources(&mut self, player: bool) {
+    fn forget_old_noises(&mut self, player: bool) {
         let turns = if player { SOURCE_LIMIT_PC_ } else { SOURCE_LIMIT_NPC };
         let limit = self.timer.time_at_turn(turns);
 
-        while let Some(x) = self.sources.back() && x.time <= limit {
-            self.forget_last_source();
+        while let Some(x) = self.noises.back() && x.time <= limit {
+            self.forget_last_noise();
         }
     }
 
-    fn forget_source_link(&mut self, e: EID, h: SourceHandle) {
+    fn forget_noise_link(&mut self, e: EID, h: NoiseHandle) {
         let Some(x) = self.eid_index.get_mut(&e) else { return };
-        if x.source != Some(h) { return };
+        if x.noise != Some(h) { return };
 
-        x.source = None;
+        x.noise = None;
         if *x == Default::default() { self.eid_index.remove(&e); }
     }
 
@@ -753,47 +753,47 @@ impl Knowledge {
 
         // Check that all lists are sorted in time order:
         check_sorted(self.cells.iter().map(|x| x.last_seen).collect());
-        check_sorted(self.entities.iter().map(|x| x.time).collect());
-        check_sorted(self.sources.iter().map(|x| x.time).collect());
+        check_sorted(self.actors.iter().map(|x| x.time).collect());
+        check_sorted(self.noises.iter().map(|x| x.time).collect());
         check_sorted(self.scents.iter().map(|x| x.time).collect());
         check_sorted(self.events.iter().rev().map(|x| x.time).collect());
 
-        // Check that every cell and entity is indexed:
+        // Check that every cell and actor is indexed:
         for x in &self.cells {
             let entry = self.pos_index.get(&x.point);
             assert!(entry.and_then(|x| x.cell).is_some());
         }
-        for x in &self.entities {
+        for x in &self.actors {
             let entry = self.eid_index.get(&x.eid);
-            assert!(entry.and_then(|x| x.entity).is_some());
+            assert!(entry.and_then(|x| x.actor).is_some());
         }
 
         // Check that the indices are consistent and minimal:
-        type AH = ActorHandle;
+        type TH = TraceHandle;
         for (&pos, point) in &self.pos_index {
-            let PointEntry { cell, actor, status } = *point;
-            assert!(cell.is_some() || actor.is_some());
+            let PointEntry { cell, trace, status } = *point;
+            assert!(cell.is_some() || trace.is_some());
 
             if let Some(x) = cell { assert!(self.cells[x].point == pos); }
-            if let Some(AH::Entity(x)) = actor { assert!(self.entities[x].pos == pos); }
-            if let Some(AH::Source(x)) = actor { assert!(self.sources[x].pos == pos); }
+            if let Some(TH::Actor(x)) = trace { assert!(self.actors[x].pos == pos); }
+            if let Some(TH::Noise(x)) = trace { assert!(self.noises[x].pos == pos); }
 
             let lookup = PointLookup { root: self, spot: Some(point) };
             assert!(status == lookup.status_for(self.moves));
 
             let actual = if let Some(x) = cell && !self.cells[x].tile.can_move_to(self.moves) {
                 Status::Blocked
-            } else if actor.is_some() {
+            } else if trace.is_some() {
                 Status::Occupied
             } else {
                 Status::Free
             };
             assert!(actual == status);
         }
-        for (&eid, &EIDEntry { entity, source }) in &self.eid_index {
-            assert!(entity.is_some() || source.is_some());
-            if let Some(x) = entity { assert!(self.entities[x].eid == eid); }
-            if let Some(x) = source { assert!(self.sources[x].eid == Some(eid)); }
+        for (&eid, &EIDEntry { actor, noise }) in &self.eid_index {
+            assert!(actor.is_some() || noise.is_some());
+            if let Some(x) = actor { assert!(self.actors[x].eid == eid); }
+            if let Some(x) = noise { assert!(self.noises[x].eid == Some(eid)); }
         }
         true
     }
@@ -815,8 +815,8 @@ impl<'a> PointLookup<'a> {
         self.cell().map_or_default(|x| x.last_seen)
     }
 
-    pub fn last_see_entity_at(&self) -> Timestamp {
-        self.cell().map_or_default(|x| x.last_see_entity_at)
+    pub fn last_see_actor_at(&self) -> Timestamp {
+        self.cell().map_or_default(|x| x.last_see_actor_at)
     }
 
     pub fn items(&self) -> &[Item] {
@@ -845,14 +845,14 @@ impl<'a> PointLookup<'a> {
         Some(&self.root.cells[self.spot?.cell?])
     }
 
-    pub fn entity(&self) -> Option<&'a EntityKnowledge> {
-        let ActorHandle::Entity(x) = self.spot?.actor? else { return None };
-        Some(&self.root.entities[x])
+    pub fn actor(&self) -> Option<&'a ActorKnowledge> {
+        let TraceHandle::Actor(x) = self.spot?.trace? else { return None };
+        Some(&self.root.actors[x])
     }
 
-    pub fn source(&self) -> Option<&'a SourceKnowledge> {
-        let ActorHandle::Source(x) = self.spot?.actor? else { return None };
-        Some(&self.root.sources[x])
+    pub fn noise(&self) -> Option<&'a NoiseKnowledge> {
+        let TraceHandle::Noise(x) = self.spot?.trace? else { return None };
+        Some(&self.root.noises[x])
     }
 
     pub fn status(&self) -> Status {
@@ -869,7 +869,7 @@ impl<'a> PointLookup<'a> {
     // Predicates:
 
     pub fn occupied(&self) -> bool {
-        self.spot.map_or(false, |x| x.actor.is_some())
+        self.spot.map_or(false, |x| x.trace.is_some())
     }
 
     pub fn blocked(&self) -> bool {
@@ -888,8 +888,8 @@ impl<'a> PointLookup<'a> {
         self.cell().map_or(false, |x| x.visible())
     }
 
-    pub fn can_see_entity_at(&self) -> bool {
-        self.cell().map_or(false, |x| x.see_entity_at())
+    pub fn can_see_actor_at(&self) -> bool {
+        self.cell().map_or(false, |x| x.see_actor_at())
     }
 
     pub fn is_cover(&self) -> bool {

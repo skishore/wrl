@@ -18,10 +18,10 @@ use crate::base::util::{HashMap, HashSet, RNG, clamp, sample, sortable, weighted
 use crate::base::vision::{INITIAL_VISIBILITY, Vision, VisionArgs};
 
 use crate::{act, cb, cond, pri, run, seq, util};
+use super::actor::{Actor, Command};
 use super::bhv::{Bhv, BhvExt, Result};
 use super::debug::{DebugFile, DebugLine, DebugLog};
 use super::dex::{Attack, Range, Species};
-use super::entity::{Command, Entity};
 use super::event::{Call, Location, Sense};
 use super::game::{Action, Item, TileFlags, move_ready};
 use super::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_};
@@ -333,8 +333,8 @@ struct PerTickState {
 }
 
 pub struct Ctx<'a> {
-    // Derived from the entity:
-    me: &'a Entity,
+    // Derived from the actor:
+    me: &'a Actor,
     known: &'a Knowledge,
     pos: Point,
     dir: Delta,
@@ -755,7 +755,7 @@ fn CheckPathTarget(ctx: &Ctx, valid: CellPredicate) -> bool {
 
 fn CheckPathStepsFree(ctx: &Ctx) -> bool {
     // Check if every cell on the path is free. Other than the cell that we'll
-    // move to next, we allow entities to temporarily move onto the path.
+    // move to next, we allow actors to temporarily move onto the path.
     let path = &ctx.blackboard.path;
     let steps = path.path.iter().skip(path.step + 1).rev().skip(path.skip).rev();
     let known = ctx.known;
@@ -975,7 +975,7 @@ fn select_chase_target(ctx: &mut Ctx) -> Option<Point> {
     let is_search_candidate = |p: Point| {
         if p == pos { return false; }
         let cell = known.get(p);
-        !cell.blocked() && cell.last_see_entity_at() <= time
+        !cell.blocked() && cell.last_see_actor_at() <= time
     };
     if is_search_candidate(center) { return Some(center); }
 
@@ -1204,7 +1204,7 @@ fn AttackEnemy(ctx: &mut Ctx) -> Option<AttackRequest> {
 }
 
 fn AttackRival(ctx: &mut Ctx) -> Option<AttackRequest> {
-    for other in &ctx.known.entities {
+    for other in &ctx.known.actors {
         if !other.visible() { break; }
         if !other.rival() { continue; }
 
@@ -1386,7 +1386,7 @@ fn StayInRange(ctx: &mut Ctx, valid: CellPredicate) -> bool {
         let cell = known.get(target);
         let mut radius = radius;
 
-        // Check for any of several reasons to move closer to a target entity.
+        // Check for any of several reasons to move closer to a target actor.
         // These reasons don't apply to cells, because cells don't move.
         if cell.occupied() {
             let shade = cell.shade();
@@ -1503,7 +1503,7 @@ fn ListThreatsByScent(ctx: &mut Ctx) {
 // Motivation: hunger => persistence: high
 
 fn ListPreyBySight(ctx: &mut Ctx) {
-    for other in &ctx.known.entities {
+    for other in &ctx.known.actors {
         if other.delta >= 0 { continue; }
         if !check_time!(ctx, other.time, MAX_SEARCH_TURNS) { break; }
 
@@ -1514,7 +1514,7 @@ fn ListPreyBySight(ctx: &mut Ctx) {
 }
 
 fn ListPreyBySound(ctx: &mut Ctx) {
-    for other in &ctx.known.sources {
+    for other in &ctx.known.noises {
         if !check_time!(ctx, other.time, MAX_SEARCH_TURNS) { break; }
 
         let (loc, sense) = (other.loc, other.sense);
@@ -1730,8 +1730,8 @@ fn ForceThreatState(ctx: &mut Ctx, state: FightOrFlight) {
 
 // Command-following helpers:
 
-fn GetVisionRange(entity: &Entity) -> Bound {
-    if entity.player { FOV_RADIUS_PC_ } else { FOV_RADIUS_NPC }
+fn GetVisionRange(actor: &Actor) -> Bound {
+    if actor.player { FOV_RADIUS_PC_ } else { FOV_RADIUS_NPC }
 }
 
 fn CloseToLeader(ctx: &Ctx) -> bool {
@@ -1771,7 +1771,7 @@ fn SelectEnemyTarget(ctx: &mut Ctx) -> bool {
     let Some(Command::Attack(attack, target)) = &ctx.me.command else { return false };
     let Some(eid) = target.eid else { return false };
 
-    let other = ctx.known.entity(eid);
+    let other = ctx.known.actor(eid);
     let other = other.filter(|x| x.time >= target.loc.time);
 
     let loc = other.map_or(target.loc, |x| x.loc);
@@ -1796,15 +1796,15 @@ pub struct Follower {
     pub moves: TileFlags,
 }
 
-pub fn rivals(me: &Entity) -> Vec<Follower> {
+pub fn rivals(me: &Actor) -> Vec<Follower> {
     let mut result = HashMap::default();
-    for other in &me.known.entities {
+    for other in &me.known.actors {
         if !other.visible() { break; }
         if other.friend() { continue; }
         *result.entry(other.pos).or_default() |= other.species.moves;
     }
-    for sound in &me.known.sources {
-        result.entry(sound.pos).or_insert(TileFlags::AllMoves);
+    for other in &me.known.noises {
+        result.entry(other.pos).or_insert(TileFlags::AllMoves);
     }
     let pos = me.pos;
     let mut result: Vec<_> = result.into_iter().map(
@@ -1814,7 +1814,7 @@ pub fn rivals(me: &Entity) -> Vec<Follower> {
 }
 
 // Check if `point` is a valid cell for a follower of the `leader`.
-pub fn CheckFollowerSquare(leader: &Entity, follower: &Follower, point: Point) -> bool {
+pub fn CheckFollowerSquare(leader: &Actor, follower: &Follower, point: Point) -> bool {
     let delta = leader.pos - point;
     if !Bound::new(2).contains(delta) { return false; }
 
@@ -1829,12 +1829,12 @@ pub fn CheckFollowerSquare(leader: &Entity, follower: &Follower, point: Point) -
 
     if delta.len_l1() <= 1 { return true; }
 
-    cell.can_see_entity_at() && cell.visibility() == known.get(leader.pos).visibility()
+    cell.can_see_actor_at() && cell.visibility() == known.get(leader.pos).visibility()
 }
 
 // Choose the best cell from which to defend `leader`, starting from `source`.
 // This choice may fail, e.g. if there are no spots free near `leader`.
-pub fn ChooseDefenseSquare(leader: &Entity, follower: &Follower) -> Option<Point> {
+pub fn ChooseDefenseSquare(leader: &Actor, follower: &Follower) -> Option<Point> {
     let rivals = rivals(leader);
     if rivals.is_empty() { return None; }
 
@@ -1877,7 +1877,7 @@ pub fn ChooseDefenseSquare(leader: &Entity, follower: &Follower) -> Option<Point
 
                 defended = defended || (
                     point != source && point != leader.pos &&
-                    known.get(point).entity().map_or(false, |x| x.friend())
+                    known.get(point).actor().map_or(false, |x| x.friend())
                 );
 
                 if !Bound::new(2).contains(delta) { continue; }
@@ -2014,7 +2014,7 @@ fn StayNearLeader(ctx: &mut Ctx) -> Option<Point> {
 //
 //  - Tricky hitch in MarkSafeIfLostView. This helper sets last_safe to the
 //    current time. If we resolve combat on the same turn in which we learn
-//    about a new, unknown entity (e.g. by sound), then that threat will pass
+//    about a new, unknown actor (e.g. by sound), then that threat will pass
 //    the threat.time > max(last_safe, bb.prev_time) check on that turn, but
 //    we'll set last_safe to bb.turn_time during the turn, so it will fail the
 //    next one, and we won't complete the scan.
@@ -2469,7 +2469,7 @@ fn Root() -> impl Bhv {
 pub enum Update { CommandFailure, CommandSuccess, TargetSeen }
 
 pub struct AIEnv<'a> {
-    pub leader: Option<&'a Entity>,
+    pub leader: Option<&'a Actor>,
     pub debug: Option<&'a mut DebugFile>,
     pub fov: &'a mut Vision,
     pub rng: &'a mut RNG,
@@ -2512,13 +2512,13 @@ impl AIState {
         if item == &Item::Corpse { map.entry(PathKind::Meat).or_insert(pos); }
     }
 
-    pub fn plan(&mut self, me: &Entity, env: AIEnv) -> AIPlan {
+    pub fn plan(&mut self, me: &Actor, env: AIEnv) -> AIPlan {
         let known = &*me.known;
         let blackboard = &mut self.blackboard;
         let mut env = AIEnv { ..env };
 
         let mut ctx = Ctx {
-            // Derived from the entity:
+            // Derived from the actor:
             me,
             known,
             pos: me.pos,

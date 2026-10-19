@@ -17,7 +17,7 @@ use super::game::State;
 // Types
 
 #[derive(Copy, Clone, Eq, PartialEq)]
-pub enum FT { Fire, Ice, Hit, Summon, Withdraw }
+pub enum FT { Fire, Ice, Hit, Recall, Summon }
 
 pub type CB = Box<dyn Fn(&mut State)>;
 
@@ -313,10 +313,10 @@ pub fn SummonEffect(source: Point, target: Point) -> Effect {
     effect.then(ExplosionEffect(target))
 }
 
-pub fn WithdrawEffect(source: Point, target: Point) -> Effect {
+pub fn RecallEffect(source: Point, target: Point) -> Effect {
     let mut implode  = ImplosionEffect(target);
     let frame = max(implode.frames.len() as i32 - 6, 0);
-    implode.add_event(Event::Other { frame, point: target, what: FT::Withdraw });
+    implode.add_event(Event::Other { frame, point: target, what: FT::Recall });
 
     let base = RayEffect(source, target, 4);
     let undo = base.frames.clone().into_iter().rev().collect();
@@ -334,7 +334,7 @@ pub fn WithdrawEffect(source: Point, target: Point) -> Effect {
 
 pub fn SwitchEffect(source: Point, target: Point) -> Effect {
     Effect::serial(vec![
-        WithdrawEffect(source, target),
+        RecallEffect(source, target),
         Effect::pause(4),
         SummonEffect(source, target),
     ])

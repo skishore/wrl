@@ -10,10 +10,10 @@ use crate::base::glyph::{Color, Glyph};
 use crate::base::point::{LOS, Matrix, Point};
 use crate::base::pathing::Neighborhood;
 
+use super::actor::{Actor, EID};
 use super::effect::{Frame, ParticleData, RenderData};
-use super::entity::{EID, Entity};
 use super::game::{WORLD_SIZE, Action, Board, Cell, show_item};
-use super::knowledge::EntityKnowledge;
+use super::knowledge::ActorKnowledge;
 use super::ui::UI;
 
 //////////////////////////////////////////////////////////////////////////////
@@ -64,7 +64,7 @@ pub struct DebugFile {}
 
 #[cfg(target_family = "wasm")]
 impl DebugFile {
-    pub fn record(&mut self, _: &Action, _: &Board, _: &Entity) {}
+    pub fn record(&mut self, _: &Action, _: &Board, _: &Actor) {}
     pub fn record_frame(&mut self, _: &Board, _: &Frame) {}
     pub fn record_neighborhood(&mut self, _: &Neighborhood) {}
     pub fn record_utility(&mut self, _: &[(i32, Point)]) {}
@@ -110,7 +110,7 @@ impl Default for DebugFile {
 
 #[cfg(not(target_family = "wasm"))]
 impl DebugFile {
-    pub fn record(&mut self, action: &Action, board: &Board, me: &Entity) {
+    pub fn record(&mut self, action: &Action, board: &Board, me: &Actor) {
         self.try_record(action, board, me).unwrap();
     }
 
@@ -126,7 +126,7 @@ impl DebugFile {
         self.detail.utilities = utilities.into()
     }
 
-    fn try_record(&mut self, action: &Action, board: &Board, me: &Entity) -> Result<()> {
+    fn try_record(&mut self, action: &Action, board: &Board, me: &Actor) -> Result<()> {
         self.record_tick(action, board, me)?;
 
         self.detail = Default::default();
@@ -148,7 +148,7 @@ impl DebugFile {
             let Some(eid) = cell.eid else { return vec![] };
 
             let s = Self::underlying_glyph(cell);
-            let t = Self::entity_glyph(&board.entities[eid]);
+            let t = Self::actor_glyph(&board.actors[eid]);
             vec![(source, s), (target, t)]
         };
         let render_particle = |p: Point, r: &RenderData| match r {
@@ -158,7 +158,7 @@ impl DebugFile {
             &RenderData::Flash(c) => {
                 let cell = board.get_cell(p);
                 let glyph = if let Some(eid) = cell.eid {
-                    Self::entity_glyph(&board.entities[eid])
+                    Self::actor_glyph(&board.actors[eid])
                 } else {
                     Self::underlying_glyph(cell)
                 };
@@ -183,7 +183,7 @@ impl DebugFile {
         self.file.flush()
     }
 
-    fn record_tick(&mut self, action: &Action, board: &Board, me: &Entity) -> Result<()> {
+    fn record_tick(&mut self, action: &Action, board: &Board, me: &Actor) -> Result<()> {
         // Dump binary data for all animations happening prior to this tick.
         if !self.detail.animation.is_empty() {
             let filename = format!("animation-{}.bin.gz", self.tick);
@@ -201,41 +201,41 @@ impl DebugFile {
         let filename = format!("tick-{}.bin.gz", self.tick);
         let mut file = self.logger.open_compressed(&filename);
 
-        // Dump binary data revealing all of the entities.
-        let entities: Vec<_> = board.entities.iter().collect();
-        Self::write_bin(&mut file, &(entities.len() as i32))?;
+        // Dump binary data revealing all of the actors.
+        let actors: Vec<_> = board.actors.iter().collect();
+        Self::write_bin(&mut file, &(actors.len() as i32))?;
 
-        for &(eid, entity) in &entities {
-            let Entity { cur_hp, max_hp, .. } = *entity;
+        for &(eid, actor) in &actors {
+            let Actor { cur_hp, max_hp, .. } = *actor;
             let hp_fraction = cur_hp as f64 / max(max_hp, 1) as f64;
-            let glyph = Self::entity_glyph(entity);
+            let glyph = Self::actor_glyph(actor);
 
             Self::write_str(&mut file, &format!("{}", show(eid)))?;
-            Self::write_str(&mut file, entity.species.name)?;
+            Self::write_str(&mut file, actor.species.name)?;
             Self::write_bin(&mut file, &hp_fraction)?;
-            Self::write_bin(&mut file, &entity.pos)?;
+            Self::write_bin(&mut file, &actor.pos)?;
             Self::write_bin(&mut file, &glyph)?;
         };
 
-        // Dump info about our view of other entities.
+        // Dump info about our view of other actors.
         let mut sightings = vec![];
         for other in &me.known.scents {
             let color = 0xff8000;
             let glyph = other.species.glyph.with_fg(Color::black()).with_bg(color);
             sightings.push((other.pos, glyph));
         }
-        for other in &me.known.sources {
+        for other in &me.known.noises {
             let color = {
-                let current = me.known.get(other.pos).source();
+                let current = me.known.get(other.pos).noise();
                 let moved = current.map(|x| x.uid) != Some(other.uid);
                 if moved { 0xff0000 } else { 0xffff00 }
             };
             let glyph = Glyph::wdfg('?', Color::black()).with_bg(color);
             sightings.push((other.pos, glyph));
         }
-        for other in &me.known.entities {
+        for other in &me.known.actors {
             let color = if other.visible() { 0x00ff00 } else {
-                let current = me.known.get(other.pos).entity();
+                let current = me.known.get(other.pos).actor();
                 let moved = current.map(|x| x.eid) != Some(other.eid);
                 if moved { 0xff0000 } else { 0xffff00 }
             };
@@ -321,14 +321,14 @@ impl DebugFile {
         f.write_all(b"\0")
     }
 
-    fn entity_glyph(entity: &Entity) -> Glyph {
-        let sneaking = entity.species.human() && entity.sneaking;
-        if sneaking { Glyph::wide('e') } else { entity.species.glyph }
+    fn actor_glyph(x: &Actor) -> Glyph {
+        let sneaking = x.species.human() && x.sneaking;
+        if sneaking { Glyph::wide('e') } else { x.species.glyph }
     }
 
-    fn knowledge_glyph(entity: &EntityKnowledge) -> Glyph {
-        let sneaking = entity.species.human() && entity.sneaking();
-        if sneaking { Glyph::wide('e') } else { entity.species.glyph }
+    fn knowledge_glyph(x: &ActorKnowledge) -> Glyph {
+        let sneaking = x.species.human() && x.sneaking();
+        if sneaking { Glyph::wide('e') } else { x.species.glyph }
     }
 
     fn underlying_glyph(cell: &Cell) -> Glyph {
