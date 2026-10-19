@@ -41,9 +41,7 @@ const UI_SHADOW: f64 = 0.40;
 const UI_SUNLIGHT: f64 = 0.80;
 const UI_EXTRA_LIGHT: f64 = 0.80;
 
-const UI_TARGET_SHADE: u8 = 192;
-const UI_TARGET_FOV_SHADE: u8 = 32;
-
+const UI_TARGET: i32 = 0xc0c0c0;
 const UI_LOG_MENU: i32 = 0x80c0ff;
 const UI_LOG_FAILURE: i32 = 0xff9090;
 const UI_LOG_SUCCESS: i32 = 0xc0ff80;
@@ -84,11 +82,11 @@ fn describe_noise(x: &NoiseKnowledge) -> &str {
     let Some(sound) = x.sound else { return "an unknown sound" };
     match sound {
         Sound::Attack              => "something attack!",
-        Sound::Call(Call::Command) => "someone shout!",
-        Sound::Call(Call::Help)    => "a call for help",
+        Sound::Call(Call::Command) => "a shout!",
+        Sound::Call(Call::Help)    => "a call for help!",
         Sound::Call(Call::Warning) => "a warning",
-        Sound::Move                => "something move",
-        Sound::Sniff               => "something sniff",
+        Sound::Move                => "movement",
+        Sound::Sniff               => "something hunt!",
     }
 }
 
@@ -1027,7 +1025,7 @@ impl UI {
         if self.focused.active &&
            let Some(&point) = focused_vision.first() &&
            !effect.map_or(false, |x| x.sources.contains(&point)) {
-            highlight(slice, point, Color::gray(UI_TARGET_SHADE));
+            highlight(slice, point, UI_TARGET.into());
             skip_first = true;
         }
 
@@ -1082,9 +1080,9 @@ impl UI {
             }
 
             // Use bright highlights for the source and target cells.
-            let shade = Color::gray(UI_TARGET_SHADE);
+            let shade = UI_TARGET;
             let color = if target.error.is_empty() { 0xffff00 } else { 0xff0000 };
-            highlight(slice, target.source, shade);
+            highlight(slice, target.source, shade.into());
             highlight(slice, target.target, color.into());
 
             // Draw an animated line from the source to the target.
@@ -1232,6 +1230,8 @@ impl UI {
                 glyph = x.species.glyph;
                 hp_color = Self::hp_color(x.hp);
                 hp_text = format!("{}%", max((100.0 * x.hp).floor() as i32, 1));
+            } else if let Trace::Noise(x) = rival {
+                glyph = Self::noise_glyph(x.freshness(&me.known));
             }
 
             let name = describe_trace(&rival);
@@ -1247,11 +1247,12 @@ impl UI {
                 None => self.focus == Some(rival.uid()),
             };
             if targeted {
-                let start = slice.get_cursor() - Point(0, 1);
-                let (fg, bg) = (Color::white(), Color::gray(UI_TARGET_FOV_SHADE));
                 for x in 0..UI_STATUS_SIZE {
-                    let p = start + Point(x, 0);
-                    slice.set(p, slice.get(p).with_fg(fg).with_bg(bg));
+                    let point = slice.get_cursor() + Delta(x, -1);
+                    let glyph = slice.get(point);
+                    let glyph = glyph.with_fg(glyph.fg().brighten(UI_FOV_BRIGHTEN));
+                    let glyph = glyph.with_bg(glyph.bg().brighten(UI_FOV_BRIGHTEN));
+                    slice.set(point, glyph);
                 }
             }
         }
