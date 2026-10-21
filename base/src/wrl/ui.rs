@@ -1148,7 +1148,7 @@ impl UI {
         slice.set_cursor(Point(2 * dx, dy));
         slice.set_fg(Some(callout.color));
         if let Some(c) = prefix { slice.write_chr(c); }
-        callout.text.chars().for_each(|x| { slice.write_chr(Glyph::bold(x)); });
+        slice.write_str(callout.text);
         if let Some(c) = suffix { slice.write_chr(c); }
         slice.set_fg(None);
     }
