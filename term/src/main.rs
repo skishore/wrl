@@ -112,7 +112,7 @@ impl Screen {
 
     fn clear_bold(&mut self) -> io::Result<()> {
         self.bold = false;
-        write!(self.output, "{}", style::Reset)
+        write!(self.output, "{}", style::NoBold)
     }
 
     fn set_foreground(&mut self, color: Color) -> io::Result<()> {
@@ -139,7 +139,7 @@ impl Screen {
         if bold {
             write!(self.output, "{}", style::Bold)
         } else {
-            write!(self.output, "{}", style::Reset)
+            write!(self.output, "{}", style::NoBold)
         }
     }
 
@@ -154,8 +154,7 @@ impl Screen {
     }
 
     fn write_status_message(&mut self, msg: &str) -> io::Result<()> {
-        self.clear_foreground()?;
-        self.clear_background()?;
+        self.reset_colors()?;
         let x = (self.extent.0 - msg.len() as i32) as u16;
         let y = self.extent.1 as u16;
         write!(self.output, "{}{}{}", Goto(x, y), clear::CurrentLine, msg)
