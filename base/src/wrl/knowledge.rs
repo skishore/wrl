@@ -437,11 +437,7 @@ impl Knowledge {
 
     pub fn update(&mut self, me: &Actor, board: &Board, vision: &Vision, rng: &mut RNG) {
         self.timer.update(board.time);
-
-        let (pos, time) = (me.pos, board.time);
-        let unlit = matches!(board.get_light(), Light::None);
-        let moves = me.species.moves;
-        self.moves = moves;
+        self.moves = me.species.moves;
 
         // Detect actors that were recently nearby by scent.
         self.populate_scents(me, board, rng);
@@ -472,11 +468,10 @@ impl Knowledge {
         }
 
         // Compute a sorted list of points we've seen and their visibility.
+        let pos = me.pos;
         let mut seen: Vec<_> = vision.get_points_seen().iter().map(
             |&x| (x, vision.get_visibility_at(x))).collect();
-        if !me.player {
-            seen.sort_by_key(|&(x, _)| (x - pos).len_l2_squared());
-        }
+        if !me.player { seen.sort_by_key(|&(x, _)| (x - pos).len_l2_squared()); }
 
         // Actors have exact knowledge about anything they can see.
         //
@@ -487,58 +482,8 @@ impl Knowledge {
         // self.cells. Because `seen` is sorted by distance, we iterate over
         // it in reverse order to get the desired ordering.
         for &(point, visibility) in seen.iter().rev() {
-            let cell = board.get_cell(point);
-            let Cell { eid, tile, .. } = *cell;
-
-            let light = board.is_cell_lit(point);
-            let nearby = (point - pos).len_l1() <= 1;
-            if unlit && !light && !nearby { continue; }
-
-            let visible = true;
-            let shade = unlit || cell.shadow > 0;
-            let is_shadow_cover = shade && !light;
-            let see_big_actors = nearby || !is_shadow_cover;
-            let see_all_actors = nearby || !(is_shadow_cover || tile.is_cover());
-
-            // Compute the cell's new flags.
-            let mut flags = CF::Empty;
-            if light { flags |= CF::Light; }
-            if shade { flags |= CF::Shade; }
-            if visible { flags |= CF::Visible; }
-            if see_all_actors { flags |= CF::SeeActorAt; }
-
-            // Check if we can see the actor at the given cell.
-            let actor = (|| {
-                if !see_big_actors { return None; }
-                let other = board.get_actor(eid?)?;
-                if !see_all_actors && other.hidden_by_cover() { return None; }
-                Some(self.observe_actor(me, other, Sense::Sight))
-            })();
-
-            // Update this point's cell, or create a new one.
-            let entry = self.pos_index.entry(point).or_default();
-            let handle = entry.cell.unwrap_or_else(
-                || self.cells.push_front(CellKnowledge::new(point)));
-            if entry.cell.is_some() { self.cells.move_to_front(handle); }
-            if entry.cell.is_none() { entry.cell = Some(handle); }
-
-            // Update basic information about the given cell.
-            let memory = &mut self.cells[handle];
-            memory.update(cell, flags, time, visibility);
-
-            // Clear the cell's trace if it's definitely unoccupied.
-            if see_all_actors && actor.is_none() { entry.trace = None; }
-
-            // Update the cell's pathfinding status.
-            entry.status = if !tile.can_move_to(moves) {
-                Status::Blocked
-            } else if entry.trace.is_some() {
-                Status::Occupied
-            } else {
-                Status::Free
-            };
+            self.observe_cell(me, board, point, visibility);
         }
-
         self.forget(me.player);
 
         debug_assert!(self.check_invariants());
@@ -551,6 +496,60 @@ impl Knowledge {
         let actor = self.actor_for_sighting(other, sense);
         self.update_actor(actor, |x| x.update(me, other, sense, time));
         actor
+    }
+
+    fn observe_cell(&mut self, me: &Actor, board: &Board, point: Point, visibility: i32) {
+        let cell = board.get_cell(point);
+        let Cell { eid, tile, .. } = *cell;
+
+        let light = board.is_cell_lit(point);
+        let unlit = matches!(board.get_light(), Light::None);
+        let nearby = (point - me.pos).len_l1() <= 1;
+        if unlit && !light && !nearby { return; }
+
+        let visible = true;
+        let shade = unlit || cell.shadow > 0;
+        let is_shadow_cover = shade && !light;
+        let see_big_actors = nearby || !is_shadow_cover;
+        let see_all_actors = nearby || !(is_shadow_cover || tile.is_cover());
+
+        // Compute the cell's new flags.
+        let mut flags = CF::Empty;
+        if light { flags |= CF::Light; }
+        if shade { flags |= CF::Shade; }
+        if visible { flags |= CF::Visible; }
+        if see_all_actors { flags |= CF::SeeActorAt; }
+
+        // Check if we can see the actor at the given cell.
+        let actor = (|| {
+            if !see_big_actors { return None; }
+            let other = board.get_actor(eid?)?;
+            if !see_all_actors && other.hidden_by_cover() { return None; }
+            Some(self.observe_actor(me, other, Sense::Sight))
+        })();
+
+        // Update this point's cell, or create a new one.
+        let entry = self.pos_index.entry(point).or_default();
+        let handle = entry.cell.unwrap_or_else(
+            || self.cells.push_front(CellKnowledge::new(point)));
+        if entry.cell.is_some() { self.cells.move_to_front(handle); }
+        if entry.cell.is_none() { entry.cell = Some(handle); }
+
+        // Update basic information about the given cell.
+        let memory = &mut self.cells[handle];
+        memory.update(cell, flags, self.timer.time, visibility);
+
+        // Clear the cell's trace if it's definitely unoccupied.
+        if see_all_actors && actor.is_none() { entry.trace = None; }
+
+        // Update the cell's pathfinding status.
+        entry.status = if !tile.can_move_to(self.moves) {
+            Status::Blocked
+        } else if entry.trace.is_some() {
+            Status::Occupied
+        } else {
+            Status::Free
+        };
     }
 
     fn populate_scents(&mut self, me: &Actor, board: &Board, rng: &mut RNG) {
