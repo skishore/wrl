@@ -74,7 +74,7 @@ pub const SUMMON_MOVES: TileFlags = TileFlags::CanFlyOver;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Input { Escape, BackTab, Char(char), Click(Point) }
 
-trait MemoryUpdate = Fn(&Actor, &Board, &mut Env);
+trait MemoryUpdate = FnOnce(&mut Knowledge, &Actor, &Board);
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -592,28 +592,25 @@ impl Board {
         EventSource(Some(eid), event)
     }
 
-    fn observe_event(&mut self, eid: EID, s: &Senses, e: &mut EventSource, env: &mut Env) {
+    fn observe_event(&mut self, eid: EID, senses: &Senses, event: &mut EventSource) {
         let Some(actor) = self.actors.get_mut(eid) else { return };
 
-        let (heard, seen) = (s.heard(), s.seen() && !actor.player);
+        let (heard, seen) = (senses.heard(), senses.seen() && !actor.player);
         if !heard && !seen { return; }
 
-        let EventSource(oid, event) = e;
+        let EventSource(oid, event) = event;
         event.sense = if seen { Sense::Sight } else { Sense::Sound };
 
-        self.update_memory(eid, env, |me, _, env| {
-            env.known.observe_event(me, *oid, event);
-        });
+        self.update_memory(eid, |known, me, _| known.observe_event(me, *oid, event));
     }
 
-    fn remove_known_actor(&mut self, eid: EID, oid: EID, env: &mut Env) {
+    fn remove_known_actor(&mut self, eid: EID, oid: EID) {
         // Quite wrong - need to treat the oid -> UID mapping as we do for
         // any other event, so that we:
         //   - Only clean up the ActorMemory if we've recently seen the actor;
         //   - But, we also clean up the NoiseMemory if we've only heard it
-        self.update_memory(eid, env, |_, board, env| {
-            env.known.remove_actor(oid, board.time);
-        });
+        let time = self.time;
+        self.update_memory(eid, |known, _, _| known.remove_actor(oid, time));
 
         let Some(actor) = self.actors.get_mut(eid) else { return };
         if let Some(Command::Attack(_, x)) = actor.command && x.eid == Some(oid) {
@@ -622,18 +619,16 @@ impl Board {
     }
 
     fn update_known(&mut self, eid: EID, env: &mut Env) {
-        self.update_memory(eid, env, |me, board, env| {
+        self.update_memory(eid, |known, me, board| {
             let vision = env.fov.compute(board, me);
-            env.known.update(me, board, vision, &mut env.rng);
+            known.update(me, board, vision, &mut env.rng);
         });
     }
 
-    fn update_memory(&mut self, eid: EID, env: &mut Env, cb: impl MemoryUpdate) {
+    fn update_memory(&mut self, eid: EID, cb: impl MemoryUpdate) {
         let Some(actor) = self.actors.get_mut(eid) else { return };
-
-        swap(&mut env.known, &mut actor.known);
-        cb(&self.actors[eid], self, env);
-        swap(&mut env.known, &mut self.actors[eid].known);
+        let known = unsafe { &mut *(actor.known.as_mut() as *mut Knowledge) };
+        cb(known, &self.actors[eid], self);
     }
 
     // Lighting:
@@ -785,7 +780,7 @@ fn shout(state: &mut State, eid: EID, shout: &str, suffix: &str) {
 
     // Deliver the CallEvent to each other actor that heard the shout.
     for s in &sightings {
-        board.observe_event(s.eid, &s.merged, event, &mut state.env);
+        board.observe_event(s.eid, &s.merged, event);
         if s.eid != state.player { continue; }
 
         let log = &mut state.env.ui.log;
@@ -838,7 +833,7 @@ fn hit_actor(state: &mut State, eid: EID, attack: &Attack, logged: bool, tid: EI
     }
 
     for s in &sightings {
-        if fainted { board.remove_known_actor(s.eid, tid, env); }
+        if fainted { board.remove_known_actor(s.eid, tid); }
         if s.eid != state.player || !s.source.seen() { continue; }
 
         let log = &mut env.ui.log;
@@ -1085,7 +1080,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let data = EventData::Sniff;
             let event = &mut board.create_event(eid, data, source);
             for s in &sightings {
-                board.observe_event(s.eid, &s.merged, event, &mut state.env);
+                board.observe_event(s.eid, &s.merged, event);
                 if s.eid != state.player { continue; }
 
                 let seen = s.source.seen();
@@ -1152,7 +1147,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let data = EventData::Call(CallEvent { call, species });
             let event = &mut board.create_event(eid, data, source);
             for s in &sightings {
-                board.observe_event(s.eid, &s.merged, event, &mut state.env);
+                board.observe_event(s.eid, &s.merged, event);
                 if s.eid != state.player { continue; }
 
                 let seen = s.source.seen();
@@ -1228,7 +1223,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let data = EventData::Move(MoveEvent { from: source });
             let event = &mut board.create_event(eid, data, target);
             for s in &sightings {
-                state.board.observe_event(s.eid, &s.merged, event, &mut state.env);
+                state.board.observe_event(s.eid, &s.merged, event);
                 if s.eid != state.player || allied { continue; }
 
                 let color = if s.merged.seen() { color } else { Color::white() };
@@ -1275,7 +1270,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             for s in &sightings {
                 let target = if s.target.seen() { tid } else { None };
                 event.1.data = EventData::Attack(AttackEvent { combat, target });
-                state.board.observe_event(s.eid, &s.source, event, &mut state.env);
+                state.board.observe_event(s.eid, &s.source, event);
                 if s.eid != state.player { continue; }
 
                 let actors = &state.board.actors;
