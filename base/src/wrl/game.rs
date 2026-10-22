@@ -74,6 +74,8 @@ pub const SUMMON_MOVES: TileFlags = TileFlags::CanFlyOver;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Input { Escape, BackTab, Char(char), Click(Point) }
 
+trait MemoryUpdate = Fn(&Actor, &Board, &mut Env);
+
 //////////////////////////////////////////////////////////////////////////////
 
 // Tile
@@ -596,36 +598,42 @@ impl Board {
         let (heard, seen) = (s.heard(), s.seen() && !actor.player);
         if !heard && !seen { return; }
 
-        let known = &mut env.known;
-        swap(known, &mut actor.known);
-
         let EventSource(oid, event) = e;
         event.sense = if seen { Sense::Sight } else { Sense::Sound };
-        known.observe_event(&self.actors[eid], *oid, event);
 
-        swap(known, &mut self.actors[eid].known);
+        self.update_memory(eid, env, |me, _, env| {
+            env.known.observe_event(me, *oid, event);
+        });
     }
 
-    fn remove_known_actor(&mut self, eid: EID, oid: EID) {
+    fn remove_known_actor(&mut self, eid: EID, oid: EID, env: &mut Env) {
+        // Quite wrong - need to treat the oid -> UID mapping as we do for
+        // any other event, so that we:
+        //   - Only clean up the ActorMemory if we've recently seen the actor;
+        //   - But, we also clean up the NoiseMemory if we've only heard it
+        self.update_memory(eid, env, |_, board, env| {
+            env.known.remove_actor(oid, board.time);
+        });
+
         let Some(actor) = self.actors.get_mut(eid) else { return };
-
-        actor.known.remove_actor(oid, self.time);
-
-        let command = &mut actor.command;
-        if let Some(Command::Attack(_, x)) = command && x.eid == Some(oid) { *command = None; }
+        if let Some(Command::Attack(_, x)) = actor.command && x.eid == Some(oid) {
+            actor.command = None;
+        }
     }
 
     fn update_known(&mut self, eid: EID, env: &mut Env) {
+        self.update_memory(eid, env, |me, board, env| {
+            let vision = env.fov.compute(board, me);
+            env.known.update(me, board, vision, &mut env.rng);
+        });
+    }
+
+    fn update_memory(&mut self, eid: EID, env: &mut Env, cb: impl MemoryUpdate) {
         let Some(actor) = self.actors.get_mut(eid) else { return };
 
-        let Env { known, fov, rng, .. } = env;
-        swap(known, &mut actor.known);
-
-        let me = &self.actors[eid];
-        let vision = fov.compute(self, me);
-        known.update(me, self, vision, rng);
-
-        swap(known, &mut self.actors[eid].known);
+        swap(&mut env.known, &mut actor.known);
+        cb(&self.actors[eid], self, env);
+        swap(&mut env.known, &mut self.actors[eid].known);
     }
 
     // Lighting:
@@ -830,7 +838,7 @@ fn hit_actor(state: &mut State, eid: EID, attack: &Attack, logged: bool, tid: EI
     }
 
     for s in &sightings {
-        if fainted { board.remove_known_actor(s.eid, tid); }
+        if fainted { board.remove_known_actor(s.eid, tid, env); }
         if s.eid != state.player || !s.source.seen() { continue; }
 
         let log = &mut env.ui.log;
