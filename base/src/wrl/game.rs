@@ -626,6 +626,7 @@ impl Board {
     }
 
     fn update_memory(&mut self, eid: EID, cb: impl MemoryUpdate) {
+        // SAFETY: Non-local! Knowledge updates don't access Actor.knowledge.
         let Some(actor) = self.actors.get_mut(eid) else { return };
         let known = unsafe { &mut *(actor.known.as_mut() as *mut Knowledge) };
         cb(known, &self.actors[eid], self);
