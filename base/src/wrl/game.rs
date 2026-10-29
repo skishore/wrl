@@ -227,9 +227,8 @@ impl FOV {
 
         let vision = self.select_vision(me);
 
-        let map = &board.map;
         let dir = if player { dirs::NONE } else { dir };
-        let opacity = |x| map.entry_ref(x).tile.opacity();
+        let opacity = |x| board.get_cell(x).tile.opacity();
         vision.check_point(&VisionArgs { pos, dir, opacity }, point)
     }
 
@@ -258,9 +257,8 @@ impl FOV {
         if asleep {
             vision.clear();
         } else {
-            let map = &board.map;
             let dir = if player { dirs::NONE } else { dir };
-            let opacity = |x| map.entry_ref(x).tile.opacity();
+            let opacity = |x| board.get_cell(x).tile.opacity();
             vision.compute(&VisionArgs { pos, dir, opacity });
         }
         vision
@@ -290,18 +288,20 @@ pub struct Board {
     _frame_mask: Vec<bool>,
 
     // Lighting:
-    light: Light,
-    lighting: Lighting,
-    shadow: Vec<Delta>,
+    _light: Light,
+    _lighting: Lighting,
+    _shadow: Vec<Delta>,
 }
 
 impl Board {
     fn new(size: Point, light: Light) -> Self {
-        let lighting = Lighting::new(size);
-        let shadow = match light {
+        let _light = light;
+        let _lighting = Lighting::new(size);
+        let _shadow = match _light {
             Light::Sun(x) => DeltaLOS(x).into_iter().skip(1).collect(),
             Light::None => vec![],
         };
+
         let cell = Cell::default();
         let time = Timedelta::from_seconds(365.75 * 86400.);
 
@@ -316,9 +316,9 @@ impl Board {
             _frame_mask: vec![],
 
             // Lighting:
-            light,
-            lighting,
-            shadow,
+            _light,
+            _lighting,
+            _shadow,
         };
         result.reset(Tile::get('.'));
         result
@@ -408,7 +408,7 @@ impl Board {
                 if prev == next { return; }
 
                 let radius = if active { next } else { prev };
-                self.lighting.set_light(x.point, radius);
+                self._lighting.set_light(x.point, radius);
             },
             &ParticleData::Shift(mut source) => {
                 let mut target = x.point;
@@ -436,7 +436,7 @@ impl Board {
 
     pub fn get_frame(&self) -> Option<&Frame> { self._effect.frames.first() }
 
-    pub fn get_light(&self) -> &Light { &self.light }
+    pub fn get_light(&self) -> &Light { &self._light }
 
     pub fn get_size(&self) -> Point { self.map.size() }
 
@@ -448,7 +448,7 @@ impl Board {
 
     pub fn get_tile(&self, p: Point) -> &'static Tile { self.get_cell(p).tile }
 
-    pub fn is_cell_lit(&self, p: Point) -> bool { self.lighting.get_light(p) > 0 }
+    pub fn is_cell_lit(&self, p: Point) -> bool { self._lighting.get_light(p) > 0 }
 
     // Item setters:
 
@@ -462,7 +462,7 @@ impl Board {
         let Some(actor) = self.actors.get_mut(eid) else { return };
 
         actor.known.update_items(pos, &item);
-        actor.ai.notify_item(pos, &item);
+        actor.ai.observe_item_drop(pos, &item);
     }
 
     fn remove_item(&mut self, pos: Point, item: Item) -> bool {
@@ -482,13 +482,13 @@ impl Board {
         assert!(prev.is_none());
 
         self.actors.add(args, &mut env.rng);
-        self.update_known(eid, env);
+        self.observe_visible_cells(eid, env);
 
         let actor = &mut self.actors[eid];
         actor.known.mark_turn_boundary(actor.speed, self.time);
 
         let light = args.species.light.radius;
-        self.lighting.set_light(pos, light);
+        self._lighting.set_light(pos, light);
     }
 
     fn move_actor(&mut self, eid: EID, target: Point) {
@@ -501,8 +501,8 @@ impl Board {
         assert!(old == Some(eid));
         assert!(new.is_none());
 
-        self.lighting.set_light(source, -1);
-        self.lighting.set_light(target, light);
+        self._lighting.set_light(source, -1);
+        self._lighting.set_light(target, light);
     }
 
     fn swap_actors(&mut self, source: Point, target: Point) {
@@ -522,8 +522,8 @@ impl Board {
         self.map.entry_mut(source).unwrap().eid = Some(new);
         self.map.entry_mut(target).unwrap().eid = Some(old);
 
-        self.lighting.set_light(source, new_light);
-        self.lighting.set_light(target, old_light);
+        self._lighting.set_light(source, new_light);
+        self._lighting.set_light(target, old_light);
     }
 
     fn remove_actor(&mut self, eid: EID) {
@@ -536,7 +536,7 @@ impl Board {
         if player { return; }
 
         // Remove the actor's light source.
-        self.lighting.set_light(pos, -1);
+        self._lighting.set_light(pos, -1);
 
         // Remove the actor from the spatial map.
         let existing = self.map.entry_mut(pos).unwrap().eid.take();
@@ -564,7 +564,7 @@ impl Board {
 
     fn reset(&mut self, tile: &'static Tile) {
         self.map.fill(Cell { tile, ..Default::default() });
-        self.update_edge_shadows();
+        self._update_edge_shadows();
         self.active_actor = None;
         self.actors.clear();
     }
@@ -579,18 +579,11 @@ impl Board {
 
         cell.tile = tile;
 
-        self.update_shadow(point, new_shadow - old_shadow);
-        self.lighting.set_opacity(point, tile.opacity());
+        self._update_shadow(point, new_shadow - old_shadow);
+        self._lighting.set_opacity(point, tile.opacity());
     }
 
     // Knowledge:
-
-    fn create_event(&self, eid: EID, data: EventData, pos: Point) -> EventSource {
-        let uid = UID(NonZeroU64::new(1).unwrap());
-        let loc = Location { pos, time: self.time };
-        let event = Event { uid, old: None, loc, data, sense: Sense::Sight };
-        EventSource(Some(eid), event)
-    }
 
     fn observe_event(&mut self, eid: EID, senses: &Senses, event: &mut EventSource) {
         let Some(actor) = self.actors.get_mut(eid) else { return };
@@ -601,16 +594,16 @@ impl Board {
         let EventSource(oid, event) = event;
         event.sense = if seen { Sense::Sight } else { Sense::Sound };
 
-        self.update_memory(eid, |known, me, _| known.observe_event(me, *oid, event));
+        self._update_memory(eid, |known, me, _| known.observe_event(me, *oid, event));
     }
 
-    fn remove_known_actor(&mut self, eid: EID, oid: EID) {
+    fn observe_knockout(&mut self, eid: EID, oid: EID) {
         // Quite wrong - need to treat the oid -> UID mapping as we do for
         // any other event, so that we:
         //   - Only clean up the ActorMemory if we've recently seen the actor;
         //   - But, we also clean up the NoiseMemory if we've only heard it
         let time = self.time;
-        self.update_memory(eid, |known, _, _| known.remove_actor(oid, time));
+        self._update_memory(eid, |known, _, _| known.remove_actor(oid, time));
 
         let Some(actor) = self.actors.get_mut(eid) else { return };
         if let Some(Command::Attack(_, x)) = actor.command && x.eid == Some(oid) {
@@ -618,14 +611,14 @@ impl Board {
         }
     }
 
-    fn update_known(&mut self, eid: EID, env: &mut Env) {
-        self.update_memory(eid, |known, me, board| {
+    fn observe_visible_cells(&mut self, eid: EID, env: &mut Env) {
+        self._update_memory(eid, |known, me, board| {
             let vision = env.fov.compute(board, me);
             known.update(me, board, vision, &mut env.rng);
         });
     }
 
-    fn update_memory(&mut self, eid: EID, cb: impl MemoryUpdate) {
+    fn _update_memory(&mut self, eid: EID, cb: impl MemoryUpdate) {
         // SAFETY: Non-local! Knowledge updates don't access Actor.knowledge.
         let Some(actor) = self.actors.get_mut(eid) else { return };
         let known = unsafe { &mut *(actor.known.as_mut() as *mut Knowledge) };
@@ -634,27 +627,27 @@ impl Board {
 
     // Lighting:
 
-    fn update_shadow(&mut self, point: Point, delta: i32) {
+    fn _update_shadow(&mut self, point: Point, delta: i32) {
         if delta == 0 { return; }
-        for &x in &self.shadow {
+        for &x in &self._shadow {
             let Some(cell) = self.map.entry_mut(point + x) else { continue; };
             cell.shadow += delta;
             assert!(cell.shadow >= 0);
         }
     }
 
-    fn update_edge_shadows(&mut self) {
+    fn _update_edge_shadows(&mut self) {
         let delta = if self.map.default().tile.casts_shadow() { 1 } else { 0 };
-        if delta == 0 || self.shadow.is_empty() { return; }
+        if delta == 0 || self._shadow.is_empty() { return; }
 
         let Point(sx, sy) = self.map.size();
         for x in -1..=sx {
-            self.update_shadow(Point(x, -1), delta);
-            self.update_shadow(Point(x, sy), delta);
+            self._update_shadow(Point(x, -1), delta);
+            self._update_shadow(Point(x, sy), delta);
         }
         for y in 0..sy {
-            self.update_shadow(Point(-1, y), delta);
-            self.update_shadow(Point(sx, y), delta);
+            self._update_shadow(Point(-1, y), delta);
+            self._update_shadow(Point(sx, y), delta);
         }
     }
 }
@@ -713,7 +706,14 @@ impl Noise {
     }
 }
 
-fn detect(board: &Board, noise: &Noise, env: &mut Env) -> SenseMap {
+fn create_event(board: &Board, eid: EID, point: Point, data: EventData) -> EventSource {
+    let uid = UID(NonZeroU64::new(1).unwrap());
+    let loc = Location { pos: point, time: board.time };
+    let event = Event { uid, old: None, loc, data, sense: Sense::Sight };
+    EventSource(Some(eid), event)
+}
+
+fn detect_noise(board: &Board, noise: &Noise, fov: &mut FOV) -> SenseMap {
     let Noise { cause, check, point, volume } = *noise;
     let mut result = SenseMap::default();
 
@@ -724,9 +724,9 @@ fn detect(board: &Board, noise: &Noise, env: &mut Env) -> SenseMap {
         if me.asleep && volume.radius == 1 && point != me.pos { continue; }
 
         let seen = if let Some(other) = other {
-            env.fov.can_see_actor(board, me, other)
+            fov.can_see_actor(board, me, other)
         } else {
-            env.fov.can_see(board, me, point)
+            fov.can_see(board, me, point)
         };
         let heard = volume.contains(point - me.pos);
         if !seen && !heard { continue; }
@@ -753,8 +753,8 @@ fn merge_views(board: &Board, saw_source: &SenseMap, saw_target: &SenseMap) -> V
     result
 }
 
-fn get_sightings(board: &Board, noise: &Noise, env: &mut Env) -> Vec<Sighting> {
-    let seen = detect(board, noise, env);
+fn get_sightings(board: &Board, noise: &Noise, fov: &mut FOV) -> Vec<Sighting> {
+    let seen = detect_noise(board, noise, fov);
     merge_views(board, &seen, &Default::default())
 }
 
@@ -766,7 +766,7 @@ fn shout(state: &mut State, eid: EID, shout: &str, suffix: &str) {
     let board = &mut state.board;
     let Actor { pos: source, player, species, .. } = board.actors[eid];
     let noise = Noise::from_eid(eid, source, CALL_VOLUME);
-    let sightings = get_sightings(board, &noise, &mut state.env);
+    let sightings = get_sightings(board, &noise, &mut state.env.fov);
 
     let log = &mut state.env.ui.log;
     if player && suffix.is_empty() {
@@ -777,7 +777,7 @@ fn shout(state: &mut State, eid: EID, shout: &str, suffix: &str) {
 
     // Create a call event that carries species info.
     let data = EventData::Call(CallEvent { call: Call::Command, species });
-    let event = &mut board.create_event(eid, data, source);
+    let event = &mut create_event(board, eid, source, data);
 
     // Deliver the CallEvent to each other actor that heard the shout.
     for s in &sightings {
@@ -819,7 +819,7 @@ fn hit_actor(state: &mut State, eid: EID, attack: &Attack, logged: bool, tid: EI
     let fainted = target.cur_hp == 0;
 
     let noise = Noise::from_actor(target, ATTACK_VOLUME);
-    let sightings = get_sightings(board, &noise, env);
+    let sightings = get_sightings(board, &noise, &mut env.fov);
 
     if fainted {
         board.remove_actor(tid);
@@ -834,7 +834,7 @@ fn hit_actor(state: &mut State, eid: EID, attack: &Attack, logged: bool, tid: EI
     }
 
     for s in &sightings {
-        if fainted { board.remove_known_actor(s.eid, tid); }
+        if fainted { board.observe_knockout(s.eid, tid); }
         if s.eid != state.player || !s.source.seen() { continue; }
 
         let log = &mut env.ui.log;
@@ -1023,14 +1023,14 @@ fn can_summon(board: &Board, me: &Actor, target: Point) -> bool {
 
 fn plan(state: &mut State, eid: EID, leader: Option<EID>) -> Action {
     let env = &mut state.env;
-    state.board.update_known(eid, env);
-    if let Some(x) = leader { state.board.update_known(x, env); }
+    state.board.observe_visible_cells(eid, env);
+    if let Some(x) = leader { state.board.observe_visible_cells(x, env); }
 
     let player = eid == state.player;
     if player { return replace(&mut state.input, Action::WaitForInput); }
 
     let State { board, env, .. } = state;
-    let debug = env.debug.as_deref_mut();
+    let debug = state.debug.as_deref_mut();
     let vision = &mut env.fov.npc_vision;
     let actor = &mut board.actors[eid];
     let ai = &mut env.ai;
@@ -1075,11 +1075,11 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
         Action::SniffAround => {
             let noise = Noise::from_actor(me, SNIFF_VOLUME);
             let board = &mut state.board;
-            let sightings = get_sightings(board, &noise, &mut state.env);
+            let sightings = get_sightings(board, &noise, &mut state.env.fov);
 
             // Deliver a SniffEvent to each other actor that heard the sniff.
             let data = EventData::Sniff;
-            let event = &mut board.create_event(eid, data, source);
+            let event = &mut create_event(board, eid, source, data);
             for s in &sightings {
                 board.observe_event(s.eid, &s.merged, event);
                 if s.eid != state.player { continue; }
@@ -1134,7 +1134,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let species = me.species;
             let noise = Noise::from_actor(me, CALL_VOLUME);
             let board = &mut state.board;
-            let sightings = get_sightings(board, &noise, &mut state.env);
+            let sightings = get_sightings(board, &noise, &mut state.env.fov);
 
             // The callout text depends on the call type.
             let color = 0xff8000;
@@ -1146,7 +1146,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
             // Deliver a CallEvent to each other actor that heard the call.
             let data = EventData::Call(CallEvent { call, species });
-            let event = &mut board.create_event(eid, data, source);
+            let event = &mut create_event(board, eid, source, data);
             for s in &sightings {
                 board.observe_event(s.eid, &s.merged, event);
                 if s.eid != state.player { continue; }
@@ -1208,7 +1208,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
             let volume = if noisy { MOVE_VOLUME } else { SNEAK_VOLUME };
             let noise = Noise::from_eid(eid, source, volume);
-            let saw_source = detect(board, &noise, &mut state.env);
+            let saw_source = detect_noise(board, &noise, &mut state.env.fov);
 
             if swap {
                 board.swap_actors(source, target);
@@ -1217,12 +1217,12 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             }
 
             let noise = Noise::from_eid(eid, target, volume);
-            let saw_target = detect(board, &noise, &mut state.env);
+            let saw_target = detect_noise(board, &noise, &mut state.env.fov);
             let sightings = merge_views(board, &saw_source, &saw_target);
 
             // Deliver a MoveEvent to each other actor that saw the move.
             let data = EventData::Move(MoveEvent { from: source });
-            let event = &mut board.create_event(eid, data, target);
+            let event = &mut create_event(board, eid, target, data);
             for s in &sightings {
                 state.board.observe_event(s.eid, &s.merged, event);
                 if s.eid != state.player || allied { continue; }
@@ -1247,7 +1247,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
             let volume = ATTACK_VOLUME;
             let noise = Noise::from_actor(me, volume);
-            let saw_source = detect(board, &noise, &mut state.env);
+            let saw_source = detect_noise(board, &noise, &mut state.env.fov);
 
             let dir = target - source;
             let tid = board.get_cell(target).eid;
@@ -1255,7 +1255,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             me.face_direction(dir);
 
             let noise = Noise::for_target(me, target, volume, tid);
-            let saw_target = detect(board, &noise, &mut state.env);
+            let saw_target = detect_noise(board, &noise, &mut state.env.fov);
             let sightings = merge_views(board, &saw_source, &saw_target);
 
             // Deliver an AttackEvent to each other actor that heard the attack.
@@ -1266,7 +1266,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             // completely ignore those events.
             let combat = tid.is_some();
             let data = EventData::Attack(AttackEvent { combat, target: None });
-            let event = &mut board.create_event(eid, data, source);
+            let event = &mut create_event(board, eid, source, data);
             let mut logged = false;
             for s in &sightings {
                 let target = if s.target.seen() { tid } else { None };
@@ -1486,9 +1486,9 @@ fn process_input(state: &mut State, input: Input) {
 
 fn update_player_knowledge(state: &mut State) {
     let eid = state.player;
-    let State { board, env, .. } = state;
+    let State { board, known, env, .. } = state;
 
-    board.update_known(eid, env);
+    board.observe_visible_cells(eid, env);
     let player = &board.actors[eid];
     env.ui.update_focus(player);
     env.ui.update_moves(player);
@@ -1497,9 +1497,9 @@ fn update_player_knowledge(state: &mut State) {
 
     board.redo_effect_updates();
 
-    swap(&mut env.known, &mut board.actors[eid].known);
-    board.update_known(eid, env);
-    swap(&mut env.known, &mut board.actors[eid].known);
+    swap(known, &mut board.actors[eid].known);
+    board.observe_visible_cells(eid, env);
+    swap(known, &mut board.actors[eid].known);
 
     board.undo_effect_updates();
 }
@@ -1597,13 +1597,7 @@ fn update_state(state: &mut State) {
 pub enum GameMode { Gym, Play, Sim, Test }
 
 pub struct Env {
-    // Used for in-place Actor state updates:
     ai: Box<AIState>,
-    debug: Option<Box<DebugFile>>,
-    known: Box<Knowledge>,
-    mode: GameMode,
-
-    // Other update helpers:
     fov: FOV,
     rng: RNG,
     ui: UI,
@@ -1615,6 +1609,13 @@ pub struct State {
     inputs: Vec<Input>,
     player: EID,
     env: Env,
+
+    // Used to render animations without affecting the player's Knowledge.
+    known: Box<Knowledge>,
+
+    // Auxiliary state. `debug` is an optional log enabled based on `mode`.
+    debug: Option<Box<DebugFile>>,
+    mode: GameMode,
 }
 
 impl Default for State {
@@ -1648,15 +1649,9 @@ impl State {
             if board.get_status(pos, species.moves) == Status::Free { break; }
         }
 
-        let mut env = Env {
-            ai: Box::new(AIState::new(&mut rng)),
-            debug: if debug { Some(Default::default()) } else { None },
-            known: Default::default(),
-            mode,
-            fov: Default::default(),
-            ui: Default::default(),
-            rng,
-        };
+        let (fov, ui) = Default::default();
+        let ai = Box::new(AIState::new(&mut rng));
+        let mut env = Env { ai, fov, rng, ui };
 
         let eid = board.actors.allocate_eid();
         let (name, leader, player) = (Some("skishore".into()), None, true);
@@ -1716,7 +1711,7 @@ impl State {
             let args = ActorArgs { eid, name, player, leader, species, pos };
             board.add_actor(&args, &mut env);
         }
-        board.update_known(player, &mut env);
+        board.observe_visible_cells(player, &mut env);
 
         let ui = &mut env.ui;
         let inputs = Default::default();
@@ -1727,7 +1722,9 @@ impl State {
         }
         ui.log.log("Welcome to WildsRL! Use the numpad or vikeys (h/j/k/l/y/u/b/n) to move.");
 
-        Self { board, input, inputs, player, env }
+        let known = Default::default();
+        let debug = if debug { Some(Default::default()) } else { None };
+        Self { board, input, inputs, player, env, known, debug, mode }
     }
 
     pub fn add_input(&mut self, mut input: Input) {
@@ -1743,7 +1740,7 @@ impl State {
     pub fn render(&self, buffer: &mut Buffer) {
         let actor = self.get_player();
         let effect = self.board.get_frame().map(|frame| {
-            let known = &*self.env.known;
+            let known = &*self.known;
             let mask = &self.board._frame_mask;
 
             let mut sources = HashSet::default();
@@ -1769,13 +1766,13 @@ impl State {
     fn record_action(&mut self, action: &Action, eid: EID) {
         if matches!(action, Action::WaitForInput) { return; }
 
-        if self.env.mode == GameMode::Sim && eid != self.player {
+        if self.mode == GameMode::Sim && eid != self.player {
             let pos = self.board.actors[eid].pos;
             let eid = unsafe { std::mem::transmute::<EID, u64>(eid) };
             println!("  EID {:2} @ {:>2?}: {:?}", eid, pos, action);
         }
 
-        let Some(debug) = &mut self.env.debug else { return };
+        let Some(debug) = &mut self.debug else { return };
 
         let board = &self.board;
         let actor = &board.actors[eid];
@@ -1783,7 +1780,7 @@ impl State {
     }
 
     fn record_remove(&mut self, eid: EID, pos: Point, species: &Species) {
-        if self.env.mode == GameMode::Sim && eid != self.player {
+        if self.mode == GameMode::Sim && eid != self.player {
             let eid = unsafe { std::mem::transmute::<EID, u64>(eid) };
             println!("  EID {:2}: {} @ {:>2?}: removed!", eid, species.name, pos);
         }
@@ -1821,7 +1818,7 @@ impl State {
         let frame = board.pop_frame().unwrap();
 
         board.time = board.time.bump();
-        self.env.debug.as_mut().map(|x| x.record_frame(board, &frame));
+        self.debug.as_mut().map(|x| x.record_frame(board, &frame));
         self._execute_effect_callbacks()
     }
 

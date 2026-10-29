@@ -2506,7 +2506,7 @@ impl AIState {
         debug.lines
     }
 
-    pub fn notify_item(&mut self, pos: Point, item: &Item) {
+    pub fn observe_item_drop(&mut self, pos: Point, item: &Item) {
         let map = &mut self.blackboard.last_seen;
         if item == &Item::Berry { map.entry(PathKind::Berry).or_insert(pos); }
         if item == &Item::Corpse { map.entry(PathKind::Meat).or_insert(pos); }
