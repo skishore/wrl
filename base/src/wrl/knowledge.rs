@@ -718,7 +718,6 @@ impl Knowledge {
             while let Some(x) = self.cells.back() && !x.visible() {
                 self.forget_last_cell();
             }
-            self.events.clear();
             return;
         }
 
