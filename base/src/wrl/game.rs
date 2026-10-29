@@ -619,10 +619,17 @@ impl Board {
     }
 
     fn _update_memory(&mut self, eid: EID, cb: impl MemoryUpdate) {
-        // SAFETY: Non-local! Knowledge updates don't access Actor.knowledge.
         let Some(actor) = self.actors.get_mut(eid) else { return };
+
+        // SAFETY: Non-local! Memory updates don't access AIState or Memory.
+        let ai = unsafe { &mut *(actor.ai.as_mut() as *mut AIState) };
         let known = unsafe { &mut *(actor.known.as_mut() as *mut Knowledge) };
-        cb(known, &self.actors[eid], self);
+
+        let actor = &self.actors[eid];
+        cb(known, actor, self);
+
+        let events = std::mem::take(&mut known.events);
+        for event in &events { ai.observe_event(actor, event); }
     }
 
     // Lighting:
@@ -1021,6 +1028,21 @@ fn can_summon(board: &Board, me: &Actor, target: Point) -> bool {
     can_attack(board, me, target, range)
 }
 
+fn apply_update(state: &mut State, eid: EID, update: Update) {
+    let me = &mut state.board.actors[eid];
+    match update {
+        Update::TargetSeen => {
+            if let Some(Command::Attack(_, x)) = &mut me.command { x.seen = true; }
+        }
+        Update::CommandFailure if me.leader == Some(state.player) => {
+            let message = format!("{} gave up on your command.", me.upper());
+            state.env.ui.log.log_failure(message);
+            me.command = None;
+        }
+        Update::CommandFailure | Update::CommandSuccess => me.command = None,
+    }
+}
+
 fn plan(state: &mut State, eid: EID, leader: Option<EID>) -> Action {
     let env = &mut state.env;
     state.board.observe_visible_cells(eid, env);
@@ -1031,34 +1053,19 @@ fn plan(state: &mut State, eid: EID, leader: Option<EID>) -> Action {
 
     let State { board, env, .. } = state;
     let debug = state.debug.as_deref_mut();
-    let vision = &mut env.fov.npc_vision;
-    let actor = &mut board.actors[eid];
-    let ai = &mut env.ai;
 
-    swap(ai, &mut actor.ai);
+    // SAFETY: Non-local! AIState updates don't access the Actor's AIState.
+    let actor = &mut board.actors[eid];
+    let ai = unsafe { &mut *(actor.ai.as_mut() as *mut AIState) };
 
     let actor = &board.actors[eid];
     let leader = leader.map(|x| &board.actors[x]);
-    let env = AIEnv { leader, debug, fov: vision, rng: &mut env.rng };
-    let plan = ai.plan(actor, env);
 
-    let actor = &mut board.actors[eid];
-    swap(ai, &mut actor.ai);
+    let rng = &mut env.rng;
+    let fov = env.fov.select_vision(actor);
+    let plan = ai.plan(actor, AIEnv { leader, debug, fov, rng });
 
-    actor.known.events.clear();
-
-    plan.update.into_iter().for_each(|x| match x {
-        Update::CommandFailure | Update::CommandSuccess => {
-            if x == Update::CommandFailure && actor.leader == Some(state.player) {
-                let message = format!("{} gave up on your command.", actor.upper());
-                state.env.ui.log.log_failure(message);
-            }
-            actor.command = None;
-        }
-        Update::TargetSeen => {
-            if let Some(Command::Attack(_, x)) = &mut actor.command { x.seen = true; }
-        }
-    });
+    plan.update.into_iter().for_each(|x| apply_update(state, eid, x));
 
     plan.action
 }
@@ -1597,7 +1604,6 @@ fn update_state(state: &mut State) {
 pub enum GameMode { Gym, Play, Sim, Test }
 
 pub struct Env {
-    ai: Box<AIState>,
     fov: FOV,
     rng: RNG,
     ui: UI,
@@ -1649,9 +1655,9 @@ impl State {
             if board.get_status(pos, species.moves) == Status::Free { break; }
         }
 
+        AIState::new(&mut rng); // just to advance the RNG...
         let (fov, ui) = Default::default();
-        let ai = Box::new(AIState::new(&mut rng));
-        let mut env = Env { ai, fov, rng, ui };
+        let mut env = Env { fov, rng, ui };
 
         let eid = board.actors.allocate_eid();
         let (name, leader, player) = (Some("skishore".into()), None, true);

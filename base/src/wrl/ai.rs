@@ -22,7 +22,7 @@ use super::actor::{Actor, Command};
 use super::bhv::{Bhv, BhvExt, Result};
 use super::debug::{DebugFile, DebugLine, DebugLog};
 use super::dex::{Attack, Range, Species};
-use super::event::{Call, Location, Sense};
+use super::event::{Call, Event, Location, Sense};
 use super::game::{Action, Item, TileFlags, move_ready};
 use super::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_};
 use super::game::{CALL_VOLUME, FOLLOW_RANGE, SUMMON_MOVES, SUMMON_RANGE};
@@ -2504,6 +2504,10 @@ impl AIState {
         debug.newline();
         self.blackboard.debug(&mut debug, known);
         debug.lines
+    }
+
+    pub fn observe_event(&mut self, me: &Actor, event: &Event) {
+        self.blackboard.threats.observe_event(me, event);
     }
 
     pub fn observe_item_drop(&mut self, pos: Point, item: &Item) {

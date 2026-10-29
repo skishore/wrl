@@ -397,20 +397,19 @@ impl ThreatState {
         self.last_call = time;
     }
 
-    pub fn update(&mut self, me: &Actor) {
-        let time = me.known.time();
+    pub fn observe_event(&mut self, me: &Actor, event: &Event) {
+        let Some(threat) = self.get_by_event(me, event) else { return };
 
-        for event in &me.known.events {
-            let Some(threat) = self.get_by_event(me, event) else { continue };
+        threat.update_for_event(me, event);
+        if threat.certain() && threat.hostile() { self.forget_tid(TID::CID); }
 
-            threat.update_for_event(me, event);
-            if threat.certain() && threat.hostile() { self.forget_tid(TID::CID); }
-
-            if let EventData::Call(x) = &event.data && Self::friendly_call_for_help(me, x) {
-                self.on_call_for_help(event.pos, event.time);
-                self.guess_threat_location(me, event);
-            }
+        if let EventData::Call(x) = &event.data && Self::friendly_call_for_help(me, x) {
+            self.on_call_for_help(event.pos, event.time);
+            self.guess_threat_location(me, event);
         }
+    }
+
+    pub fn update(&mut self, me: &Actor) {
         for other in &me.known.actors {
             if !other.sensed() { break; }
             let Some(threat) = self.get_by_actor(me, other) else { continue };
@@ -424,6 +423,7 @@ impl ThreatState {
         self.hostile.clear();
         self.unknown.clear();
 
+        let time = me.known.time();
         let decay = TimeDecay::new(me, ACTIVE_THREAT_TURNS);
         let call_limit = me.known.time_at_turn(CALL_LIMIT_TURNS);
         let call_retry = me.known.time_at_turn(CALL_RETRY_TURNS);
