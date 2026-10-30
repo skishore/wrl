@@ -479,14 +479,14 @@ impl Board {
         let prev = cell.eid.replace(eid);
         assert!(prev.is_none());
 
+        let light = args.species.light.radius;
+        self._lighting.set_light(pos, light);
+
         self.actors.add(args, &mut env.rng);
         self.observe_visible_cells(eid, env);
 
         let actor = &mut self.actors[eid];
         actor.known.mark_turn_boundary(actor.speed, self.time);
-
-        let light = args.species.light.radius;
-        self._lighting.set_light(pos, light);
     }
 
     fn move_actor(&mut self, eid: EID, target: Point) {
@@ -815,7 +815,7 @@ fn hit_tile(state: &mut State, eid: EID, target: Point) {
     }
 }
 
-fn hit_actor(state: &mut State, eid: EID, attack: &Attack, logged: bool, tid: EID) {
+fn hit_actor(state: &mut State, eid: EID, tid: EID, attack: &Attack, logged: bool) {
     let State { board, env, .. } = state;
     let Some(target) = board.actors.get_mut(tid) else { return; };
 
@@ -832,11 +832,6 @@ fn hit_actor(state: &mut State, eid: EID, attack: &Attack, logged: bool, tid: EI
 
     let noise = Noise::from_actor(target, ATTACK_VOLUME);
     let sightings = get_sightings(board, &noise, &mut env.fov);
-
-    if fainted {
-        board.remove_actor(tid);
-        board.add_item(Some(eid), pos, Item::Corpse);
-    }
 
     if tid == state.player {
         let log = &mut env.ui.log;
@@ -855,7 +850,11 @@ fn hit_actor(state: &mut State, eid: EID, attack: &Attack, logged: bool, tid: EI
         if fainted { log.log_append(format!("{} fainted!", upper)); }
     }
 
-    if fainted { state.record_remove(tid, pos, species); }
+    if fainted {
+        board.remove_actor(tid);
+        board.add_item(Some(eid), pos, Item::Corpse);
+        state.record_remove(tid, pos, species);
+    }
 }
 
 fn shout(state: &mut State, eid: EID, shout: &str, suffix: &str) {
@@ -1145,7 +1144,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let (text, prefix, suffix, wait) = match call {
                 Call::Command => ("*shout*", "shout", " a command!", false),
                 Call::Help    => ("*chirp*", "call", " for help!", true),
-                Call::Warning => ("*grrr*", "growl", "...", false),
+                Call::Warning => ("*grr*", "growl", "...", false),
             };
 
             // Deliver a CallEvent to each other actor that heard the call.
@@ -1301,7 +1300,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
                 // TODO: When we animate the HP bar, execute hit_actor now
                 // and only defer remove_actor to the post-damage callback.
-                let cb: CB = Box::new(move |x| { hit_actor(x, eid, attack, logged, tid); });
+                let cb: CB = Box::new(move |x| { hit_actor(x, eid, tid, attack, logged); });
                 state.add_effect(apply_damage(target, cb));
             });
 
