@@ -15,7 +15,7 @@ use super::dex::Attack;
 use super::effect::{Frame, ParticleData, RenderData};
 use super::event::{Call, Location, Sound, UID};
 use super::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_, SUMMON_MOVES, SUMMON_RANGE};
-use super::game::{Action, Input, Tile, TileFlags, show_item};
+use super::game::{Action, Input, Tile, TileFlags};
 use super::knowledge::{ActorKnowledge, Knowledge, NoiseKnowledge, PointLookup, Trace};
 
 //////////////////////////////////////////////////////////////////////////////
@@ -1627,7 +1627,7 @@ impl UI {
         let glyph = if let Some(x) = actor && x.visible() {
             Self::combined_glyph(x, tile)
         } else if let Some(x) = cell.items().last() {
-            show_item(x)
+            x.glyph()
         } else {
             tile.glyph
         };

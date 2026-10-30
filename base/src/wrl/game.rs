@@ -29,7 +29,7 @@ use super::ui::UI;
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Constants
+// Constants:
 
 pub const MOVE_TIMER: i32 = 480;
 pub const TURN_TIMER: i32 = 120;
@@ -74,11 +74,31 @@ pub const SUMMON_MOVES: TileFlags = TileFlags::CanFlyOver;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Input { Escape, BackTab, Char(char), Click(Point) }
 
+pub enum Light { None, Sun(Delta) }
+
+enum Weather { None, Rain(Delta, usize) }
+
 trait MemoryUpdate = FnOnce(&mut Knowledge, &Actor, &Board);
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Tile
+// Item:
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Item { Berry, Corpse }
+
+impl Item {
+    pub fn glyph(&self) -> Glyph {
+        match self {
+            Item::Berry  => Glyph::wdfg('o', 0xc08000),
+            Item::Corpse => Glyph::wdfg('%', 0xffffff),
+        }
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// Tile:
 
 flags! {
     pub TileFlags(u32) {
@@ -178,29 +198,7 @@ static TILES: LazyLock<HashMap<char, Tile>> = LazyLock::new(|| {
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Item
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Item { Berry, Corpse }
-
-pub fn show_item(item: &Item) -> Glyph {
-    match item {
-        Item::Berry  => Glyph::wdfg('o', 0xc08000),
-        Item::Corpse => Glyph::wdfg('%', 0xffffff),
-    }
-}
-
-//////////////////////////////////////////////////////////////////////////////
-
-// Environment
-
-pub enum Light { None, Sun(Delta) }
-
-enum Weather { None, Rain(Delta, usize) }
-
-//////////////////////////////////////////////////////////////////////////////
-
-// FOV
+// FOV:
 
 struct FOV {
     npc_vision: Vision,
@@ -267,7 +265,7 @@ impl FOV {
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Board
+// Board:
 
 #[derive(Clone, Default)]
 pub struct Cell {
@@ -767,35 +765,42 @@ fn get_sightings(board: &Board, noise: &Noise, fov: &mut FOV) -> Vec<Sighting> {
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Attack effects
+// Action helpers:
 
-fn shout(state: &mut State, eid: EID, shout: &str, suffix: &str) {
-    let board = &mut state.board;
-    let Actor { pos: source, player, species, .. } = board.actors[eid];
-    let noise = Noise::from_eid(eid, source, CALL_VOLUME);
-    let sightings = get_sightings(board, &noise, &mut state.env.fov);
-
-    let log = &mut state.env.ui.log;
-    if player && suffix.is_empty() {
-        log.log_success(format!("You shout: \"{}\"", shout));
-    } else if player {
-        log.log_failure(format!("You shout: \"{}\"{}", shout, suffix));
+fn apply_update(state: &mut State, eid: EID, update: Update) {
+    use Update::*;
+    let me = &mut state.board.actors[eid];
+    match update {
+        CommandFailure if me.leader == Some(state.player) => {
+            let message = format!("{} gave up on your command.", me.upper());
+            state.env.ui.log.log_failure(message);
+            me.command = None;
+        }
+        CommandFailure | CommandSuccess => me.command = None,
+        TargetSeen => if let Some(Command::Attack(_, x)) = &mut me.command { x.seen = true; },
     }
+}
 
-    // Create a call event that carries species info.
-    let data = EventData::Call(CallEvent { call: Call::Command, species });
-    let event = &mut create_event(board, eid, source, data);
+fn can_attack(board: &Board, me: &Actor, target: Point, range: Range) -> bool {
+    let moves = range.moves;
+    let (known, source) = (&*me.known, me.pos);
 
-    // Deliver the CallEvent to each other actor that heard the shout.
-    for s in &sightings {
-        board.observe_event(s.eid, &s.merged, event);
-        if s.eid != state.player { continue; }
+    if source == target { return false; }
+    if !known.get(target).visible() { return false; }
+    if !range.bound.contains(source - target) { return false; }
 
-        let log = &mut state.env.ui.log;
-        let actor = &board.actors[eid];
-        let source = if s.merged.seen() { actor.upper() } else { "Someone".into() };
-        log.log_notable(format!("{} shouts: \"{}\"", source, shout));
-    }
+    let los = LOS(source, target);
+    los[1..los.len() - 1].iter().all(|&p| {
+        matches!(known.get(p).status_for(moves), Status::Free) &&
+        matches!(board.get_status(p, moves), Status::Free)
+    })
+}
+
+fn can_summon(board: &Board, me: &Actor, target: Point) -> bool {
+    if !me.known.get(target).can_see_actor_at() { return false; }
+
+    let range = Range { bound: SUMMON_RANGE, moves: SUMMON_MOVES };
+    can_attack(board, me, target, range)
 }
 
 fn hit_tile(state: &mut State, eid: EID, target: Point) {
@@ -851,6 +856,35 @@ fn hit_actor(state: &mut State, eid: EID, attack: &Attack, logged: bool, tid: EI
     }
 
     if fainted { state.record_remove(tid, pos, species); }
+}
+
+fn shout(state: &mut State, eid: EID, shout: &str, suffix: &str) {
+    let board = &mut state.board;
+    let Actor { pos: source, player, species, .. } = board.actors[eid];
+    let noise = Noise::from_eid(eid, source, CALL_VOLUME);
+    let sightings = get_sightings(board, &noise, &mut state.env.fov);
+
+    let log = &mut state.env.ui.log;
+    if player && suffix.is_empty() {
+        log.log_success(format!("You shout: \"{}\"", shout));
+    } else if player {
+        log.log_failure(format!("You shout: \"{}\"{}", shout, suffix));
+    }
+
+    // Create a call event that carries species info.
+    let data = EventData::Call(CallEvent { call: Call::Command, species });
+    let event = &mut create_event(board, eid, source, data);
+
+    // Deliver the CallEvent to each other actor that heard the shout.
+    for s in &sightings {
+        board.observe_event(s.eid, &s.merged, event);
+        if s.eid != state.player { continue; }
+
+        let log = &mut state.env.ui.log;
+        let actor = &board.actors[eid];
+        let source = if s.merged.seen() { actor.upper() } else { "Someone".into() };
+        log.log_notable(format!("{} shouts: \"{}\"", source, shout));
+    }
 }
 
 fn summon_actor(state: &mut State, eid: EID, target: Point, index: usize, team: usize) {
@@ -929,7 +963,7 @@ fn try_switch(state: &mut State, eid: EID, oid: EID, team: usize, quiet: bool) -
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Turn-taking
+// Turn-taking:
 
 pub fn move_ready(me: &Actor) -> bool { me.move_timer <= 0 }
 
@@ -973,7 +1007,7 @@ fn advance_turn(board: &mut Board) -> Option<EID> {
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Action
+// Action:
 
 #[derive(Debug)]
 pub enum Action {
@@ -1004,42 +1038,6 @@ impl ActionResult {
     fn success() -> Self { Self::success_turns(1.) }
     fn success_moves(moves: f64) -> Self { Self { success: true,  moves, turns: 1. } }
     fn success_turns(turns: f64) -> Self { Self { success: true,  moves: 0., turns } }
-}
-
-fn can_attack(board: &Board, me: &Actor, target: Point, range: Range) -> bool {
-    let moves = range.moves;
-    let (known, source) = (&*me.known, me.pos);
-
-    if source == target { return false; }
-    if !known.get(target).visible() { return false; }
-    if !range.bound.contains(source - target) { return false; }
-
-    let los = LOS(source, target);
-    los[1..los.len() - 1].iter().all(|&p| {
-        matches!(known.get(p).status_for(moves), Status::Free) &&
-        matches!(board.get_status(p, moves), Status::Free)
-    })
-}
-
-fn can_summon(board: &Board, me: &Actor, target: Point) -> bool {
-    if !me.known.get(target).can_see_actor_at() { return false; }
-
-    let range = Range { bound: SUMMON_RANGE, moves: SUMMON_MOVES };
-    can_attack(board, me, target, range)
-}
-
-fn apply_update(state: &mut State, eid: EID, update: Update) {
-    use Update::*;
-    let me = &mut state.board.actors[eid];
-    match update {
-        CommandFailure if me.leader == Some(state.player) => {
-            let message = format!("{} gave up on your command.", me.upper());
-            state.env.ui.log.log_failure(message);
-            me.command = None;
-        }
-        CommandFailure | CommandSuccess => me.command = None,
-        TargetSeen => if let Some(Command::Attack(_, x)) = &mut me.command { x.seen = true; },
-    }
 }
 
 fn plan(state: &mut State, eid: EID, leader: Option<EID>) -> Action {
@@ -1415,7 +1413,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Animation
+// Animation:
 
 fn flash_actor<T: Into<Color>>(target: Point, color: T) -> Effect {
     let frame = vec![
@@ -1482,7 +1480,7 @@ fn apply_effect(mut effect: Effect, what: FT, callback: CB) -> Effect {
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Update
+// State updates:
 
 fn process_input(state: &mut State, input: Input) {
     let player = &mut state.board.actors[state.player];
@@ -1597,7 +1595,7 @@ fn update_state(state: &mut State) {
 
 //////////////////////////////////////////////////////////////////////////////
 
-// State
+// State:
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub enum GameMode { Gym, Play, Sim, Test }

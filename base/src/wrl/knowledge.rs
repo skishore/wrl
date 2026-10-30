@@ -859,7 +859,7 @@ impl Knowledge {
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Result of querying knowledge about a cell
+// The result of querying knowledge about a cell:
 
 pub struct PointLookup<'a> {
     root: &'a Knowledge,
