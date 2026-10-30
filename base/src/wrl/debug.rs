@@ -12,7 +12,7 @@ use crate::base::pathing::Neighborhood;
 
 use super::actor::{Actor, EID};
 use super::effect::{Frame, ParticleData, RenderData};
-use super::game::{WORLD_SIZE, Action, Board, Cell, show_item};
+use super::game::{WORLD_SIZE, Action, Board, Cell};
 use super::knowledge::ActorKnowledge;
 use super::ui::UI;
 
@@ -332,7 +332,7 @@ impl DebugFile {
     }
 
     fn underlying_glyph(cell: &Cell) -> Glyph {
-        if let Some(x) = cell.items.last() { show_item(x) } else { cell.tile.glyph }
+        if let Some(x) = cell.items.last() { x.glyph() } else { cell.tile.glyph }
     }
 }
 
