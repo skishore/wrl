@@ -400,11 +400,11 @@ impl Knowledge {
     pub fn observe_event(&mut self, me: &Actor, eid: Option<EID>, event: &Event) {
         self.timer.update(event.time);
 
-        type TH = TraceHandle;
+        use TraceHandle::*;
         let mut cloned = event.clone();
         match self.event_noise(me, eid, &mut cloned) {
-            TH::Actor(x) => self.update_actor(x, |x| x.update_for_event(&cloned)),
-            TH::Noise(x) => self.update_noise(x, |x| *x = NoiseKnowledge::new(eid, &cloned)),
+            Actor(x) => self.update_actor(x, |x| x.update_for_event(&cloned)),
+            Noise(x) => self.update_noise(x, |x| *x = NoiseKnowledge::new(eid, &cloned)),
         }
         self.events.push(cloned);
 
@@ -810,21 +810,21 @@ impl Knowledge {
         check_sorted(self.events.iter().rev().map(|x| x.time).collect());
 
         // Check that every cell, noise, and actor is indexed:
-        type TH = TraceHandle;
+        use TraceHandle::*;
         for x in &self.cells {
             let entry = self.pos_index.get(&x.point);
             assert!(entry.and_then(|x| x.cell).is_some());
         }
         for x in &self.noises {
             let entry = self.uid_index.get(&x.uid);
-            assert!(matches!(entry, Some(&TH::Noise(y)) if std::ptr::eq(x, &self.noises[y])));
+            assert!(matches!(entry, Some(&Noise(y)) if std::ptr::eq(x, &self.noises[y])));
         }
         for x in &self.actors {
             let entry = self.eid_index.get(&x.eid);
             assert!(entry.and_then(|x| x.actor).is_some());
 
             let entry = self.uid_index.get(&x.uid);
-            assert!(matches!(entry, Some(&TH::Actor(y)) if std::ptr::eq(x, &self.actors[y])));
+            assert!(matches!(entry, Some(&Actor(y)) if std::ptr::eq(x, &self.actors[y])));
         }
 
         // Check that the indices are consistent and minimal:
@@ -833,8 +833,8 @@ impl Knowledge {
             assert!(cell.is_some() || trace.is_some());
 
             if let Some(x) = cell { assert!(self.cells[x].point == pos); }
-            if let Some(TH::Actor(x)) = trace { assert!(self.actors[x].pos == pos); }
-            if let Some(TH::Noise(x)) = trace { assert!(self.noises[x].pos == pos); }
+            if let Some(Actor(x)) = trace { assert!(self.actors[x].pos == pos); }
+            if let Some(Noise(x)) = trace { assert!(self.noises[x].pos == pos); }
 
             let lookup = PointLookup { root: self, spot: Some(point) };
             assert!(status == lookup.status_for(self.moves));

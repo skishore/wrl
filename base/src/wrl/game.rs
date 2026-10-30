@@ -1029,17 +1029,16 @@ fn can_summon(board: &Board, me: &Actor, target: Point) -> bool {
 }
 
 fn apply_update(state: &mut State, eid: EID, update: Update) {
+    use Update::*;
     let me = &mut state.board.actors[eid];
     match update {
-        Update::TargetSeen => {
-            if let Some(Command::Attack(_, x)) = &mut me.command { x.seen = true; }
-        }
-        Update::CommandFailure if me.leader == Some(state.player) => {
+        CommandFailure if me.leader == Some(state.player) => {
             let message = format!("{} gave up on your command.", me.upper());
             state.env.ui.log.log_failure(message);
             me.command = None;
         }
-        Update::CommandFailure | Update::CommandSuccess => me.command = None,
+        CommandFailure | CommandSuccess => me.command = None,
+        TargetSeen => if let Some(Command::Attack(_, x)) = &mut me.command { x.seen = true; },
     }
 }
 

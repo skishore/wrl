@@ -730,16 +730,16 @@ fn FindPathToTarget(ctx: &mut Ctx, kind: PathKind) -> bool {
 }
 
 fn SkipLastPathStep(kind: PathKind) -> bool {
-    type K = PathKind;
+    use PathKind::*;
     match kind {
         // Move adjacent to the cell but not onto it.
-        K::Target | K::Meat | K::Water | K::Berry | K::BerryTree => true,
+        Target | Meat | Water | Berry | BerryTree => true,
 
         // High-priority search / flee pathing; move to the cell.
-        K::Follow | K::Source | K::Flee | K::Hide | K::Chase | K::ChaseFallback => false,
+        Follow | Source | Flee | Hide | Chase | ChaseFallback => false,
 
         // Low-priority needs pathing; move to the cell.
-        K::Rest | K::Explore | K::None => false,
+        Rest | Explore | None => false,
     }
 }
 
