@@ -387,8 +387,8 @@ impl Knowledge {
     pub fn cleanup_old_events(&mut self, player: bool, time: Timestamp) {
         self.timer.update(time);
 
-        self.forget_old_scents();
         self.forget_old_noises(player);
+        self.forget_old_scents();
 
         debug_assert!(self.check_invariants());
     }
@@ -402,7 +402,9 @@ impl Knowledge {
 
         use TraceHandle::*;
         let mut cloned = event.clone();
-        match self.event_noise(me, eid, &mut cloned) {
+        let trace = self.ensure_trace(me, eid, &mut cloned);
+
+        match trace {
             Actor(x) => self.update_actor(x, |x| x.update_for_event(&cloned)),
             Noise(x) => self.update_noise(x, |x| *x = NoiseKnowledge::new(eid, &cloned)),
         }
@@ -411,20 +413,18 @@ impl Knowledge {
         debug_assert!(self.check_invariants());
     }
 
-    pub fn remove_actor(&mut self, eid: EID, time: Timestamp) {
-        self.timer.update(time);
+    pub fn observe_knockout(&mut self, me: &Actor, eid: EID, event: &Event) {
+        self.timer.update(event.time);
 
-        let Some(x) = self.eid_index.get_mut(&eid) else { return };
-        let Some(h) = x.actor.take() else { return };
+        use TraceHandle::*;
+        let mut cloned = event.clone();
+        let Some(trace) = self.lookup_trace(me, eid, &mut cloned) else { return };
 
-        if *x == Default::default() { self.eid_index.remove(&eid); }
-
-        let x = self.actors.remove(h);
-        x.uids.iter().for_each(|x| { self.uid_index.remove(x); });
-        self.remove_trace(TraceHandle::Actor(h), x.pos);
-        self.uid_index.remove(&x.uid);
-
-        self.forget_event(x.uid, x.pos);
+        match trace {
+            Actor(x) => self.forget_actor(x),
+            Noise(x) => self.forget_noise(x),
+        }
+        *self.events.last_mut().unwrap() = cloned;
 
         debug_assert!(self.check_invariants());
     }
@@ -608,16 +608,20 @@ impl Knowledge {
         actor
     }
 
-    fn event_noise(&mut self, me: &Actor, eid: Option<EID>, event: &mut Event) -> TraceHandle {
+    fn ensure_trace(&mut self, me: &Actor, eid: Option<EID>, event: &mut Event) -> TraceHandle {
         assert!(event.old.is_none());
 
-        // Sounds from non-actors result in new, unknown noises.
-        let Some(eid) = eid else {
-            return TraceHandle::Noise(self.create_noise(eid, event));
-        };
+        let result = eid.and_then(|x| self.lookup_trace(me, x, event));
+        if let Some(x) = result { return x; }
 
+        let result = self.create_noise(eid, event);
+        if let Some(x) = eid { self.eid_index.entry(x).or_default().noise = Some(result); }
+        TraceHandle::Noise(result)
+    }
+
+    fn lookup_trace(&mut self, me: &Actor, eid: EID, event: &mut Event) -> Option<TraceHandle> {
         let limit = self.timer.time_at_turn(SOURCE_TRACKING_LIMIT);
-        let entry = self.eid_index.entry(eid).or_default();
+        let entry = self.eid_index.get_mut(&eid)?;
         let sense = event.sense;
 
         // Try to link this event to an actor we've seen.
@@ -631,19 +635,15 @@ impl Knowledge {
             if let Some(y) = entry.noise.take() {
                event.old = self.identify_noise(x, y, limit);
             }
-            return TraceHandle::Actor(x);
+            return Some(TraceHandle::Actor(x));
         }
 
-        // Try to link the event to an actor we've sensed indirectly.
+        // Try to link the event to an noise we've heard.
         if let Some(x) = entry.noise && self.noises[x].time > limit {
             event.uid = self.noises[x].uid;
-            return TraceHandle::Noise(x);
+            return Some(TraceHandle::Noise(x));
         };
-
-        // No existing noise - create a new, unknown one.
-        let result = self.create_noise(Some(eid), event);
-        if let Some(x) = self.eid_index.get_mut(&eid) { x.noise = Some(result); }
-        TraceHandle::Noise(result)
+        None
     }
 
     // Actor updates:
@@ -729,15 +729,36 @@ impl Knowledge {
 
         // Clean up actors, but not any that we can currently sense.
         while self.actors.len() > MAX_ACTOR_MEMORY {
-            let actor = self.actors.back().unwrap();
-            if actor.sensed() { break; }
-            self.remove_actor(actor.eid, self.timer.time);
+            if self.actors.back().map_or(false, |x| x.sensed()) { break; }
+            self.forget_actor(self.actors.back_handle().unwrap());
         }
 
         // Clean up noises by count. On turn boundaries, we drop them by age.
         while self.noises.len() > MAX_NOISE_MEMORY {
             self.forget_last_noise();
         }
+    }
+
+    fn forget_actor(&mut self, handle: ActorHandle) {
+        let actor = self.actors.remove(handle);
+        self.forget_actor_link(actor.eid, handle);
+
+        actor.uids.iter().for_each(|x| { self.uid_index.remove(x); });
+
+        self.remove_trace(TraceHandle::Actor(handle), actor.pos);
+        self.uid_index.remove(&actor.uid);
+
+        self.forget_event(actor.uid, actor.pos);
+    }
+
+    fn forget_noise(&mut self, handle: NoiseHandle) {
+        let noise = self.noises.remove(handle);
+        if let Some(eid) = noise.eid { self.forget_noise_link(eid, handle); }
+
+        self.remove_trace(TraceHandle::Noise(handle), noise.pos);
+        self.uid_index.remove(&noise.uid);
+
+        self.forget_event(noise.uid, noise.pos);
     }
 
     fn forget_event(&mut self, uid: UID, pos: Point) {
@@ -758,23 +779,8 @@ impl Knowledge {
     }
 
     fn forget_last_noise(&mut self) {
-        let Some(h) = self.noises.back_handle() else { return };
-        let Some(x) = self.noises.pop_back() else { return };
-
-        if let Some(e) = x.eid { self.forget_noise_link(e, h); }
-
-        self.remove_trace(TraceHandle::Noise(h), x.pos);
-        self.uid_index.remove(&x.uid);
-
-        self.forget_event(x.uid, x.pos);
-    }
-
-    fn forget_old_scents(&mut self) {
-        let limit = self.timer.time_at_turn(SCENT_TRACKING_LIMIT);
-
-        while let Some(x) = self.scents.last() && x.time <= limit {
-            self.scents.pop();
-        }
+        let Some(handle) = self.noises.back_handle() else { return };
+        self.forget_noise(handle);
     }
 
     fn forget_old_noises(&mut self, player: bool) {
@@ -786,12 +792,28 @@ impl Knowledge {
         }
     }
 
-    fn forget_noise_link(&mut self, e: EID, h: NoiseHandle) {
-        let Some(x) = self.eid_index.get_mut(&e) else { return };
-        if x.noise != Some(h) { return };
+    fn forget_old_scents(&mut self) {
+        let limit = self.timer.time_at_turn(SCENT_TRACKING_LIMIT);
 
-        x.noise = None;
-        if *x == Default::default() { self.eid_index.remove(&e); }
+        while let Some(x) = self.scents.last() && x.time <= limit {
+            self.scents.pop();
+        }
+    }
+
+    fn forget_actor_link(&mut self, eid: EID, handle: ActorHandle) {
+        let Some(entry) = self.eid_index.get_mut(&eid) else { return };
+        assert!(entry.actor == Some(handle));
+
+        entry.actor = None;
+        if *entry == Default::default() { self.eid_index.remove(&eid); }
+    }
+
+    fn forget_noise_link(&mut self, eid: EID, handle: NoiseHandle) {
+        let Some(entry) = self.eid_index.get_mut(&eid) else { return };
+        if entry.noise != Some(handle) { return };
+
+        entry.noise = None;
+        if *entry == Default::default() { self.eid_index.remove(&eid); }
     }
 
     // Debug helpers:

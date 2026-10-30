@@ -595,14 +595,10 @@ impl Board {
         self._update_memory(eid, |known, me, _| known.observe_event(me, *oid, event));
     }
 
-    fn observe_knockout(&mut self, eid: EID, oid: EID) {
-        // Quite wrong - need to treat the oid -> UID mapping as we do for
-        // any other event, so that we:
-        //   - Only clean up the ActorMemory if we've recently seen the actor;
-        //   - But, we also clean up the NoiseMemory if we've only heard it
-        let time = self.time;
-        self._update_memory(eid, |known, _, _| known.remove_actor(oid, time));
+    fn observe_knockout(&mut self, eid: EID, oid: EID, event: &Event) {
+        self._update_memory(eid, |known, me, _| known.observe_knockout(me, oid, event));
 
+        // TODO: When attacks are keyed by UID, do this step in _update_memory.
         let Some(actor) = self.actors.get_mut(eid) else { return };
         if let Some(Command::Attack(_, x)) = actor.command && x.eid == Some(oid) {
             actor.command = None;
@@ -833,6 +829,7 @@ fn hit_actor(state: &mut State, eid: EID, tid: EID, attack: &Attack, logged: boo
     let noise = Noise::from_actor(target, ATTACK_VOLUME);
     let sightings = get_sightings(board, &noise, &mut env.fov);
 
+    // If the player is the target, they won't be in `sightings`; log here.
     if tid == state.player {
         let log = &mut env.ui.log;
         if !logged { log.log(format!("Something attacked {}!", lower)); }
@@ -840,8 +837,13 @@ fn hit_actor(state: &mut State, eid: EID, tid: EID, attack: &Attack, logged: boo
         if fainted { log.log_append("You die..."); }
     }
 
+    // Create a knockout event to deliver to entities.
+    let data = EventData::Forget;
+    let event = create_event(board, tid, pos, data).1;
+
+    // Deliver the knockout event to everyone that saw or heard the attack.
     for s in &sightings {
-        if fainted { board.observe_knockout(s.eid, tid); }
+        if fainted { board.observe_knockout(s.eid, tid, &event); }
         if s.eid != state.player || !s.source.seen() { continue; }
 
         let log = &mut env.ui.log;
