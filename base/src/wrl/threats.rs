@@ -209,17 +209,6 @@ impl Threat {
     //   - When an actor is in combat it should prioritize threats that can
     //     hurt it (right now a predator may attack us even when it's under
     //     attack by prey, or vice-versa).
-    //
-    //   - Prey handling of "friendly noise sources" is quite wrong. We never
-    //     when they faint - see hit_actor() in game, which only removes
-    //     known actors, not noises. But we can mark them friendly (based on
-    //     Call::Help / Call::Warning species info), and if we don't see them,
-    //     we assume they're strong (see use of timid() in the Threat ctor).
-    //     This bug can result in us keeping around 1-2 high-strength allies
-    //     in our estimate even after they faint, and sticking around long
-    //     after we should flee.
-    //
-    //     We're fixing this by unifying actor and noise knowledge.
 
     // Threat scoring:
 
