@@ -572,7 +572,7 @@ fn HeardUnknownNoise(ctx: &mut Ctx) -> bool {
     if !result { return false; }
 
     if scanning && bb.scan.steps_left() == 1 {
-        for threat in &mut bb.threats.threats { threat.mark_scanned(); }
+        bb.threats.mark_scanned();
     }
     if !scanning { bb.last_scan = bb.prev_time; }
     true
@@ -617,22 +617,28 @@ fn WarnRecentThreats(ctx: &mut Ctx) -> Option<Action> {
     let stare = bb.last_warn > known.time_at_turn(WARNING_RETRY_TURNS);
     let (mut call, mut scan) = (None, None);
 
-    for threat in &mut bb.threats.threats {
+    let mut warned = vec![];
+
+    for threat in &bb.threats.uncertain {
         if threat.time <= limit { break; }
 
-        if !threat.uncertain() { continue; }
         if !WithinCallRange(pos, threat.pos) { continue; }
 
         let look = threat.pos - pos;
-        let warn = !stare && (!threat.warned() || threat.time == known.time());
+        let warn = !stare && (!threat.warned || threat.time == known.time());
 
         if warn {
             call.get_or_insert(Action::Call { look, call: Call::Warning });
         } else if stare {
             scan.get_or_insert(Action::Look { look });
         }
-        if warn { threat.mark_warned(ctx.me, ctx.env.rng); }
+        if warn { warned.push(threat.uid); }
         if warn { bb.last_warn = known.time(); }
+    }
+    for uid in warned {
+        if let Some(x) = uid {
+            bb.threats.mark_warned(ctx.me, x, ctx.env.rng);
+        }
     }
     call.or(scan)
 }
@@ -1725,7 +1731,7 @@ fn FlightStrength(ctx: &mut Ctx) -> i64 {
 
 fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
     let threats = &mut ctx.blackboard.threats;
-    threats.on_call_for_help(ctx.pos, ctx.known.time());
+    threats.on_call_for_help(ctx.me, ctx.pos, ctx.known.time());
 
     let look = threats.hostile.first().map_or(ctx.dir, |x| x.pos - ctx.pos);
     Some(Action::Call { look, call: Call::Help })
