@@ -169,6 +169,7 @@ impl ActorKnowledge {
     fn update_for_event(&mut self, event: &Event) {
         self.loc = event.loc;
         self.sense = event.sense;
+        self.flags &= !AF::Asleep;
     }
 
     fn update(&mut self, me: &Actor, other: &Actor, sense: Sense, time: Timestamp) {
