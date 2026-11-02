@@ -9,8 +9,8 @@ use crate::base::util::{HashMap, RNG};
 use super::actor::Actor;
 use super::debug::DebugLog;
 use super::dex::Species;
-use super::event::{AttackEvent, Call, CallEvent, Event, EventData, Location, Sense, UID};
-use super::knowledge::{ActorKnowledge, Knowledge};
+use super::event::{Call, CallEvent, Event, EventData, Location, Sense, UID};
+use super::knowledge::{ActorKnowledge, Knowledge, NoiseKnowledge};
 use super::game::CALL_VOLUME;
 use super::list::{Handle, List};
 use super::time::Timestamp;
@@ -48,132 +48,66 @@ impl TimeDecay {
 
 //////////////////////////////////////////////////////////////////////////////
 
-// Threat
+// Faction:
 
-#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-enum Confidence { Zero, Low, Mid, High }
+#[derive(Copy, Clone, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+enum Confidence { #[default] Zero, Low, Mid, High }
 
-#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-enum Valence { Friendly, Neutral, Menacing, Hostile }
+#[derive(Copy, Clone, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+enum Valence { Friendly, #[default] Neutral, Menacing, Hostile }
 
-#[derive(Clone)]
-pub struct Threat {
-    pub loc: Location,
-    pub sense: Sense,
-    pub combat: Timestamp,
-    pub species: Option<&'static Species>,
-
-    // Flags:
-    pub asleep: bool,
-    pub rival: bool,
-    pub seen: bool,
-
-    // Stats:
-    hp: f64,
-    delta: i32,
-
-    // Danger penalty:
+#[derive(Default)]
+struct Faction {
+    last_combat: Timestamp,
     penalty_score: f64,
     penalty_start: Timestamp,
+    warning_count: i32,
 
-    // Warnings:
-    warnings: i32,
-
-    // See status accessors:
     confidence: Confidence,
     valence: Valence,
+
+    uids: Vec<UID>,
 }
 
-impl std::ops::Deref for Threat {
-    type Target = Location;
-    fn deref(&self) -> &Self::Target { &self.loc }
-}
-
-impl Threat {
-    fn prior(me: &Actor) -> Self {
-        Self {
-            loc: Default::default(),
-            sense: Sense::Sight,
-            combat: Default::default(),
-            species: None,
-
-            // Flags:
-            asleep: false,
-            rival: false,
-            seen: false,
-
-            // Stats:
-            hp: 0.,
-            delta: if timid(me) { 1 } else { -1 },
-
-            // Danger penalty:
-            penalty_score: Default::default(),
-            penalty_start: Default::default(),
-
-            // Warnings:
-            warnings: 0,
-
-            // See status accessors:
-            confidence: Confidence::Zero,
-            valence: Valence::Neutral,
-        }
-    }
-
-    pub fn debug(&self, debug: &mut DebugLog, known: &Knowledge) {
-        debug.append("Threat:");
+impl Faction {
+    fn debug(&self, debug: &mut DebugLog, known: &Knowledge) {
+        debug.append("Faction:");
         debug.indent(1, |debug| {
-            let warnings = if self.warnings == 0 {
+            let warnings = if self.warning_count == 0 {
                 " ".into()
-            } else if self.warnings == 1 {
+            } else if self.warning_count == 1 {
                 " - 1 warning".into()
             } else {
-                format!(" - {} warnings", self.warnings)
+                format!(" - {} warnings", self.warning_count)
             };
             let status = format!("{:?}:{:?}", self.confidence, self.valence);
 
-            debug.append(format!("age: {}", known.debug_time(self.time)));
-            debug.append(format!("pos: {:?}, by {:?}", self.pos, self.sense));
-            debug.append(format!("combat: {}", known.debug_time(self.combat)));
+            debug.append(format!("combat: {}", known.debug_time(self.last_combat)));
             debug.append(format!("status: {}{}", status, warnings));
-            debug.append(format!("strength: {} @ {:.2} hp", self.delta, self.hp));
+            debug.append(format!("penalty_score: {}", self.penalty_score));
+            debug.append(format!("penalty_start: {}", known.debug_time(self.penalty_start)));
         });
         debug.newline();
     }
 
-    // Status accessors:
-
-    fn friendly(&self) -> bool {
-        self.valence == Valence::Friendly
+    fn known_hostile(&self) -> bool {
+        self.confidence == Confidence::High && self.valence == Valence::Hostile
     }
 
-    fn hostile(&self) -> bool {
-        self.valence == Valence::Hostile
+    fn friendly_call(me: &Actor, x: &CallEvent) -> bool {
+       x.species == me.species
     }
 
-    fn menacing(&self) -> bool {
-        self.valence == Valence::Menacing
+    fn friendly_call_for_help(me: &Actor, x: &CallEvent) -> bool {
+        x.call == Call::Help && Self::friendly_call(me, x)
     }
 
-    fn certain(&self) -> bool {
-        self.confidence == Confidence::High
+    fn mark_scanned(&mut self) {
+        self.merge_status(Confidence::Low, self.valence);
     }
 
-    fn unknown(&self) -> bool {
-        self.confidence == Confidence::Zero
-    }
-
-    pub fn uncertain(&self) -> bool {
-        self.confidence == Confidence::Low
-    }
-
-    pub fn warned(&self) -> bool {
-        self.warnings > 0
-    }
-
-    pub fn mark_warned(&mut self, me: &Actor, rng: &mut RNG) {
-        if !self.uncertain() { return; }
-
-        let warnings = self.warnings;
+    fn mark_warned(&mut self, me: &Actor, rng: &mut RNG) {
+        let warnings = self.warning_count;
         let sample = rng.random::<f32>() * 2f32.powi(warnings);
 
         if sample > 0.5 {
@@ -183,13 +117,331 @@ impl Threat {
             self.penalty_score = rng.random_range(PENALTY_RANGE);
             self.penalty_start = me.known.time();
         }
-        self.warnings += 1;
+        self.warning_count += 1;
     }
 
-    pub fn mark_scanned(&mut self) {
-        self.merge_status(Confidence::Low, self.valence);
+    fn merge_from(&mut self, other: &Faction) {
+        self.last_combat = max(self.last_combat, other.last_combat);
+        self.warning_count = max(self.warning_count, other.warning_count);
+        self.merge_status(other.confidence, other.valence);
     }
 
+    fn merge_status(&mut self, confidence: Confidence, valence: Valence) {
+        if confidence == self.confidence {
+            self.valence = max(valence, self.valence);
+        } else if confidence > self.confidence {
+            self.confidence = confidence;
+            self.valence = valence;
+        }
+    }
+
+    fn update_for_actor(&mut self, me: &Actor, other: &ActorKnowledge) {
+        use Confidence::*;
+        use Valence::*;
+
+        if other.species.human() {
+            self.merge_status(Low, Neutral);
+            return;
+        }
+
+        let predator = other.delta > 0;
+        let active = self.last_combat > me.known.time_at_turn(ACTIVE_THREAT_TURNS);
+
+        let valence = if other.friend() {
+            Friendly
+        } else if other.rival() || (predator && active) {
+            Hostile
+        } else if predator {
+            Menacing
+        } else if timid(me) && me.species == other.species {
+            Friendly
+        } else {
+            Neutral
+        };
+        self.merge_status(High, valence);
+    }
+
+    fn update_for_event(&mut self, me: &Actor, event: &Event) {
+        use super::event::Call::*;
+        use Confidence::*;
+        use EventData::*;
+        use Valence::*;
+
+        match &event.data {
+            Attack(x) if x.combat => {
+                let us = x.target == Some(me.eid);
+                let sure = us || self.confidence == High && self.valence >= Menacing;
+                let confidence = if sure { High } else { Mid };
+
+                self.merge_status(confidence, Hostile);
+                self.last_combat = event.time;
+            },
+            Call(x) => {
+                if Self::friendly_call(me, x) {
+                    self.merge_status(High, Friendly);
+                } else if x.call == Warning {
+                    let valence = if timid(me) { Menacing } else { Neutral };
+                    self.merge_status(Mid, valence);
+                }
+                if x.call == Help { self.last_combat = event.time; }
+            },
+            Attack(_) | Move(_) | Forget | Sniff | Spot => {},
+        }
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// FactionMap:
+
+type FactionHandle = Handle<Faction>;
+
+#[derive(Default)]
+struct FactionMap {
+    factions: List<Faction>,
+    lookup: HashMap<UID, FactionHandle>,
+    guess: Option<Location>,
+}
+
+impl FactionMap {
+    // Public API:
+
+    fn get_faction(&self, uid: UID) -> Option<&Faction> {
+        self.lookup.get(&uid).map(|&x| &self.factions[x])
+    }
+
+    fn mut_faction(&mut self, uid: UID) -> Option<&mut Faction> {
+        self.lookup.get(&uid).map(|&x| &mut self.factions[x])
+    }
+
+    fn observe_event(&mut self, me: &Actor, event: &Event) {
+        let Some(faction) = self.faction_for_event(event) else { return };
+        faction.update_for_event(me, event);
+        if faction.known_hostile() { self.guess = None; }
+    }
+
+    fn update(&mut self, me: &Actor) {
+        for actor in &me.known.actors {
+            if !actor.sensed() { break; }
+            if actor.eid == me.eid { continue; }
+
+            let faction = self.faction_for_actor(actor);
+            faction.update_for_actor(me, actor);
+            if faction.known_hostile() { self.guess = None; }
+        }
+    }
+
+    // Private helpers:
+
+    fn faction_for_actor(&mut self, actor: &ActorKnowledge) -> &mut Faction {
+        let result = self.faction_for_uid(actor.uid);
+        &mut self.factions[result]
+    }
+
+    fn faction_for_event(&mut self, event: &Event) -> Option<&mut Faction> {
+        let uid = event.uid;
+        if matches!(event.data, EventData::Forget) {
+            self.forget_uid(uid);
+            return None;
+        }
+
+        let handle = self.faction_for_uid(uid);
+        if let Some(old) = event.old && let Some(&merged) = self.lookup.get(&old) {
+            self.merge_factions(handle, merged);
+            self.forget_uid(old);
+        }
+        Some(&mut self.factions[handle])
+    }
+
+    fn faction_for_uid(&mut self, uid: UID) -> FactionHandle {
+        *self.lookup.entry(uid).or_insert_with(|| {
+            let faction = Faction { uids: vec![uid], ..Default::default() };
+            self.factions.push_back(faction)
+        })
+    }
+
+    fn forget_uid(&mut self, uid: UID) {
+        let Some(handle) = self.lookup.remove(&uid) else { return };
+
+        let faction = &mut self.factions[handle];
+        faction.uids.retain(|&x| x != uid);
+
+        if faction.uids.is_empty() { self.factions.remove(handle); }
+    }
+
+    fn merge_factions(&mut self, a: FactionHandle, b: FactionHandle) {
+        if a == b { return; }
+
+        let removed = self.factions.remove(b);
+        self.factions[a].merge_from(&removed);
+
+        for uid in removed.uids { self.lookup.insert(uid, a); }
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// Threat:
+
+#[derive(Clone)]
+pub struct Threat {
+    pub uid: Option<UID>,
+    pub loc: Location,
+    pub sense: Sense,
+    pub species: Option<&'static Species>,
+
+    pub asleep: bool,
+    pub warned: bool,
+    pub seen: bool,
+}
+
+impl std::ops::Deref for Threat {
+    type Target = Location;
+    fn deref(&self) -> &Self::Target { &self.loc }
+}
+
+impl Threat {
+    fn for_actor(actor: &ActorKnowledge, faction: &Faction) -> Self {
+        let species = Some(actor.species);
+        let warned = faction.warning_count > 0;
+        let (asleep, seen) = (actor.asleep(), true);
+        let ActorKnowledge { uid, loc, sense, .. } = *actor;
+        Self { uid: Some(uid), loc, sense, species, asleep, warned, seen }
+    }
+
+    fn for_noise(noise: &NoiseKnowledge, faction: &Faction) -> Self {
+        let species = None;
+        let (asleep, seen) = (false, false);
+        let warned = faction.warning_count > 0;
+        let NoiseKnowledge { uid, loc, sense, .. } = *noise;
+        Self { uid: Some(uid), loc, sense, species, asleep, warned, seen }
+    }
+
+    fn for_guess(loc: Location) -> Self {
+        let species = None;
+        let (asleep, warned, seen) = (false, false, false);
+        Self { uid: None, loc, sense: Sense::Sound, species, asleep, warned, seen }
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// CombatThreat:
+
+#[derive(Clone)]
+struct Scoring {
+    hp: f64,
+    delta: i32,
+    rival: bool,
+}
+
+#[derive(Clone)]
+struct ScoredThreat<'a> {
+    base: Threat,
+    faction: &'a Faction,
+    scoring: Scoring,
+}
+
+impl<'a> std::ops::Deref for ScoredThreat<'a> {
+    type Target = Threat;
+    fn deref(&self) -> &Self::Target { &self.base }
+}
+
+impl<'a> ScoredThreat<'a> {
+    // Accessors:
+
+    fn unknown(&self)   -> bool { self.faction.confidence == Confidence::Zero }
+    fn uncertain(&self) -> bool { self.faction.confidence == Confidence::Low }
+
+    fn hostile(&self)  -> bool { self.faction.valence == Valence::Hostile }
+    fn friendly(&self) -> bool { self.faction.valence == Valence::Friendly }
+    fn menacing(&self) -> bool { self.faction.valence == Valence::Menacing }
+
+    // Scoring:
+
+    fn strength(&self, decay: &TimeDecay) -> f64 {
+        self.base_strength() + self.penalty_strength(decay)
+    }
+
+    fn base_strength(&self) -> f64 {
+        if let Some(x) = self.species && x.human() { return 0.; }
+        let delta = 1.75f64.powi(self.scoring.delta.signum());
+        let rival = if self.scoring.rival { 0.25 } else { 1. };
+        delta * rival * self.scoring.hp
+    }
+
+    fn penalty_strength(&self, decay: &TimeDecay) -> f64 {
+        if self.faction.penalty_score <= 0. { return 0.; }
+        if self.faction.penalty_start <= decay.timeout { return 0.; }
+
+        let ratio = decay.ratio(self.faction.penalty_start);
+        let value = self.faction.penalty_score - PENALTY_DECAY * ratio * decay.turns as f64;
+        value.max(0.)
+    }
+
+    // Constructor:
+
+    fn for_actor(actor: &ActorKnowledge, faction: &'a Faction) -> Self {
+        let base = Threat::for_actor(actor, faction);
+        let ActorKnowledge { hp, delta, .. } = *actor;
+        let scoring = Scoring { hp, delta, rival: actor.rival() };
+        Self { base, faction, scoring }
+    }
+
+    fn for_noise(me: &Actor, noise: &NoiseKnowledge, faction: &'a Faction) -> Self {
+        let base = Threat::for_noise(noise, faction);
+        let delta = if timid(me) { 1 } else { -1 };
+        let hp = if faction.last_combat != Default::default() { 1. } else { 0. };
+        let scoring = Scoring { hp, delta, rival: false };
+        Self { base, faction, scoring }
+    }
+
+    fn for_guess(loc: Location, faction: &'a Faction) -> Self {
+        let base = Threat::for_guess(loc);
+        let scoring = Scoring { hp: 0., delta: 0, rival: false };
+        Self { base, faction, scoring }
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+// ThreatState:
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub enum FightOrFlight { Fight, Flight, #[default] Safe }
+
+#[derive(Default)]
+pub struct Threats {
+    pub uncertain: Vec<Threat>,
+    pub menacing: Vec<Threat>,
+    pub hostile: Vec<Threat>,
+    pub unknown: Vec<Threat>,
+}
+
+#[derive(Default)]
+pub struct ThreatState {
+    // Threat types (not disjoint!):
+    threats: Threats,
+
+    // Fight-or-flight:
+    pub state: FightOrFlight,
+    pub last_safe: Timestamp,
+    pub panicking: bool,
+
+    // Calling for help:
+    pub call_for_help: bool,
+    pub last_call: Timestamp,
+
+    // Internal state:
+    factions: FactionMap,
+}
+
+impl std::ops::Deref for ThreatState {
+    type Target = Threats;
+    fn deref(&self) -> &Self::Target { &self.threats }
+}
+
+impl ThreatState {
     // TODO list for player interactions:
     //
     //   - We can turn the "scan unknown noise" subtree into just the first
@@ -209,163 +461,15 @@ impl Threat {
     //   - When an actor is in combat it should prioritize threats that can
     //     hurt it (right now a predator may attack us even when it's under
     //     attack by prey, or vice-versa).
+    //
+    //   - We probably shouldn't call for help against threats we're not sure
+    //     about (e.g. if we just warned a threat). But note that after warning
+    //     a rival, we attack them even though we only have Confidence::Mid.
 
-    // Threat scoring:
-
-    fn strength(&self, decay: &TimeDecay) -> f64 {
-        self.base_strength() + self.penalty_strength(decay)
-    }
-
-    fn base_strength(&self) -> f64 {
-        if let Some(x) = self.species && x.human() { return 0.; }
-        let delta = 1.75f64.powi(self.delta.signum());
-        let rival = if self.rival { 0.25 } else { 1. };
-        delta * rival * self.hp
-    }
-
-    fn penalty_strength(&self, decay: &TimeDecay) -> f64 {
-        if self.penalty_score <= 0. { return 0.; }
-        if self.penalty_start <= decay.timeout { return 0.; }
-
-        let ratio = decay.ratio(self.penalty_start);
-        let value = self.penalty_score - PENALTY_DECAY * ratio * decay.turns as f64;
-        value.max(0.)
-    }
-
-    // State updates:
-
-    fn merge_status(&mut self, confidence: Confidence, valence: Valence) {
-        if confidence == self.confidence {
-            self.valence = max(valence, self.valence);
-        } else if confidence > self.confidence {
-            self.confidence = confidence;
-            self.valence = valence;
-        }
-    }
-
-    fn merge_from(&mut self, other: &Threat) {
-        // No need to update any fields that we unconditionally update in
-        // update_for_event, since we merge right before processing an event.
-        self.seen |= other.seen;
-        self.combat = max(self.combat, other.combat);
-        self.warnings = max(self.warnings, other.warnings);
-        self.merge_status(other.confidence, other.valence);
-    }
-
-    fn mark_combat(&mut self, time: Timestamp) {
-        if !self.seen { self.hp = 1. };
-        self.combat = time;
-    }
-
-    fn update_for_event(&mut self, me: &Actor, event: &Event) {
-        self.loc = event.loc;
-        self.sense = event.sense;
-        self.asleep = false;
-
-        match &event.data {
-            EventData::Attack(x) if x.combat => {
-                if x.target == Some(me.eid) || (self.certain() && self.menacing()) {
-                    self.merge_status(Confidence::High, Valence::Hostile);
-                } else {
-                    self.merge_status(Confidence::Mid, Valence::Hostile);
-                }
-                self.mark_combat(event.time);
-            },
-            EventData::Call(x) => {
-                if ThreatState::friendly_call(me, x) {
-                    self.merge_status(Confidence::High, Valence::Friendly);
-                } else if x.call == Call::Warning {
-                    let valence = if timid(me) { Valence::Menacing } else { Valence::Neutral };
-                    self.merge_status(Confidence::Mid, valence);
-                }
-                if x.call == Call::Help { self.mark_combat(event.time); }
-            },
-            EventData::Attack(_) => {},
-            EventData::Move(_) => {},
-            EventData::Forget => {},
-            EventData::Sniff => {},
-            EventData::Spot => {},
-        }
-    }
-
-    fn update_for_sighting(&mut self, me: &Actor, other: &ActorKnowledge) {
-        self.loc = other.loc;
-        self.sense = other.sense;
-        self.species = Some(other.species);
-
-        self.hp = other.hp;
-        self.delta = other.delta;
-
-        self.asleep = other.asleep();
-        self.rival = other.rival();
-        self.seen = true;
-
-        let (confidence, valence) =
-        if other.friend() {
-            (Confidence::High, Valence::Friendly)
-        } else if other.species.human() {
-            (Confidence::Low, Valence::Neutral)
-        } else if other.rival() {
-            (Confidence::High, Valence::Hostile)
-        } else if other.delta > 0 {
-            let combat = self.combat > me.known.time_at_turn(ACTIVE_THREAT_TURNS);
-            let valence = if combat { Valence::Hostile } else { Valence::Menacing };
-            (Confidence::High, valence)
-        } else if timid(me) && me.species == other.species {
-            (Confidence::High, Valence::Friendly)
-        } else {
-            (Confidence::High, Valence::Neutral)
-        };
-        self.merge_status(confidence, valence);
-    }
-}
-
-//////////////////////////////////////////////////////////////////////////////
-
-// ThreatState
-
-pub type ThreatHandle = Handle<Threat>;
-
-#[derive(Copy, Clone, Eq, PartialEq, Hash)]
-pub enum TID { CID, UID(UID) }
-
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
-pub enum FightOrFlight { Fight, Flight, #[default] Safe }
-
-#[derive(Default)]
-pub struct ThreatState {
-    pub threats: List<Threat>,
-    pub threat_index: HashMap<TID, ThreatHandle>,
-
-    // Summaries used for flight pathing.
-    pub uncertain: Vec<Threat>,
-    pub menacing: Vec<Threat>,
-    pub hostile: Vec<Threat>,
-    pub unknown: Vec<Threat>,
-
-    // Fight-or-flight.
-    pub state: FightOrFlight,
-    pub last_safe: Timestamp,
-    pub panicking: bool,
-
-    // Calling for help.
-    pub call_for_help: bool,
-    pub last_call: Timestamp,
-}
-
-impl ThreatState {
     pub fn debug(&self, debug: &mut DebugLog, known: &Knowledge) {
-        debug.append("ThreatState:");
-        debug.indent(1, |debug| {
-            debug.append(format!("state: {:?}", self.state));
-            debug.append(format!("call_for_help: {}", self.call_for_help));
-            debug.append(format!("last_call: {}", known.debug_time(self.last_call)));
-            debug.append(format!("last_safe: {}", known.debug_time(self.last_safe)));
-            debug.append(format!("panicking: {}", self.panicking));
-        });
-        debug.newline();
-
-        for threat in &self.threats { threat.debug(debug, known); }
+        for faction in &self.factions.factions {
+            faction.debug(debug, known);
+        }
     }
 
     pub fn mark_safe(&mut self, time: Timestamp) {
@@ -377,45 +481,67 @@ impl ThreatState {
         self.panicking = false;
     }
 
-    pub fn on_call_for_help(&mut self, point: Point, time: Timestamp) {
-        for threat in &mut self.threats {
-            if !threat.friendly() { continue; }
-            if !CALL_VOLUME.contains(threat.pos - point) { continue; }
-            threat.combat = time;
+    pub fn mark_scanned(&mut self) {
+        for faction in &mut self.factions.factions {
+            faction.mark_scanned();
         }
-        self.last_call = time;
+    }
+
+    pub fn mark_warned(&mut self, me: &Actor, uid: UID, rng: &mut RNG) {
+        let Some(faction) = self.factions.mut_faction(uid) else { return };
+        faction.mark_warned(me, rng);
     }
 
     pub fn observe_event(&mut self, me: &Actor, event: &Event) {
-        let Some(threat) = self.get_by_event(me, event) else { return };
+        self.factions.observe_event(me, event);
 
-        threat.update_for_event(me, event);
-        if threat.certain() && threat.hostile() { self.forget_tid(TID::CID); }
-
-        if let EventData::Call(x) = &event.data && Self::friendly_call_for_help(me, x) {
-            self.on_call_for_help(event.pos, event.time);
-            self.guess_threat_location(me, event);
+        if let EventData::Call(x) = &event.data && Faction::friendly_call_for_help(me, x) {
+            self.on_call_for_help(me, event.pos, event.time);
+            self.factions.guess = Some(event.loc);
         }
     }
 
+    pub fn on_call_for_help(&mut self, me: &Actor, point: Point, time: Timestamp) {
+        let mut check = |uid: UID, pos: Point| {
+            if !CALL_VOLUME.contains(pos - point) { return; }
+            let Some(faction) = self.factions.mut_faction(uid) else { return };
+            if faction.valence == Valence::Friendly { faction.last_combat = time; };
+        };
+        for actor in &me.known.actors { check(actor.uid, actor.pos); }
+        for noise in &me.known.noises { check(noise.uid, noise.pos); }
+        self.last_call = time;
+    }
+
     pub fn update(&mut self, me: &Actor) {
-        for other in &me.known.actors {
-            if !other.sensed() { break; }
-            let Some(threat) = self.get_by_actor(me, other) else { continue };
-
-            threat.update_for_sighting(me, other);
-            if threat.certain() && threat.hostile() { self.forget_tid(TID::CID); }
-        }
-
-        self.uncertain.clear();
-        self.menacing.clear();
-        self.hostile.clear();
-        self.unknown.clear();
+        self.factions.update(me);
+        self.threats = Default::default();
 
         let time = me.known.time();
         let decay = TimeDecay::new(me, ACTIVE_THREAT_TURNS);
         let call_limit = me.known.time_at_turn(CALL_LIMIT_TURNS);
         let call_retry = me.known.time_at_turn(CALL_RETRY_TURNS);
+
+        // List all threats:
+
+        let mut threats = vec![];
+        for actor in &me.known.actors {
+            if actor.time < decay.timeout { break };
+            let Some(faction) = self.factions.get_faction(actor.uid) else { continue };
+            threats.push(ScoredThreat::for_actor(actor, faction));
+        }
+        for noise in &me.known.noises {
+            if noise.time < decay.timeout { break };
+            let Some(faction) = self.factions.get_faction(noise.uid) else { continue };
+            threats.push(ScoredThreat::for_noise(me, noise, faction));
+        }
+        let mut hostile = Faction::default();
+        hostile.merge_status(Confidence::High, Valence::Hostile);
+        if let Some(x) = self.factions.guess && x.time >= decay.timeout {
+            threats.push(ScoredThreat::for_guess(x, &hostile));
+        }
+        threats.sort_by_key(|x| time - x.time);
+
+        // Filter to active ones:
 
         let mut hidden_hostile = 0;
         let mut seen_hostile = 0;
@@ -425,16 +551,16 @@ impl ThreatState {
         //
         // Every time we successfully flee from or fight back against all
         // known threats, we end an "epoch" by updating `last_safe`.
-        for x in &self.threats {
+        for x in &threats {
             if x.time <= decay.timeout { break; }
             if x.time <= self.last_safe { break; }
 
             let foe = x.hostile() || x.menacing();
 
-            if foe { self.menacing.push(x.clone()); }
-            if x.hostile() { self.hostile.push(x.clone()); }
-            if x.unknown() { self.unknown.push(x.clone()); }
-            if x.uncertain() { self.uncertain.push(x.clone()); }
+            if foe { self.threats.menacing.push(x.base.clone()); }
+            if x.hostile() { self.threats.hostile.push(x.base.clone()); }
+            if x.unknown() { self.threats.unknown.push(x.base.clone()); }
+            if x.uncertain() { self.threats.uncertain.push(x.base.clone()); }
 
             if foe && !x.seen { hidden_hostile += 1; }
             if foe && x.seen { seen_hostile += 1; }
@@ -443,16 +569,14 @@ impl ThreatState {
         }
 
         // Special case: flee from targets if we've just been scared by them.
-        if panic && self.menacing.is_empty() {
-            self.menacing.extend_from_slice(&self.uncertain);
-            self.menacing.extend_from_slice(&self.unknown);
-            self.menacing.sort_by_key(|x| time - x.time);
+        if panic && self.threats.menacing.is_empty() {
+            self.threats.menacing.extend_from_slice(&self.threats.uncertain);
+            self.threats.menacing.extend_from_slice(&self.threats.unknown);
+            self.threats.menacing.sort_by_key(|x| time - x.time);
 
             self.state = FightOrFlight::Flight;
             self.call_for_help = false;
             self.panicking = true;
-
-            debug_assert!(self.check_invariants());
             return;
         }
 
@@ -464,13 +588,13 @@ impl ThreatState {
         // when we're chasing them and another when we're fleeing from them.
         // See: callers of mark_safe().
         let was_active = self.state != FightOrFlight::Safe;
-        let active = !self.menacing.is_empty();
+        let active = !self.threats.menacing.is_empty();
 
         // While active, also attack / flee from potential enemies.
-        if active && !self.menacing.is_empty() {
-            self.menacing.extend_from_slice(&self.uncertain);
-            self.menacing.extend_from_slice(&self.unknown);
-            self.menacing.sort_by_key(|x| time - x.time);
+        if active && !self.threats.menacing.is_empty() {
+            self.threats.menacing.extend_from_slice(&self.threats.uncertain);
+            self.threats.menacing.extend_from_slice(&self.threats.unknown);
+            self.threats.menacing.sort_by_key(|x| time - x.time);
         }
 
         let mut hidden_count = max(hidden_hostile - seen_hostile, 0);
@@ -478,16 +602,14 @@ impl ThreatState {
         let mut call_strength = team_strength;
         let mut foes_strength = 0.;
 
-        for x in &self.threats {
-            if x.time <= decay.timeout { break; }
-
+        for x in &threats {
             if (x.hostile() || x.menacing()) && x.time > self.last_safe {
                 if !x.seen && hidden_count == 0 { continue; }
                 if !x.seen { hidden_count -= 1; }
                 foes_strength += x.strength(&decay);
             } else if x.friendly() {
                 let value = x.strength(&decay);
-                let decay = (1. - decay.ratio(x.combat)).max(0.);
+                let decay = (1. - decay.ratio(x.faction.last_combat)).max(0.);
                 team_strength += decay * value;
 
                 let recent = x.time > call_limit;
@@ -514,83 +636,5 @@ impl ThreatState {
             self.state = FightOrFlight::Fight;
             self.call_for_help = true;
         }
-
-        debug_assert!(self.check_invariants());
-    }
-
-    fn forget_tid(&mut self, tid: TID) {
-        let Some(handle) = self.threat_index.remove(&tid) else { return };
-        self.threats.remove(handle);
-    }
-
-    fn get_by_actor(&mut self, me: &Actor, other: &ActorKnowledge) -> Option<&mut Threat> {
-        if other.eid == me.eid { return None; }
-
-        let handle = self.get_by_tid(me, TID::UID(other.uid));
-        Some(&mut self.threats[handle])
-    }
-
-    fn get_by_event(&mut self, me: &Actor, event: &Event) -> Option<&mut Threat> {
-        let tid = TID::UID(event.uid);
-
-        if matches!(event.data, EventData::Forget) {
-            self.forget_tid(tid);
-            return None;
-        }
-
-        let handle = self.get_by_tid(me, tid);
-
-        if let Some(x) = event.old && let Some(x) = self.threat_index.remove(&TID::UID(x)) {
-            assert!(handle != x, "{:?} vs. {:?}", event.uid, event.old);
-            let existing = self.threats.remove(x);
-            self.threats[handle].merge_from(&existing);
-        }
-        Some(&mut self.threats[handle])
-    }
-
-    fn get_by_tid(&mut self, me: &Actor, tid: TID) -> ThreatHandle {
-        *self.threat_index.entry(tid).and_modify(|&mut x| {
-            self.threats.move_to_front(x);
-        }).or_insert_with(|| {
-            self.threats.push_front(Threat::prior(me))
-        })
-    }
-
-    fn friendly_call(me: &Actor, x: &CallEvent) -> bool {
-       x.species == me.species
-    }
-
-    fn friendly_call_for_help(me: &Actor, x: &CallEvent) -> bool {
-        x.call == Call::Help && Self::friendly_call(me, x)
-    }
-
-    fn guess_threat_location(&mut self, me: &Actor, event: &Event) {
-        let handle = self.get_by_tid(me, TID::CID);
-
-        let mut attack = event.clone();
-        let data = AttackEvent { combat: true, target: Some(me.eid) };
-        attack.data = EventData::Attack(data);
-
-        let threat = &mut self.threats[handle];
-        threat.update_for_event(me, &attack);
-        threat.hp = 0.;
-    }
-
-    fn check_invariants(&self) -> bool {
-        // Check that threats are sorted by time.
-        let check_sorted = |xs: Vec<Timestamp>| {
-            let mut last = Timestamp::default();
-            xs.into_iter().rev().for_each(|x| { assert!(x >= last); last = x; });
-        };
-        check_sorted(self.threats.iter().map(|x| x.time).collect());
-
-        // Check that every threat is indexed in the index.
-        assert!(self.threats.len() == self.threat_index.len());
-        let mut handles = HashMap::default();
-        for (&tid, &handle) in self.threat_index.iter() {
-            assert!(handles.insert(handle, tid).is_none());
-            let _ = &self.threats[handle];
-        }
-        true
     }
 }
