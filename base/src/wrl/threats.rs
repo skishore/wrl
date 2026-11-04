@@ -142,28 +142,28 @@ impl Threat {
 
     // Status accessors:
 
-    pub fn friendly(&self) -> bool {
+    fn friendly(&self) -> bool {
         self.valence == Valence::Friendly
     }
 
-    pub fn hostile(&self) -> bool {
+    fn hostile(&self) -> bool {
         self.valence == Valence::Hostile
     }
 
-    pub fn menacing(&self) -> bool {
+    fn menacing(&self) -> bool {
         self.valence == Valence::Menacing
     }
 
-    pub fn certain(&self) -> bool {
+    fn certain(&self) -> bool {
         self.confidence == Confidence::High
+    }
+
+    fn unknown(&self) -> bool {
+        self.confidence == Confidence::Zero
     }
 
     pub fn uncertain(&self) -> bool {
         self.confidence == Confidence::Low
-    }
-
-    pub fn unknown(&self) -> bool {
-        self.confidence == Confidence::Zero
     }
 
     pub fn warned(&self) -> bool {
@@ -471,10 +471,6 @@ impl ThreatState {
             self.menacing.extend_from_slice(&self.uncertain);
             self.menacing.extend_from_slice(&self.unknown);
             self.menacing.sort_by_key(|x| time - x.time);
-        }
-        if active && !self.hostile.is_empty() {
-            self.hostile.extend_from_slice(&self.unknown);
-            self.hostile.sort_by_key(|x| time - x.time);
         }
 
         let mut hidden_count = max(hidden_hostile - seen_hostile, 0);

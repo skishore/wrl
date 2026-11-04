@@ -1487,7 +1487,17 @@ fn ListThreatsBySight(ctx: &mut Ctx) {
         if !check_time!(ctx, other.time, MIN_SEARCH_TURNS) { break; }
 
         let (loc, sense) = (other.loc, other.sense);
-        let target = Target { loc, sense, slow: false, sure: other.hostile() };
+        let target = Target { loc, sense, slow: false, sure: true };
+        ctx.tmp.targets.push(target);
+    }
+}
+
+fn ListThreatsBySound(ctx: &mut Ctx) {
+    for other in &ctx.blackboard.threats.unknown {
+        if !check_time!(ctx, other.time, MIN_SEARCH_TURNS) { break; }
+
+        let (loc, sense) = (other.loc, other.sense);
+        let target = Target { loc, sense, slow: false, sure: false };
         ctx.tmp.targets.push(target);
     }
 }
@@ -2309,6 +2319,7 @@ fn FightAgainstThreats() -> impl Bhv {
         run![
             "SelectThreatTarget",
             cond!("ListThreatsBySight", List(ListThreatsBySight)),
+            cond!("ListThreatsBySound", List(ListThreatsBySound)),
             cond!("ListThreatsByScent", List(ListThreatsByScent)),
             cond!("MarkSafeIfLostView", MarkSafeIfLostView),
             cond!("SelectBestTarget", SelectBestTarget),
