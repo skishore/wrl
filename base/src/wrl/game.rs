@@ -483,9 +483,12 @@ impl Board {
         self._lighting.set_light(pos, light);
 
         self.actors.add(args, &mut env.rng);
+        let actor = &mut self.actors[eid];
+        actor.asleep = true;
         self.observe_visible_cells(eid, env);
 
         let actor = &mut self.actors[eid];
+        actor.asleep = false;
         actor.known.mark_turn_boundary(actor.speed, self.time);
     }
 
