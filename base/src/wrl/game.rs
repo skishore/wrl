@@ -587,7 +587,7 @@ impl Board {
     // Knowledge:
 
     fn observe_event(&mut self, eid: EID, senses: &Senses, event: &mut EventSource) {
-        let Some(actor) = self.actors.get_mut(eid) else { return };
+        let Some(actor) = self.actors.get(eid) else { return };
 
         let (heard, seen) = (senses.heard(), senses.seen() && !actor.player);
         if !heard && !seen { return; }
@@ -596,6 +596,14 @@ impl Board {
         event.sense = if seen { Sense::Sight } else { Sense::Sound };
 
         self._update_memory(eid, |known, me, _| known.observe_event(me, *oid, event));
+
+        if let EventData::Call(CallEvent { call: Call::Help(call), .. }) = &event.data {
+            if !self.actors.get(eid).map_or(false, |x| x.ai.accepted_call()) { return; }
+
+            let data = EventData::Threat;
+            let event = &mut create_guess(self, call.eid, event.pos + call.dir, data);
+            self.observe_event(eid, &Senses(SENSE_HEARD), event);
+        }
     }
 
     fn observe_knockout(&mut self, eid: EID, oid: EID, event: &Event) {
@@ -712,10 +720,14 @@ impl Noise {
 }
 
 fn create_event(board: &Board, eid: EID, point: Point, data: EventData) -> EventSource {
+    create_guess(board, Some(eid), point, data)
+}
+
+fn create_guess(board: &Board, eid: Option<EID>, point: Point, data: EventData) -> EventSource {
     let uid = UID(NonZeroU64::new(1).unwrap());
     let loc = Location { pos: point, time: board.time };
     let event = Event { uid, old: None, loc, data, sense: Sense::Sight };
-    EventSource(Some(eid), event)
+    EventSource(eid, event)
 }
 
 fn detect_noise(board: &Board, noise: &Noise, fov: &mut FOV) -> SenseMap {
@@ -1149,7 +1161,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let color = 0xff8000;
             let (text, prefix, suffix, wait) = match call {
                 Call::Command => ("*shout*", "shout", " a command!", false),
-                Call::Help    => ("*chirp*", "call", " for help!", true),
+                Call::Help(_) => ("*chirp*", "call", " for help!", true),
                 Call::Warning => ("*grr*", "growl", "...", false),
             };
 

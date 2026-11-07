@@ -274,6 +274,13 @@ impl<'a> std::ops::Deref for Trace<'a> {
 }
 
 impl<'a> Trace<'a> {
+    pub fn eid(&self) -> Option<EID> {
+        match self {
+            Trace::Actor(x) => Some(x.eid),
+            Trace::Noise(x) => x.eid,
+        }
+    }
+
     pub fn uid(&self) -> UID {
         match self {
             Trace::Actor(x) => x.uid,

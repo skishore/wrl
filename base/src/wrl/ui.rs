@@ -83,7 +83,7 @@ fn describe_noise(x: &NoiseKnowledge) -> &str {
     match sound {
         Sound::Attack              => "something attack!",
         Sound::Call(Call::Command) => "a shout!",
-        Sound::Call(Call::Help)    => "a call for help!",
+        Sound::Call(Call::Help(_)) => "a call for help!",
         Sound::Call(Call::Warning) => "a warning",
         Sound::Move                => "movement",
         Sound::Sniff               => "something hunt!",

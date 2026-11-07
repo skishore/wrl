@@ -91,16 +91,12 @@ impl Faction {
         debug.newline();
     }
 
-    fn known_hostile(&self) -> bool {
-        self.confidence == Confidence::High && self.valence == Valence::Hostile
+    fn accept_call_for_help(me: &Actor, x: &CallEvent) -> bool {
+        matches!(x.call, Call::Help(_)) && Self::friendly_call(me, x)
     }
 
     fn friendly_call(me: &Actor, x: &CallEvent) -> bool {
        x.species == me.species
-    }
-
-    fn friendly_call_for_help(me: &Actor, x: &CallEvent) -> bool {
-        x.call == Call::Help && Self::friendly_call(me, x)
     }
 
     fn mark_scanned(&mut self) {
@@ -163,7 +159,7 @@ impl Faction {
     }
 
     fn update_for_event(&mut self, me: &Actor, event: &Event) {
-        use super::event::Call::*;
+        use super::event::Call;
         use Confidence::*;
         use EventData::*;
         use Valence::*;
@@ -180,12 +176,16 @@ impl Faction {
             Call(x) => {
                 if Self::friendly_call(me, x) {
                     self.merge_status(High, Friendly);
-                } else if x.call == Warning {
+                } else if x.call == Call::Warning {
                     let valence = if timid(me) { Menacing } else { Neutral };
                     self.merge_status(Mid, valence);
                 }
-                if x.call == Help { self.last_combat = event.time; }
+                if matches!(x.call, Call::Help(_)) { self.last_combat = event.time; }
             },
+            Threat => {
+                self.merge_status(Mid, Hostile);
+                self.last_combat = event.time;
+            }
             Attack(_) | Move(_) | Forget | Sniff | Spot => {},
         }
     }
@@ -201,7 +201,6 @@ type FactionHandle = Handle<Faction>;
 struct FactionMap {
     factions: List<Faction>,
     lookup: HashMap<UID, FactionHandle>,
-    guess: Option<Location>,
 }
 
 impl FactionMap {
@@ -218,17 +217,13 @@ impl FactionMap {
     fn observe_event(&mut self, me: &Actor, event: &Event) {
         let Some(faction) = self.faction_for_event(event) else { return };
         faction.update_for_event(me, event);
-        if faction.known_hostile() { self.guess = None; }
     }
 
     fn update(&mut self, me: &Actor) {
         for actor in &me.known.actors {
             if !actor.sensed() { break; }
             if actor.eid == me.eid { continue; }
-
-            let faction = self.faction_for_actor(actor);
-            faction.update_for_actor(me, actor);
-            if faction.known_hostile() { self.guess = None; }
+            self.faction_for_actor(actor).update_for_actor(me, actor);
         }
     }
 
@@ -286,7 +281,7 @@ impl FactionMap {
 
 #[derive(Clone)]
 pub struct Threat {
-    pub uid: Option<UID>,
+    pub uid: UID,
     pub loc: Location,
     pub sense: Sense,
     pub species: Option<&'static Species>,
@@ -307,7 +302,7 @@ impl Threat {
         let warned = faction.warning_count > 0;
         let (asleep, seen) = (actor.asleep(), true);
         let ActorKnowledge { uid, loc, sense, .. } = *actor;
-        Self { uid: Some(uid), loc, sense, species, asleep, warned, seen }
+        Self { uid, loc, sense, species, asleep, warned, seen }
     }
 
     fn for_noise(noise: &NoiseKnowledge, faction: &Faction) -> Self {
@@ -315,13 +310,7 @@ impl Threat {
         let (asleep, seen) = (false, false);
         let warned = faction.warning_count > 0;
         let NoiseKnowledge { uid, loc, sense, .. } = *noise;
-        Self { uid: Some(uid), loc, sense, species, asleep, warned, seen }
-    }
-
-    fn for_guess(loc: Location) -> Self {
-        let species = None;
-        let (asleep, warned, seen) = (false, false, false);
-        Self { uid: None, loc, sense: Sense::Sound, species, asleep, warned, seen }
+        Self { uid, loc, sense, species, asleep, warned, seen }
     }
 }
 
@@ -396,12 +385,6 @@ impl<'a> ScoredThreat<'a> {
         let scoring = Scoring { hp, delta, rival: false };
         Self { base, faction, scoring }
     }
-
-    fn for_guess(loc: Location, faction: &'a Faction) -> Self {
-        let base = Threat::for_guess(loc);
-        let scoring = Scoring { hp: 0., delta: 0, rival: false };
-        Self { base, faction, scoring }
-    }
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -430,6 +413,7 @@ pub struct ThreatState {
     pub panicking: bool,
 
     // Calling for help:
+    pub accepted_call: bool,
     pub call_for_help: bool,
     pub last_call: Timestamp,
 
@@ -444,9 +428,6 @@ impl std::ops::Deref for ThreatState {
 
 impl ThreatState {
     // TODO list for player interactions:
-    //
-    //   - Can we make call-for-help carry information about target EID(s)?
-    //     Seems hard - we can call based on unknown threats.
     //
     //   - Make the our-team-strength logic quadratic in team size.
     //
@@ -487,10 +468,8 @@ impl ThreatState {
     pub fn observe_event(&mut self, me: &Actor, event: &Event) {
         self.factions.observe_event(me, event);
 
-        if let EventData::Call(x) = &event.data && Faction::friendly_call_for_help(me, x) {
-            self.on_call_for_help(me, event.pos, event.time);
-            self.factions.guess = Some(event.loc);
-        }
+        self.accepted_call = matches!(
+                &event.data, EventData::Call(x) if Faction::accept_call_for_help(me, x));
     }
 
     pub fn on_call_for_help(&mut self, me: &Actor, point: Point, time: Timestamp) {
@@ -527,11 +506,6 @@ impl ThreatState {
             if noise.time < timeout { break };
             let Some(faction) = self.factions.get_faction(noise.uid) else { continue };
             threats.push(ScoredThreat::for_noise(me, noise, faction));
-        }
-        let mut hostile = Faction::default();
-        hostile.merge_status(Confidence::High, Valence::Hostile);
-        if let Some(x) = self.factions.guess && x.time >= timeout {
-            threats.push(ScoredThreat::for_guess(x, &hostile));
         }
         threats.sort_by_key(|x| time - x.time);
 
