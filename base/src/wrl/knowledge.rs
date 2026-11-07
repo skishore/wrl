@@ -274,6 +274,13 @@ impl<'a> std::ops::Deref for Trace<'a> {
 }
 
 impl<'a> Trace<'a> {
+    pub fn eid(&self) -> Option<EID> {
+        match self {
+            Trace::Actor(x) => Some(x.eid),
+            Trace::Noise(x) => x.eid,
+        }
+    }
+
     pub fn uid(&self) -> UID {
         match self {
             Trace::Actor(x) => x.uid,
@@ -398,6 +405,7 @@ impl Knowledge {
 
     pub fn observe_event(&mut self, me: &Actor, eid: Option<EID>, event: &Event) {
         use TraceHandle::*;
+        assert!(eid != Some(me.eid));
         let mut cloned = event.clone();
         let trace = self.ensure_trace(me, eid, &mut cloned);
 
@@ -412,6 +420,7 @@ impl Knowledge {
 
     pub fn observe_knockout(&mut self, me: &Actor, eid: EID, event: &Event) {
         use TraceHandle::*;
+        assert!(eid != me.eid);
         let mut cloned = event.clone();
         let Some(trace) = self.lookup_trace(me, eid, &mut cloned) else { return };
 
