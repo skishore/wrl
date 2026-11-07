@@ -17,10 +17,11 @@ use super::time::Timestamp;
 
 //////////////////////////////////////////////////////////////////////////////
 
-pub const ACTIVE_THREAT_TURNS: i32 = 72;
+const ACTIVE_FRIEND_TURNS: i32 = 36;
+const ACTIVE_THREAT_TURNS: i32 = 72;
 
-pub const CALL_LIMIT_TURNS: i32 = 4;
-pub const CALL_RETRY_TURNS: i32 = 16;
+const CALL_LIMIT_TURNS: i32 = 4;
+const CALL_RETRY_TURNS: i32 = 16;
 
 const PENALTY_DECAY: f64 = 0.5;
 const PENALTY_RANGE: Range<f64> = 2.0..4.0;
@@ -444,19 +445,10 @@ impl std::ops::Deref for ThreatState {
 impl ThreatState {
     // TODO list for player interactions:
     //
-    //   - We can turn the "scan unknown noise" subtree into just the first
-    //     watch period for the first warning. ("auto-warn" unknown threats.)
-    //
-    //   - We should only update our valence after a warning after the watch
-    //     period is complete.
-    //
     //   - Can we make call-for-help carry information about target EID(s)?
     //     Seems hard - we can call based on unknown threats.
     //
     //   - Make the our-team-strength logic quadratic in team size.
-    //
-    //   - We currently count friendlies that we haven't seen for, say, 18
-    //     turns as an ally with weight 0.75 - that's too high.
     //
     //   - When an actor is in combat it should prioritize threats that can
     //     hurt it (right now a predator may attack us even when it's under
@@ -517,26 +509,28 @@ impl ThreatState {
         self.threats = Default::default();
 
         let time = me.known.time();
-        let decay = TimeDecay::new(me, ACTIVE_THREAT_TURNS);
         let call_limit = me.known.time_at_turn(CALL_LIMIT_TURNS);
         let call_retry = me.known.time_at_turn(CALL_RETRY_TURNS);
+        let friend_decay = TimeDecay::new(me, ACTIVE_FRIEND_TURNS);
+        let threat_decay = TimeDecay::new(me, ACTIVE_THREAT_TURNS);
+        let timeout = threat_decay.timeout;
 
         // List all threats:
 
         let mut threats = vec![];
         for actor in &me.known.actors {
-            if actor.time < decay.timeout { break };
+            if actor.time < timeout { break };
             let Some(faction) = self.factions.get_faction(actor.uid) else { continue };
             threats.push(ScoredThreat::for_actor(actor, faction));
         }
         for noise in &me.known.noises {
-            if noise.time < decay.timeout { break };
+            if noise.time < timeout { break };
             let Some(faction) = self.factions.get_faction(noise.uid) else { continue };
             threats.push(ScoredThreat::for_noise(me, noise, faction));
         }
         let mut hostile = Faction::default();
         hostile.merge_status(Confidence::High, Valence::Hostile);
-        if let Some(x) = self.factions.guess && x.time >= decay.timeout {
+        if let Some(x) = self.factions.guess && x.time >= timeout {
             threats.push(ScoredThreat::for_guess(x, &hostile));
         }
         threats.sort_by_key(|x| time - x.time);
@@ -552,7 +546,6 @@ impl ThreatState {
         // Every time we successfully flee from or fight back against all
         // known threats, we end an "epoch" by updating `last_safe`.
         for x in &threats {
-            if x.time <= decay.timeout { break; }
             if x.time <= self.last_safe { break; }
 
             let foe = x.hostile() || x.menacing();
@@ -565,7 +558,7 @@ impl ThreatState {
             if foe && !x.seen { hidden_hostile += 1; }
             if foe && x.seen { seen_hostile += 1; }
 
-            panic |= x.uncertain() && x.penalty_strength(&decay) > 0.;
+            panic |= x.uncertain() && x.penalty_strength(&threat_decay) > 0.;
         }
 
         // Special case: flee from targets if we've just been scared by them.
@@ -606,10 +599,10 @@ impl ThreatState {
             if (x.hostile() || x.menacing()) && x.time > self.last_safe {
                 if !x.seen && hidden_count == 0 { continue; }
                 if !x.seen { hidden_count -= 1; }
-                foes_strength += x.strength(&decay);
+                foes_strength += x.strength(&threat_decay);
             } else if x.friendly() {
-                let value = x.strength(&decay);
-                let decay = (1. - decay.ratio(x.faction.last_combat)).max(0.);
+                let value = x.strength(&friend_decay);
+                let decay = (1. - friend_decay.ratio(x.faction.last_combat)).max(0.);
                 team_strength += decay * value;
 
                 let recent = x.time > call_limit;
