@@ -610,33 +610,42 @@ fn LookForThreats(ctx: &mut Ctx) -> Option<Action> {
     StartScan(ctx, ScanKind::Flight, &dirs)
 }
 
-fn WarnRecentThreats(ctx: &mut Ctx) -> Option<Action> {
+fn ScanPotentialThreat(ctx: &mut Ctx) -> Option<Action> {
     let bb = &mut ctx.blackboard;
     let Ctx { known, pos, .. } = *ctx;
     let limit = known.time_at_turn(WARNING_LIMIT_TURNS);
-    let stare = bb.last_warn > known.time_at_turn(WARNING_RETRY_TURNS);
-    let (mut call, mut scan) = (None, None);
+    let retry = known.time_at_turn(WARNING_RETRY_TURNS);
+    if bb.last_warn <= retry { return None; }
 
     for threat in &bb.threats.uncertain {
         if threat.time <= limit { break; }
 
         if !WithinCallRange(pos, threat.pos) { continue; }
 
-        let look = threat.pos - pos;
-        let warn = !stare && (!threat.warned || threat.time == known.time());
-
-        if warn {
-            call.get_or_insert((threat.uid, Action::Call { look, call: Call::Warning }));
-        } else if stare {
-            scan.get_or_insert(Action::Look { look });
-        }
+        return Some(Action::Look { look: threat.pos - pos });
     }
+    None
+}
 
-    let Some((uid, call)) = call else { return scan };
+fn WarnPotentialThreat(ctx: &mut Ctx) -> Option<Action> {
+    let bb = &mut ctx.blackboard;
+    let Ctx { known, pos, me, .. } = *ctx;
+    let limit = known.time_at_turn(WARNING_LIMIT_TURNS);
+    let retry = known.time_at_turn(WARNING_RETRY_TURNS);
+    if bb.last_warn > retry { return None; }
 
-    bb.threats.mark_warned(ctx.me, uid, ctx.env.rng);
-    bb.last_warn = known.time();
-    Some(call)
+    for threat in &bb.threats.uncertain {
+        if threat.time <= limit { break; }
+
+        if !WithinCallRange(pos, threat.pos) { continue; }
+        if threat.warned && threat.time < known.time() { continue; }
+
+        let look = threat.pos - pos;
+        bb.last_warn = known.time();
+        bb.threats.mark_warned(me, threat.uid, ctx.env.rng);
+        return Some(Action::Call { look, call: Call::Warning });
+    }
+    None
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -1194,12 +1203,13 @@ struct AttackRequest { choice: Choice, target: Point }
 // Target selection:
 
 fn AttackEnemy(ctx: &mut Ctx) -> Option<AttackRequest> {
+    let known = ctx.known;
     let state = ctx.blackboard.target.as_ref()?;
     let target = state.target.pos;
 
     if !state.target.sure { return None; }
-    if state.target.time != ctx.known.time() { return None; }
-    if !ctx.known.get(target).visible() { return None; }
+    if state.target.time < known.time() { return None; }
+    if !known.get(target).visible() { return None; }
 
     let attack = state.attack.or_else(|| choose_random_attack(ctx))?;
     Some(AttackRequest { choice: Choice::Attack(attack), target })
@@ -2259,7 +2269,15 @@ fn InvestigateNoises() -> impl Bhv {
 }
 
 fn WarnOffThreats() -> impl Bhv {
-    act!("WarnOffThreats", WarnRecentThreats)
+    seq![
+        "WarnOffThreats",
+        cond!("HasPotentialThreat", |x| !x.blackboard.threats.uncertain.is_empty()),
+        pri![
+            "WarnPotentialThreats",
+            act!("WarnPotentialThreat", WarnPotentialThreat),
+            act!("ScanPotentialThreat", ScanPotentialThreat),
+        ],
+    ]
 }
 
 fn LookForLastTarget() -> impl Bhv {
