@@ -617,8 +617,6 @@ fn WarnRecentThreats(ctx: &mut Ctx) -> Option<Action> {
     let stare = bb.last_warn > known.time_at_turn(WARNING_RETRY_TURNS);
     let (mut call, mut scan) = (None, None);
 
-    let mut warned = vec![];
-
     for threat in &bb.threats.uncertain {
         if threat.time <= limit { break; }
 
@@ -628,17 +626,17 @@ fn WarnRecentThreats(ctx: &mut Ctx) -> Option<Action> {
         let warn = !stare && (!threat.warned || threat.time == known.time());
 
         if warn {
-            call.get_or_insert(Action::Call { look, call: Call::Warning });
+            call.get_or_insert((threat.uid, Action::Call { look, call: Call::Warning }));
         } else if stare {
             scan.get_or_insert(Action::Look { look });
         }
-        if warn { bb.last_warn = known.time(); }
-        if warn { warned.push(threat.uid); }
     }
-    for uid in warned {
-        bb.threats.mark_warned(ctx.me, uid, ctx.env.rng);
-    }
-    call.or(scan)
+
+    let Some((uid, call)) = call else { return scan };
+
+    bb.threats.mark_warned(ctx.me, uid, ctx.env.rng);
+    bb.last_warn = known.time();
+    Some(call)
 }
 
 //////////////////////////////////////////////////////////////////////////////
