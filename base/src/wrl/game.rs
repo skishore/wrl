@@ -1009,7 +1009,7 @@ fn advance_turn(board: &mut Board) -> Option<EID> {
         if actor.turn_timer > 0 { actor.turn_timer -= delta; }
 
         if actor.eid != eid { continue; }
-        actor.known.cleanup_old_events(actor.player, time);
+        actor.known.cleanup_old_events(actor.player);
     }
 
     board.active_actor = Some(eid);
