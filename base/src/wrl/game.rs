@@ -597,14 +597,6 @@ impl Board {
         event.sense = if seen { Sense::Sight } else { Sense::Sound };
 
         self._update_memory(eid, |known, me, _| known.observe_event(me, *oid, event));
-
-        if let EventData::Call(CallEvent { call: Call::Help(call), .. }) = &event.data {
-            if !self.actors.get(eid).map_or(false, |x| x.ai.accepted_call()) { return; }
-
-            let data = EventData::Threat;
-            let event = &mut create_guess(self, call.eid, event.pos + call.dir, data);
-            self.observe_event(eid, &Senses(SENSE_HEARD), event);
-        }
     }
 
     fn observe_knockout(&mut self, eid: EID, oid: EID, event: &mut Event) {
@@ -1103,9 +1095,11 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let board = &mut state.board;
             let sightings = get_sightings(board, &noise, &mut state.env.fov);
 
-            // Deliver a SniffEvent to each other actor that heard the sniff.
+            // Create a sniff event, because hunting makes noise.
             let data = EventData::Sniff;
             let event = &mut create_event(board, eid, source, data);
+
+            // Deliver the sniff event to any actor that saw or heard it.
             for s in &sightings {
                 board.observe_event(s.eid, &s.merged, event);
                 if s.eid != state.player { continue; }
@@ -1170,11 +1164,28 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 Call::Warning => ("*grr*", "growl", "...", false),
             };
 
-            // Deliver a CallEvent to each other actor that heard the call.
+            // Create a call event, and, for calls-for-help, a threat ping.
+            let mut threat = if let Call::Help(call) = call {
+                let data = EventData::Threat;
+                Some(&mut create_guess(board, call.eid, call.dir + source, data))
+            } else {
+                None
+            };
             let data = EventData::Call(CallEvent { call, species });
             let event = &mut create_event(board, eid, source, data);
+
+            // Deliver the call event to any actor that heard it.
+            //
+            // If it was a call-for-help, and if that actor accepted the call,
+            // then additionally deliver the threat location ping.
             for s in &sightings {
                 board.observe_event(s.eid, &s.merged, event);
+
+                if let Some(threat) = &mut threat && event.event.uid.is_some() &&
+                   board.actors.get(s.eid).map_or(false, |x| x.ai.accepted_call()) {
+                    board.observe_event(s.eid, &Senses(SENSE_HEARD), threat);
+                }
+
                 if s.eid != state.player { continue; }
 
                 let seen = s.source.seen();
