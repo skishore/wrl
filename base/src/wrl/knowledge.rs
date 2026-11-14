@@ -385,9 +385,7 @@ impl Knowledge {
 
     // Writes:
 
-    pub fn cleanup_old_events(&mut self, player: bool, time: Timestamp) {
-        self.timer.update(time);
-
+    pub fn cleanup_old_events(&mut self, player: bool) {
         self.forget_old_noises(player);
         self.forget_old_scents();
 
@@ -399,8 +397,6 @@ impl Knowledge {
     }
 
     pub fn observe_event(&mut self, me: &Actor, eid: Option<EID>, event: &Event) {
-        self.timer.update(event.time);
-
         use TraceHandle::*;
         let mut cloned = event.clone();
         let trace = self.ensure_trace(me, eid, &mut cloned);
@@ -415,8 +411,6 @@ impl Knowledge {
     }
 
     pub fn observe_knockout(&mut self, me: &Actor, eid: EID, event: &Event) {
-        self.timer.update(event.time);
-
         use TraceHandle::*;
         let mut cloned = event.clone();
         let Some(trace) = self.lookup_trace(me, eid, &mut cloned) else { return };
