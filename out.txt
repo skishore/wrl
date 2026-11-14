@@ -2377,7 +2377,7 @@ Turn 123:
   EID 18 @ Point(24, 92): Rest
   EID 24 @ Point(75, 22): Rest
   EID 26 @ Point(16, 82): Rest
-  EID 17 @ Point(63, 35): Call { look: Delta(1, -3), call: Help(CallForHelp { dir: Delta(1, -3), eid: Some(EID(11)) }) }
+  EID 17 @ Point(63, 35): Help { look: Delta(1, -3), dir: Delta(1, -3), uid: UID(8) }
   EID 21 @ Point(65, 46): Move { look: Delta(-1, -8), step: Delta(0, -1), turns: 1.0 }
   EID  9 @ Point(49, 95): Move { look: Delta(-3, 0), step: Delta(-1, 0), turns: 3.0 }
   EID 11 @ Point(64, 32): Move { look: Delta(-1, 8), step: Delta(0, 1), turns: 3.0 }
@@ -3098,7 +3098,7 @@ Turn 159:
   EID 18 @ Point(24, 92): Rest
   EID 24 @ Point(75, 22): Rest
   EID 26 @ Point(16, 82): Rest
-  EID 23 @ Point(65, 36): Call { look: Delta(0, -13), call: Help(CallForHelp { dir: Delta(0, -13), eid: Some(EID(8)) }) }
+  EID 23 @ Point(65, 36): Help { look: Delta(0, -13), dir: Delta(0, -13), uid: UID(15) }
   EID  9 @ Point(36, 89): Move { look: Delta(-2, -1), step: Delta(-1, -1), turns: 3.0 }
   EID 20 @ Point(51, 56): Rest
   EID 12 @ Point(70, 79): Move { look: Delta(2, 8), step: Delta(1, 1), turns: 3.0 }
@@ -7846,7 +7846,7 @@ Turn 424:
   EID 24 @ Point(58, 56): Look { look: Delta(-31, 94) }
   EID 11 @ Point(38, 19): Look { look: Delta(8, -99) }
   EID 16 @ Point(28, 46): Move { look: Delta(1, -7), step: Delta(0, -1), turns: 3.0 }
-  EID 12 @ Point(52, 69): Call { look: Delta(3, 10), call: Help(CallForHelp { dir: Delta(3, 10), eid: Some(EID(23)) }) }
+  EID 12 @ Point(52, 69): Help { look: Delta(3, 10), dir: Delta(3, 10), uid: UID(13) }
   EID 23 @ Point(59, 78): Look { look: Delta(-59, 80) }
 Turn 425:
   EID 14 @ Point(64, 75): Move { look: Delta(2, -2), step: Delta(1, -1), turns: 1.0 }
@@ -8181,7 +8181,7 @@ Turn 444:
   EID 12 @ Point(53, 70): Rest
   EID 16 @ Point(33, 38): Move { look: Delta(3, -2), step: Delta(1, 0), turns: 3.0 }
 Turn 445:
-  EID 14 @ Point(61, 55): Call { look: Delta(-10, 2), call: Help(CallForHelp { dir: Delta(-10, 2), eid: Some(EID(20)) }) }
+  EID 14 @ Point(61, 55): Help { look: Delta(-10, 2), dir: Delta(-10, 2), uid: UID(17) }
   EID 24 @ Point(49, 56): Move { look: Delta(-8, 3), step: Delta(-1, 1), turns: 3.0 }
   EID  9 @ Point(51, 82): Move { look: Delta(6, -1), step: Delta(1, 0), turns: 3.0 }
   EID 26 @ Point(14, 80): Move { look: Delta(6, -8), step: Delta(1, -1), turns: 3.0 }
@@ -14302,7 +14302,7 @@ Turn 793:
   EID 26 @ Point(53, 92): Move { look: Delta(-8, 2), step: Delta(-1, 0), turns: 3.0 }
   EID 25 @ Point(17, 55): Rest
   EID 12 @ Point(53, 70): Rest
-  EID 24 @ Point(78, 72): Call { look: Delta(-8, -6), call: Help(CallForHelp { dir: Delta(-8, -6), eid: Some(EID(10)) }) }
+  EID 24 @ Point(78, 72): Help { look: Delta(-8, -6), dir: Delta(-8, -6), uid: UID(20) }
   EID 22 @ Point(47, 10): Move { look: Delta(0, -2), step: Delta(0, -1), turns: 3.0 }
   EID 20 @ Point(54, 60): Rest
   EID 14 @ Point(42, 59): Rest
