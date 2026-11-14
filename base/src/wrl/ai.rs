@@ -1786,27 +1786,22 @@ fn SelectReturnTarget(ctx: &mut Ctx) -> Option<AttackRequest> {
 fn SelectPointTarget(ctx: &mut Ctx) -> Option<AttackRequest> {
     let command = ctx.me.command.as_ref()?;
     let Command::Attack(attack, target) = command else { return None };
-    if target.eid.is_some() { return None; }
+    if target.uid.is_some() { return None; }
 
     Some(AttackRequest { choice: Choice::Attack(attack), target: target.loc.pos })
 }
 
 fn SelectEnemyTarget(ctx: &mut Ctx) -> bool {
     let Some(Command::Attack(attack, target)) = &ctx.me.command else { return false };
-    let Some(eid) = target.eid else { return false };
+    let Some(uid) = target.uid else { return false };
+    let Some(trace) = ctx.known.trace(uid) else { return false };
 
-    let other = ctx.known.actor(eid);
-    let other = other.filter(|x| x.time >= target.loc.time);
+    let time = trace.time;
+    if !check_time!(ctx, time, MIN_SEARCH_TURNS) { return false; }
 
-    let loc = other.map_or(target.loc, |x| x.loc);
-    let sense = other.map_or(Sense::Sound, |x| x.sense);
-
-    if target.seen && other.is_none() { return false; }
-    if !check_time!(ctx, loc.time, MIN_SEARCH_TURNS) { return false; }
-
-    if !target.seen && other.is_some() { ctx.update.push(Update::TargetSeen); }
-
-    let target = Target { loc, sense, slow: false, sure: other.is_some() };
+    let sense = trace.sense();
+    let loc = Location { pos: trace.pos, time };
+    let target = Target { loc, sense, slow: false, sure: true };
     SetChaseTarget(ctx, target, Some(attack));
     true
 }
@@ -2499,7 +2494,7 @@ fn Root() -> impl Bhv {
 // Entry point:
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-pub enum Update { CommandFailure, CommandSuccess, TargetSeen }
+pub enum Update { CommandFailure, CommandSuccess }
 
 pub struct AIEnv<'a> {
     pub leader: Option<&'a Actor>,

@@ -14,7 +14,7 @@ use crate::base::point::{Bound, Delta, DeltaLOS, LOS, Matrix, Point, dirs};
 use crate::base::util::{HashMap, HashSet, RNG, sample, weighted};
 use crate::base::vision::{INITIAL_VISIBILITY, VISIBILITY_LOSSES, Vision, VisionArgs};
 
-use super::actor::{Actor, ActorArgs, ActorMap, Command, Individual, EID, Teammate};
+use super::actor::{Actor, ActorArgs, ActorMap, AttackTarget, Command, Individual, EID, Teammate};
 use super::ai::{AIEnv, AIState, Update};
 use super::dex::{Attack, Range, Species};
 use super::debug::DebugFile;
@@ -603,12 +603,6 @@ impl Board {
         event.reset();
         if eid == oid { return; }
         self._update_memory(eid, |known, me, _| known.observe_knockout(me, oid, event));
-
-        // TODO: When attacks are keyed by UID, do this step in _update_memory.
-        let Some(actor) = self.actors.get_mut(eid) else { return };
-        if let Some(Command::Attack(_, x)) = actor.command && x.eid == Some(oid) {
-            actor.command = None;
-        }
     }
 
     fn observe_visible_cells(&mut self, eid: EID, env: &mut Env) {
@@ -786,7 +780,6 @@ fn apply_update(state: &mut State, eid: EID, update: Update) {
             me.command = None;
         }
         CommandFailure | CommandSuccess => me.command = None,
-        TargetSeen => if let Some(Command::Attack(_, x)) = &mut me.command { x.seen = true; },
     }
 }
 
@@ -872,32 +865,55 @@ fn hit_actor(state: &mut State, eid: EID, tid: EID, attack: &Attack, logged: boo
     }
 }
 
-fn shout(state: &mut State, eid: EID, shout: &str, suffix: &str) {
+fn shout(state: &mut State, eid: EID, message: &str, command: Option<(EID, &Command)>) {
     let board = &mut state.board;
     let Actor { pos: source, player, species, .. } = board.actors[eid];
     let noise = Noise::from_eid(eid, source, CALL_VOLUME);
     let sightings = get_sightings(board, &noise, &mut state.env.fov);
 
-    let log = &mut state.env.ui.log;
-    if player && suffix.is_empty() {
-        log.log_success(format!("You shout: \"{}\"", shout));
-    } else if player {
-        log.log_failure(format!("You shout: \"{}\"{}", shout, suffix));
-    }
-
     // Create a call event that carries species info.
     let data = EventData::Call(CallEvent { call: Call::Command, species });
     let event = &mut create_event(board, eid, source, data);
 
+    // For attack commands, also create a threat ping for the target.
+    let mut threat = match command {
+        Some((_, Command::Attack(_, AttackTarget { uid: Some(uid), loc }))) => {
+            let eid = board.actors[eid].known.trace(*uid).and_then(|x| x.eid());
+            Some(&mut create_guess(board, eid, loc.pos, EventData::Threat))
+        }
+        _ => None,
+    };
+    let mut delivered = false;
+
     // Deliver the CallEvent to each other actor that heard the shout.
     for s in &sightings {
         board.observe_event(s.eid, &s.merged, event);
+
+        // For attack commands, deliver a threat ping and target its UID.
+        if event.event.uid.is_some() && let Some((oid, command)) = command && s.eid == oid {
+            let mut command = command.clone();
+            if let Command::Attack(_, target) = &mut command {
+                target.uid = threat.as_mut().and_then(
+                    |x| { board.observe_event(oid, &Senses(SENSE_HEARD), x); x.event.uid });
+            }
+            board.actors[oid].command = Some(command);
+            delivered = true;
+        }
+
         if s.eid != state.player { continue; }
 
         let log = &mut state.env.ui.log;
         let actor = &board.actors[eid];
         let source = if s.merged.seen() { actor.upper() } else { "Someone".into() };
-        log.log_notable(format!("{} shouts: \"{}\"", source, shout));
+        log.log_notable(format!("{} shouts: \"{}\"", source, message));
+    }
+
+    // The player won't get an event when they shout. Log here instead.
+    let log = &mut state.env.ui.log;
+    if player && command.is_some() && !delivered {
+        log.log_failure(format!("You shout: \"{}\", but they do not hear.", message));
+    } else if player {
+        log.log_success(format!("You shout: \"{}\"", message));
     }
 }
 
@@ -963,7 +979,7 @@ fn try_switch(state: &mut State, eid: EID, oid: EID, team: usize, quiet: bool) -
 
     if !quiet {
         let (old, new) = (summon.upper(), ind.desc());
-        shout(state, eid, &format!("{}, return! Go, {}!", old, new), "");
+        shout(state, eid, &format!("{}, return! Go, {}!", old, new), None);
     }
 
     let recall: CB = Box::new(move |x| x.board.remove_actor(oid));
@@ -1300,11 +1316,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let sightings = merge_views(board, &saw_source, &saw_target);
 
             // Deliver an AttackEvent to each other actor that heard the attack.
-            //
-            // TODO: Also deliver an event revealing the targeted actor.
-            // Maybe also do this for warnings, and calls for help? As-is, if
-            // we identify an actor and it then attacks / warns / etc. we may
-            // completely ignore those events.
+            // TODO: Maybe also deliver an event revealing the targeted actor?
             let combat = tid.is_some();
             let data = EventData::Attack(AttackEvent { combat, target: None });
             let event = &mut create_event(board, eid, source, data);
@@ -1399,7 +1411,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let index = me.summons.len();
             let cb: CB = Box::new(move |x| summon_actor(x, eid, target, index, team));
 
-            shout(state, eid, &format!("Go, {}!", x.desc()), "");
+            shout(state, eid, &format!("Go, {}!", x.desc()), None);
 
             let effect = effect::SummonEffect(source, target);
             state.add_effect(apply_effect(effect, FT::Summon, cb));
@@ -1409,30 +1421,6 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let summon = me.summons.get(summon);
             let Some(&oid) = summon else { return ActionResult::failure() };
 
-            let summon = &state.board.actors[oid];
-            let name = summon.upper();
-
-            let succeed = |state: &mut State, suffix: &str| {
-                let command = match command {
-                    Command::Attack(attack, target) => {
-                        let foe = target.eid.and_then(|x| state.board.actors.get(x));
-                        if let Some(foe) = foe.map(|x| x.species.name) {
-                            format!("{}, attack {} with {}!", name, foe, attack.name)
-                        } else {
-                            format!("{}, use {}!", name, attack.name)
-                        }
-                    },
-                    Command::Return | Command::Switch(_) => format!("{}, return!", name),
-                };
-                shout(state, eid, &command, suffix);
-                ActionResult::success()
-            };
-
-            if !CALL_VOLUME.contains(summon.pos - source) {
-                let suffix = format!(", but {} is too far away to hear.", name);
-                return succeed(state, &suffix);
-            }
-
             let done = match command {
                 Command::Attack(..) => false,
                 Command::Return => try_recall(state, eid, oid, /*quiet=*/false),
@@ -1440,10 +1428,23 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             };
             if done { return ActionResult::success(); }
 
-            let summon = &mut state.board.actors[oid];
-            summon.command = Some(command);
-
-            succeed(state, "")
+            let name = &state.board.actors[oid].upper();
+            let message = match command {
+                Command::Attack(attack, target) => {
+                    let me = &state.board.actors[eid];
+                    let foe = target.uid.and_then(|x| me.known.trace(x));
+                    if let Some(foe) = foe.and_then(|x| x.actor()).map(|x| x.species.name) {
+                        format!("{}, attack {} with {}!", name, foe, attack.name)
+                    } else if target.uid.is_some() {
+                        format!("{}, attack with {}!", name, attack.name)
+                    } else {
+                        format!("{}, use {}!", name, attack.name)
+                    }
+                },
+                Command::Return | Command::Switch(_) => format!("{}, return!", name),
+            };
+            shout(state, eid, &message, Some((oid, &command)));
+            ActionResult::success()
         }
     }
 }

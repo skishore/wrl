@@ -10,7 +10,7 @@ use crate::base::util::{HashMap, RNG, sample};
 
 use super::ai::AIState;
 use super::dex::{Attack, Species};
-use super::event::Location;
+use super::event::{Location, UID};
 use super::game::MOVE_TIMER;
 use super::knowledge::Knowledge;
 
@@ -27,9 +27,8 @@ const SCENT_BASE: f64 = 0.25;
 
 #[derive(Clone, Copy, Debug)]
 pub struct AttackTarget {
-    pub eid: Option<EID>,
+    pub uid: Option<UID>,
     pub loc: Location,
-    pub seen: bool,
 }
 
 #[derive(Clone, Copy, Debug)]

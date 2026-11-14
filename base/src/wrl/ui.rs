@@ -332,10 +332,10 @@ fn update_target(me: &Actor, target: &mut Target, update: Point) {
         }
         TargetData::Attack { .. } => {
             let cell = known.get(update);
-            if !cell.visible() {
-                target.error = "You can't see a clear path there.".into();
-            } else if let Some(x) = cell.actor() && x.friend() {
+            if let Some(x) = cell.trace() && !can_target_trace(me, &x) {
                 target.error = "That target is friendly.".into();
+            } else if !cell.visible() && !cell.noise().is_some() {
+                target.error = "You can't see a clear path there.".into();
             }
             let okay = target.error.is_empty();
             target.okay_until = if okay { target.path.len() } else { 0 };
@@ -385,10 +385,9 @@ fn select_valid_target(ui: &mut UI, me: &Actor) -> Option<UID> {
             if can_target_trace(me, &trace) { Some(trace.uid()) } else { None }
         }
         &TargetData::Attack { summon, attack } => {
-            let seen = false;
-            let eid = actor.map(|x| x.eid);
+            let uid = trace.as_ref().map(|x| x.uid());
             let loc = Location { pos: target.target, time: me.known.time() };
-            let command = Command::Attack(attack, AttackTarget { eid, loc, seen });
+            let command = Command::Attack(attack, AttackTarget { uid, loc });
             ui.action = Some(Action::Shout { summon, command });
 
             let trace = trace?;
@@ -892,15 +891,9 @@ impl UI {
         let focus = self.focus.and_then(|x| known.trace(x));
         if focus.is_none() { self.focus = None; }
 
-        // TODO: The code below uses a hack to clean up noise targets if an
-        // if an entity moves into that cell. Instead, the player's Knowledge
-        // update should apply this check.
-        //
-        // TODO: Attacking a noise source doesn't work correctly; it targets
-        // the cell, not the entity.
-        //
-        // TODO: We should probably be able to attack noise sources even if
-        // we don't have a clear line-of-sight to them.
+        // TODO: The code below uses a hack to clean up noise targets if we
+        // later learn that that cell is unoccupied. Instead, we could have
+        // the player's Knowledge do that check and clean them up.
         let focus = focus.filter(|x| match x {
             Trace::Noise(x) => can_target_noise(me, x),
             Trace::Actor(_) => true,

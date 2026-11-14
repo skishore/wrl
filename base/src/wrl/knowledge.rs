@@ -288,6 +288,13 @@ impl<'a> Trace<'a> {
         }
     }
 
+    pub fn sense(&self) -> Sense {
+        match self {
+            Trace::Actor(x) => x.sense,
+            Trace::Noise(x) => x.sense,
+        }
+    }
+
     pub fn actor(&self) -> Option<&'a ActorKnowledge> {
         if let Trace::Actor(x) = self { Some(x) } else { None }
     }
