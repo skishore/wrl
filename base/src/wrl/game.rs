@@ -20,7 +20,7 @@ use super::dex::{Attack, Range, Species};
 use super::debug::DebugFile;
 use super::effect::{CB, Effect, Frame, FT, Particle, ParticleData, self};
 use super::event::{Call, Location, Sense};
-use super::event::{AttackEvent, CallEvent, Event, EventData, MoveEvent};
+use super::event::{AttackEvent, CallEvent, Event, EventData, MoveEvent, UID};
 use super::knowledge::Knowledge;
 use super::mapgen::mapgen_with_size as mapgen;
 use super::time::{Timedelta, Timestamp};
@@ -1033,6 +1033,7 @@ pub enum Action {
     Drink { dir: Delta },
     Eat { dir: Delta, item: Option<Item> },
     Call { look: Delta, call: Call },
+    Help { look: Delta, dir: Delta, uid: UID },
     Move { look: Delta, step: Delta, turns: f64 },
     Attack { target: Point, attack: &'static Attack },
     Recall { summon: usize },
@@ -1150,7 +1151,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             state.add_effect(apply_flash(source, target, color, Some(cb)));
             ActionResult::success()
         }
-        Action::Call { call, look } => {
+        Action::Call { look, .. } | Action::Help { look, .. } => {
             let species = me.species;
             let noise = Noise::from_actor(me, CALL_VOLUME);
             let board = &mut state.board;
@@ -1158,18 +1159,21 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
 
             // The callout text depends on the call type.
             let color = 0xff8000;
+            let call = if let Action::Call { call, .. } = action { call } else { Call::Help };
             let (text, prefix, suffix, wait) = match call {
+                Call::Help    => ("*chirp*", "call", " for help!", true),
                 Call::Command => ("*shout*", "shout", " a command!", false),
-                Call::Help(_) => ("*chirp*", "call", " for help!", true),
                 Call::Warning => ("*grr*", "growl", "...", false),
             };
 
             // Create a call event, and, for calls-for-help, a threat ping.
-            let mut threat = if let Call::Help(call) = call {
-                let data = EventData::Threat;
-                Some(&mut create_guess(board, call.eid, call.dir + source, data))
-            } else {
-                None
+            let mut threat = match action {
+                Action::Help { dir, uid, .. } => {
+                    let pos = dir + source;
+                    let eid = board.actors[eid].known.trace(uid).and_then(|x| x.eid());
+                    Some(&mut create_guess(board, eid, pos, EventData::Threat))
+                }
+                _ => None,
             };
             let data = EventData::Call(CallEvent { call, species });
             let event = &mut create_event(board, eid, source, data);

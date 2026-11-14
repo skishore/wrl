@@ -92,7 +92,7 @@ impl Faction {
     }
 
     fn accept_call_for_help(me: &Actor, x: &CallEvent) -> bool {
-        matches!(x.call, Call::Help(_)) && Self::friendly_call(me, x)
+        matches!(x.call, Call::Help) && Self::friendly_call(me, x)
     }
 
     fn friendly_call(me: &Actor, x: &CallEvent) -> bool {
@@ -180,7 +180,7 @@ impl Faction {
                     let valence = if timid(me) { Menacing } else { Neutral };
                     self.merge_status(Mid, valence);
                 }
-                if matches!(x.call, Call::Help(_)) { self.last_combat = event.time; }
+                if matches!(x.call, Call::Help) { self.last_combat = event.time; }
             },
             Threat => {
                 self.merge_status(Mid, Hostile);

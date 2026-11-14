@@ -22,7 +22,7 @@ use super::actor::{Actor, Command};
 use super::bhv::{Bhv, BhvExt, Result};
 use super::debug::{DebugFile, DebugLine, DebugLog};
 use super::dex::{Attack, Range, Species};
-use super::event::{Call, CallForHelp, Event, Location, Sense};
+use super::event::{Call, Event, Location, Sense};
 use super::game::{Action, Item, TileFlags, move_ready};
 use super::game::{FOV_RADIUS_NPC, FOV_RADIUS_PC_};
 use super::game::{CALL_VOLUME, FOLLOW_RANGE, SUMMON_MOVES, SUMMON_RANGE};
@@ -1738,13 +1738,11 @@ fn FlightStrength(ctx: &mut Ctx) -> i64 {
 fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
     let threats = &mut ctx.blackboard.threats;
     let target = threats.hostile.first()?;
-    let eid = ctx.known.trace(target.uid)?.eid();
-    let call = Call::Help(CallForHelp { dir: target.pos - ctx.pos, eid });
-    let look = target.pos - ctx.pos;
+    let (uid, dir) = (target.uid, target.pos - ctx.pos);
 
     threats.on_call_for_help(ctx.me, ctx.pos, ctx.known.time());
 
-    Some(Action::Call { look, call })
+    Some(Action::Help { look: dir, dir, uid })
 }
 
 fn ForceThreatState(ctx: &mut Ctx, state: FightOrFlight) {

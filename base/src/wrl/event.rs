@@ -1,6 +1,6 @@
 use std::num::NonZeroU64;
 
-use crate::base::point::{Delta, Point};
+use crate::base::point::Point;
 
 use super::actor::EID;
 use super::dex::Species;
@@ -17,7 +17,7 @@ pub struct UID(pub NonZeroU64);
 pub enum Sense { Sight, Sound, Smell }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Call { Command, Help(CallForHelp), Warning }
+pub enum Call { Command, Help, Warning }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Sound { Attack, Call(Call), Move, Sniff }
@@ -30,12 +30,6 @@ pub struct CallEvent { pub call: Call, pub species: &'static Species }
 
 #[derive(Clone, Debug)]
 pub struct MoveEvent { pub from: Point }
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CallForHelp {
-    pub dir: Delta,
-    pub eid: Option<EID>,
-}
 
 #[derive(Clone, Debug)]
 pub enum EventData {
