@@ -235,7 +235,7 @@ impl FactionMap {
     }
 
     fn faction_for_event(&mut self, event: &Event) -> Option<&mut Faction> {
-        let uid = event.uid;
+        let uid = event.uid?;
         if matches!(event.data, EventData::Forget) {
             self.forget_uid(uid);
             return None;
