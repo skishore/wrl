@@ -585,14 +585,15 @@ impl Board {
 
     // Knowledge:
 
-    fn observe_event(&mut self, eid: EID, senses: &Senses, event: &mut EventSource) {
-        if event.0 == Some(eid) { return; }
+    fn observe_event(&mut self, eid: EID, senses: &Senses, source: &mut Source) {
+        source.event.reset();
+        if source.eid == Some(eid) { return; }
         let Some(actor) = self.actors.get(eid) else { return };
 
         let (heard, seen) = (senses.heard(), senses.seen() && !actor.player);
         if !heard && !seen { return; }
 
-        let EventSource(oid, event) = event;
+        let Source { eid: oid, event } = source;
         event.sense = if seen { Sense::Sight } else { Sense::Sound };
 
         self._update_memory(eid, |known, me, _| known.observe_event(me, *oid, event));
@@ -606,7 +607,8 @@ impl Board {
         }
     }
 
-    fn observe_knockout(&mut self, eid: EID, oid: EID, event: &Event) {
+    fn observe_knockout(&mut self, eid: EID, oid: EID, event: &mut Event) {
+        event.reset();
         if eid == oid { return; }
         self._update_memory(eid, |known, me, _| known.observe_knockout(me, oid, event));
 
@@ -670,8 +672,6 @@ impl Board {
 
 // Event delivery:
 
-struct EventSource(Option<EID>, Event);
-
 type SenseMap = HashMap<EID, Senses>;
 
 const SENSE_SEEN: u8 = 1 << 0;
@@ -692,11 +692,9 @@ impl std::ops::BitOr for Senses {
     }
 }
 
-struct Noise {
-    cause: Option<EID>,
-    check: Option<EID>,
-    point: Point,
-    volume: Bound,
+struct Source {
+    eid: Option<EID>,
+    event: Event,
 }
 
 struct Sighting {
@@ -704,6 +702,13 @@ struct Sighting {
     merged: Senses,
     source: Senses,
     target: Senses,
+}
+
+struct Noise {
+    cause: Option<EID>,
+    check: Option<EID>,
+    point: Point,
+    volume: Bound,
 }
 
 impl Noise {
@@ -720,14 +725,14 @@ impl Noise {
     }
 }
 
-fn create_event(board: &Board, eid: EID, point: Point, data: EventData) -> EventSource {
+fn create_event(board: &Board, eid: EID, point: Point, data: EventData) -> Source {
     create_guess(board, Some(eid), point, data)
 }
 
-fn create_guess(board: &Board, eid: Option<EID>, point: Point, data: EventData) -> EventSource {
+fn create_guess(board: &Board, eid: Option<EID>, point: Point, data: EventData) -> Source {
     let loc = Location { pos: point, time: board.time };
     let event = Event { uid: None, old: None, loc, data, sense: Sense::Sight };
-    EventSource(eid, event)
+    Source { eid, event }
 }
 
 fn detect_noise(board: &Board, noise: &Noise, fov: &mut FOV) -> SenseMap {
@@ -855,11 +860,11 @@ fn hit_actor(state: &mut State, eid: EID, tid: EID, attack: &Attack, logged: boo
 
     // Create a knockout event to deliver to entities.
     let data = EventData::Forget;
-    let event = create_event(board, tid, pos, data).1;
+    let event = &mut create_event(board, tid, pos, data).event;
 
     // Deliver the knockout event to everyone that saw or heard the attack.
     for s in &sightings {
-        if fainted { board.observe_knockout(s.eid, tid, &event); }
+        if fainted { board.observe_knockout(s.eid, tid, event); }
         if s.eid != state.player || !s.source.seen() { continue; }
 
         let log = &mut env.ui.log;
@@ -1291,7 +1296,7 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
             let mut logged = false;
             for s in &sightings {
                 let target = if s.target.seen() { tid } else { None };
-                event.1.data = EventData::Attack(AttackEvent { combat, target });
+                event.event.data = EventData::Attack(AttackEvent { combat, target });
                 state.board.observe_event(s.eid, &s.source, event);
                 if s.eid != state.player { continue; }
 
