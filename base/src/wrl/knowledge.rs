@@ -226,8 +226,8 @@ impl std::ops::Deref for NoiseKnowledge {
 }
 
 impl NoiseKnowledge {
-    fn new(eid: Option<EID>, event: &Event) -> Self {
-        let Event { uid, loc, sense, .. } = *event;
+    fn new(eid: Option<EID>, uid: UID, event: &Event) -> Self {
+        let Event { loc, sense, .. } = *event;
         Self { eid, uid, loc, sense, sound: event.sound() }
     }
 
@@ -414,7 +414,7 @@ impl Knowledge {
 
         match trace {
             Actor(x) => self.update_actor(x, |x| x.update_for_event(&cloned)),
-            Noise(x) => self.update_noise(x, |x| *x = NoiseKnowledge::new(eid, &cloned)),
+            Noise(x) => self.update_noise(x, |x| *x = NoiseKnowledge::new(eid, x.uid, &cloned)),
         }
         self.events.push(cloned);
 
@@ -608,7 +608,7 @@ impl Knowledge {
 
         if let Some(x) = entry.noise.take() &&
            let Some(x) = self.identify_noise(actor, x, limit) {
-            let (uid, old) = (self.actors[actor].uid, Some(x));
+            let (uid, old) = (Some(self.actors[actor].uid), Some(x));
             let loc = Location { pos: other.pos, time: self.timer.time };
             let event = Event { uid, old, loc, data: EventData::Spot, sense };
             self.events.push(event);
@@ -617,8 +617,6 @@ impl Knowledge {
     }
 
     fn ensure_trace(&mut self, me: &Actor, eid: Option<EID>, event: &mut Event) -> TraceHandle {
-        assert!(event.old.is_none());
-
         let result = eid.and_then(|x| self.lookup_trace(me, x, event));
         if let Some(x) = result { return x; }
 
@@ -628,6 +626,9 @@ impl Knowledge {
     }
 
     fn lookup_trace(&mut self, me: &Actor, eid: EID, event: &mut Event) -> Option<TraceHandle> {
+        assert!(event.uid.is_none());
+        assert!(event.old.is_none());
+
         let limit = self.timer.time_at_turn(SOURCE_TRACKING_LIMIT);
         let entry = self.eid_index.get_mut(&eid)?;
         let sense = event.sense;
@@ -639,7 +640,7 @@ impl Knowledge {
             Sense::Sound => x.time > limit,
         };
         if !me.player && let Some(x) = entry.actor && link(&self.actors[x]) {
-            event.uid = self.actors[x].uid;
+            event.uid = Some(self.actors[x].uid);
             if let Some(y) = entry.noise.take() {
                event.old = self.identify_noise(x, y, limit);
             }
@@ -648,7 +649,7 @@ impl Knowledge {
 
         // Try to link the event to an noise we've heard.
         if let Some(x) = entry.noise && self.noises[x].time > limit {
-            event.uid = self.noises[x].uid;
+            event.uid = Some(self.noises[x].uid);
             return Some(TraceHandle::Noise(x));
         };
         None
@@ -658,9 +659,10 @@ impl Knowledge {
 
     fn create_noise(&mut self, eid: Option<EID>, event: &mut Event) -> NoiseHandle {
         self.last_uid += 1;
-        event.uid = UID(self.last_uid.try_into().unwrap());
-        let result = self.noises.push_front(NoiseKnowledge::new(eid, event));
-        self.uid_index.insert(event.uid, TraceHandle::Noise(result));
+        let uid = UID(self.last_uid.try_into().unwrap());
+        let result = self.noises.push_front(NoiseKnowledge::new(eid, uid, event));
+        self.uid_index.insert(uid, TraceHandle::Noise(result));
+        event.uid = Some(uid);
         result
     }
 
@@ -770,8 +772,9 @@ impl Knowledge {
     }
 
     fn forget_event(&mut self, uid: UID, pos: Point) {
+        let (uid, old) = (Some(uid), None);
         let loc = Location { pos, time: self.timer.time };
-        let event = Event { uid, old: None, loc, data: EventData::Forget, sense: Sense::Sight };
+        let event = Event { uid, old, loc, data: EventData::Forget, sense: Sense::Sight };
         self.events.push(event);
     }
 

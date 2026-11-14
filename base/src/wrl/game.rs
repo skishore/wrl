@@ -1,6 +1,5 @@
 use std::fmt::Debug;
 use std::mem::{replace, swap};
-use std::num::NonZeroU64;
 use std::rc::Rc;
 use std::sync::LazyLock;
 
@@ -20,7 +19,7 @@ use super::ai::{AIEnv, AIState, Update};
 use super::dex::{Attack, Range, Species};
 use super::debug::DebugFile;
 use super::effect::{CB, Effect, Frame, FT, Particle, ParticleData, self};
-use super::event::{Call, Location, Sense, UID};
+use super::event::{Call, Location, Sense};
 use super::event::{AttackEvent, CallEvent, Event, EventData, MoveEvent};
 use super::knowledge::Knowledge;
 use super::mapgen::mapgen_with_size as mapgen;
@@ -724,9 +723,8 @@ fn create_event(board: &Board, eid: EID, point: Point, data: EventData) -> Event
 }
 
 fn create_guess(board: &Board, eid: Option<EID>, point: Point, data: EventData) -> EventSource {
-    let uid = UID(NonZeroU64::new(1).unwrap());
     let loc = Location { pos: point, time: board.time };
-    let event = Event { uid, old: None, loc, data, sense: Sense::Sight };
+    let event = Event { uid: None, old: None, loc, data, sense: Sense::Sight };
     EventSource(eid, event)
 }
 
