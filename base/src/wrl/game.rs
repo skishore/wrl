@@ -596,14 +596,6 @@ impl Board {
         event.sense = if seen { Sense::Sight } else { Sense::Sound };
 
         self._update_memory(eid, |known, me, _| known.observe_event(me, *oid, event));
-
-        if let EventData::Call(CallEvent { call: Call::Help(call), .. }) = &event.data {
-            if !self.actors.get(eid).map_or(false, |x| x.ai.accepted_call()) { return; }
-
-            let data = EventData::Threat;
-            let event = &mut create_guess(self, call.eid, event.pos + call.dir, data);
-            self.observe_event(eid, &Senses(SENSE_HEARD), event);
-        }
     }
 
     fn observe_knockout(&mut self, eid: EID, oid: EID, event: &mut Event) {
@@ -1168,11 +1160,26 @@ fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
                 Call::Warning => ("*grr*", "growl", "...", false),
             };
 
+            let mut threat = if let Call::Help(call) = call {
+                let data = EventData::Threat;
+                Some(&mut create_guess(board, call.eid, call.dir + source, data))
+            } else {
+                None
+            };
+
             // Deliver a CallEvent to each other actor that heard the call.
             let data = EventData::Call(CallEvent { call, species });
             let event = &mut create_event(board, eid, source, data);
+
             for s in &sightings {
                 board.observe_event(s.eid, &s.merged, event);
+
+                // Deliver another event - a Threat ping - for calls for help.
+                if let Some(threat) = &mut threat && event.event.uid.is_some() &&
+                   board.actors.get(s.eid).map_or(false, |x| x.ai.accepted_call()) {
+                    board.observe_event(s.eid, &Senses(SENSE_HEARD), threat);
+                }
+
                 if s.eid != state.player { continue; }
 
                 let seen = s.source.seen();
