@@ -69,6 +69,11 @@ impl std::ops::Deref for Event {
 }
 
 impl Event {
+    pub fn reset(&mut self) {
+        self.uid = None;
+        self.old = None;
+    }
+
     pub fn sound(&self) -> Option<Sound> {
         if self.sense != Sense::Sound { return None; }
         match &self.data {

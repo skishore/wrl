@@ -405,34 +405,32 @@ impl Knowledge {
         self.timer.end_turn(MAX_TURN_MEMORY, speed, time);
     }
 
-    pub fn observe_event(&mut self, me: &Actor, eid: Option<EID>, event: &Event) {
+    pub fn observe_event(&mut self, me: &Actor, eid: Option<EID>, event: &mut Event) {
         self.timer.update(event.time);
 
         use TraceHandle::*;
-        let mut cloned = event.clone();
-        let trace = self.ensure_trace(me, eid, &mut cloned);
+        let trace = self.ensure_trace(me, eid, event);
 
         match trace {
-            Actor(x) => self.update_actor(x, |x| x.update_for_event(&cloned)),
-            Noise(x) => self.update_noise(x, |x| *x = NoiseKnowledge::new(eid, x.uid, &cloned)),
+            Actor(x) => self.update_actor(x, |x| x.update_for_event(event)),
+            Noise(x) => self.update_noise(x, |x| *x = NoiseKnowledge::new(eid, x.uid, event)),
         }
-        self.events.push(cloned);
+        self.events.push(event.clone());
 
         debug_assert!(self.check_invariants());
     }
 
-    pub fn observe_knockout(&mut self, me: &Actor, eid: EID, event: &Event) {
+    pub fn observe_knockout(&mut self, me: &Actor, eid: EID, event: &mut Event) {
         self.timer.update(event.time);
 
         use TraceHandle::*;
-        let mut cloned = event.clone();
-        let Some(trace) = self.lookup_trace(me, eid, &mut cloned) else { return };
+        let Some(trace) = self.lookup_trace(me, eid, event) else { return };
 
         match trace {
             Actor(x) => self.forget_actor(x),
             Noise(x) => self.forget_noise(x),
         }
-        *self.events.last_mut().unwrap() = cloned;
+        *self.events.last_mut().unwrap() = event.clone();
 
         debug_assert!(self.check_invariants());
     }
