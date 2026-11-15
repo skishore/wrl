@@ -15,6 +15,8 @@ def run_seed(seed: int) -> None:
         if line.endswith("removed!"):
             species = line.split(":")[1].split("@")[0].strip()
             counts[species] += 1
+        elif ": Help {" in line:
+            counts["Help"] += 1
     return counts
 
 
@@ -30,11 +32,16 @@ if __name__ == "__main__":
         for (species, count) in result.items():
             species_counts[species][count] += 1
 
-    for (species, counts) in sorted(species_counts.items()):
+    def key(item: tuple[str, int]) -> tuple[int, str]:
+        (species, _) = item
+        return (0 if species == "Help" else 1, species)
+
+    for (species, counts) in sorted(species_counts.items(), key=key):
         print(f"{species}:")
         if 0 not in counts:
             counts[0] = NUM_SEEDS - sum(counts.values())
         mean = sum(count * frequency for (count, frequency) in counts.items()) / NUM_SEEDS
-        print(f"  Mean death count: {mean}")
+        event = "call" if species == "Help" else "death"
+        print(f"  Mean {event} count: {mean}")
         for (count, frequency) in sorted(counts.items()):
-            print(f"  {count} deaths: {frequency} times ({int(100 * frequency / NUM_SEEDS)}%)")
+            print(f"  {count} {event}s: {frequency} times ({int(100 * frequency / NUM_SEEDS)}%)")
