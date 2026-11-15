@@ -137,7 +137,11 @@ impl Faction {
         use Valence::*;
 
         if other.species.human() {
-            self.merge_status(Low, Neutral);
+            if self.confidence <= Low {
+                self.merge_status(Low, Neutral);
+            } else {
+                self.merge_status(High, self.valence);
+            }
             return;
         }
 
@@ -286,6 +290,7 @@ pub struct Threat {
     pub sense: Sense,
     pub species: Option<&'static Species>,
 
+    pub certain: bool,
     pub asleep: bool,
     pub warned: bool,
     pub seen: bool,
@@ -300,17 +305,19 @@ impl Threat {
     fn for_actor(actor: &ActorKnowledge, faction: &Faction) -> Self {
         let species = Some(actor.species);
         let warned = faction.warning_count > 0;
+        let certain = faction.confidence == Confidence::High;
         let (asleep, seen) = (actor.asleep(), true);
         let ActorKnowledge { uid, loc, sense, .. } = *actor;
-        Self { uid, loc, sense, species, asleep, warned, seen }
+        Self { uid, loc, sense, species, certain, asleep, warned, seen }
     }
 
     fn for_noise(noise: &NoiseKnowledge, faction: &Faction) -> Self {
         let species = None;
         let (asleep, seen) = (false, false);
         let warned = faction.warning_count > 0;
+        let certain = faction.confidence == Confidence::High;
         let NoiseKnowledge { uid, loc, sense, .. } = *noise;
-        Self { uid, loc, sense, species, asleep, warned, seen }
+        Self { uid, loc, sense, species, certain, asleep, warned, seen }
     }
 }
 
@@ -434,10 +441,6 @@ impl ThreatState {
     //   - When an actor is in combat it should prioritize threats that can
     //     hurt it (right now a predator may attack us even when it's under
     //     attack by prey, or vice-versa).
-    //
-    //   - We probably shouldn't call for help against threats we're not sure
-    //     about (e.g. if we just warned a threat). But note that after warning
-    //     a rival, we attack them even though we only have Confidence::Mid.
 
     pub fn debug(&self, debug: &mut DebugLog, known: &Knowledge) {
         for faction in &self.factions.factions {

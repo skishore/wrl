@@ -1737,7 +1737,7 @@ fn FlightStrength(ctx: &mut Ctx) -> i64 {
 
 fn CallForHelp(ctx: &mut Ctx) -> Option<Action> {
     let threats = &mut ctx.blackboard.threats;
-    let target = threats.hostile.first()?;
+    let target = threats.hostile.iter().filter(|x| x.certain).next()?;
     let (uid, dir) = (target.uid, target.pos - ctx.pos);
 
     threats.on_call_for_help(ctx.me, ctx.pos, ctx.known.time());
