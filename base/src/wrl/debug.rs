@@ -247,7 +247,7 @@ impl DebugFile {
 
         // Dump text debug output from behavior trees.
         let color = Color::white();
-        let lines = me.ai.get_trace(&me.known);
+        let lines = me.ai.get_trace(&me);
         let extra = [
             DebugLine { color, depth: 0, text: format!("Turn {}: {:?}", self.turn, action) },
             DebugLine { color, depth: 0, text: "".into() },

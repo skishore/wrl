@@ -1071,7 +1071,7 @@ impl ActionResult {
     fn success_turns(turns: f64) -> Self { Self { success: true,  moves: 0., turns } }
 }
 
-fn plan(state: &mut State, eid: EID, leader: Option<EID>) -> Action {
+fn decide_action(state: &mut State, eid: EID, leader: Option<EID>) -> Action {
     let env = &mut state.env;
     state.board.observe_visible_cells(eid, env);
     if let Some(x) = leader { state.board.observe_visible_cells(x, env); }
@@ -1093,12 +1093,14 @@ fn plan(state: &mut State, eid: EID, leader: Option<EID>) -> Action {
     let fov = env.fov.select_vision(actor);
     let plan = ai.plan(actor, AIEnv { leader, debug, fov, rng });
 
+    state.record_action(&plan.action, eid);
+
     plan.update.into_iter().for_each(|x| apply_update(state, eid, x));
 
     plan.action
 }
 
-fn act(state: &mut State, eid: EID, action: Action) -> ActionResult {
+fn commit_action(state: &mut State, eid: EID, action: Action) -> ActionResult {
     let me = &mut state.board.actors[eid];
     me.asleep = matches!(action, Action::Rest);
     let source = me.pos;
@@ -1606,9 +1608,8 @@ fn update_state(state: &mut State) {
         if player && !stage_input(state) { break; }
 
         update = true;
-        let action = plan(state, eid, leader);
-        state.record_action(&action, eid);
-        let result = act(state, eid, action);
+        let action = decide_action(state, eid, leader);
+        let result = commit_action(state, eid, action);
         if player && !result.success { break; }
 
         let board = &mut state.board;

@@ -226,8 +226,9 @@ impl Blackboard {
         result
     }
 
-    fn debug(&self, debug: &mut DebugLog, known: &Knowledge) {
+    fn debug(&self, debug: &mut DebugLog, me: &Actor) {
         let Blackboard { path, scan, .. } = self;
+        let known = &*me.known;
         let path = if path.kind != PathKind::None {
             format!(" (step {}/{})", path.step, path.path.len())
         } else {
@@ -299,7 +300,7 @@ impl Blackboard {
             debug.newline();
         }
 
-        self.threats.debug(debug, known);
+        self.threats.debug(debug, me);
     }
 }
 
@@ -2519,11 +2520,11 @@ impl AIState {
         self.blackboard.path.target
     }
 
-    pub fn get_trace(&self, known: &Knowledge) -> Vec<DebugLine> {
+    pub fn get_trace(&self, me: &Actor) -> Vec<DebugLine> {
         let mut debug = DebugLog { depth: 0, lines: vec![], verbose: false };
         self.tree.debug(&mut debug);
         debug.newline();
-        self.blackboard.debug(&mut debug, known);
+        self.blackboard.debug(&mut debug, me);
         debug.lines
     }
 

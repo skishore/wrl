@@ -10,7 +10,7 @@ use super::actor::Actor;
 use super::debug::DebugLog;
 use super::dex::Species;
 use super::event::{Call, CallEvent, Event, EventData, Location, Sense, UID};
-use super::knowledge::{ActorKnowledge, Knowledge, NoiseKnowledge};
+use super::knowledge::{ActorKnowledge, NoiseKnowledge};
 use super::game::CALL_VOLUME;
 use super::list::{Handle, List};
 use super::time::Timestamp;
@@ -71,26 +71,6 @@ struct Faction {
 }
 
 impl Faction {
-    fn debug(&self, debug: &mut DebugLog, known: &Knowledge) {
-        debug.append("Faction:");
-        debug.indent(1, |debug| {
-            let warnings = if self.warning_count == 0 {
-                " ".into()
-            } else if self.warning_count == 1 {
-                " - 1 warning".into()
-            } else {
-                format!(" - {} warnings", self.warning_count)
-            };
-            let status = format!("{:?}:{:?}", self.confidence, self.valence);
-
-            debug.append(format!("combat: {}", known.debug_time(self.last_combat)));
-            debug.append(format!("status: {}{}", status, warnings));
-            debug.append(format!("penalty_score: {}", self.penalty_score));
-            debug.append(format!("penalty_start: {}", known.debug_time(self.penalty_start)));
-        });
-        debug.newline();
-    }
-
     fn accept_call_for_help(me: &Actor, x: &CallEvent) -> bool {
         matches!(x.call, Call::Help) && Self::friendly_call(me, x)
     }
@@ -345,6 +325,25 @@ impl<'a> std::ops::Deref for ScoredThreat<'a> {
 }
 
 impl<'a> ScoredThreat<'a> {
+    fn debug(&self, debug: &mut DebugLog, me: &Actor) {
+        debug.append("Threat:");
+        debug.indent(1, |debug| {
+            let faction = self.faction;
+            let warnings = faction.warning_count;
+            let warnings = if warnings > 0 {
+                format!(" - {} warning{}", warnings, if warnings == 1 { "" } else { "s" })
+            } else {
+                Default::default()
+            };
+            let status = format!("{:?}:{:?}", faction.confidence, faction.valence);
+            debug.append(format!("age: {}", me.known.debug_time(self.time)));
+            debug.append(format!("pos: {:?}, by {:?}", self.pos, self.sense));
+            debug.append(format!("combat: {}", me.known.debug_time(faction.last_combat)));
+            debug.append(format!("status: {}{}", status, warnings));
+        });
+        debug.newline();
+    }
+
     // Accessors:
 
     fn unknown(&self)   -> bool { self.faction.confidence == Confidence::Zero }
@@ -442,10 +441,25 @@ impl ThreatState {
     //     hurt it (right now a predator may attack us even when it's under
     //     attack by prey, or vice-versa).
 
-    pub fn debug(&self, debug: &mut DebugLog, known: &Knowledge) {
-        for faction in &self.factions.factions {
-            faction.debug(debug, known);
+    pub fn debug(&self, debug: &mut DebugLog, me: &Actor) {
+        let time = me.known.time();
+        let threat_decay = TimeDecay::new(me, ACTIVE_THREAT_TURNS);
+        let timeout = threat_decay.timeout;
+
+        let mut threats = vec![];
+        for actor in &me.known.actors {
+            if actor.time <= timeout { break };
+            let Some(faction) = self.factions.get_faction(actor.uid) else { continue };
+            threats.push(ScoredThreat::for_actor(actor, faction));
         }
+        for noise in &me.known.noises {
+            if noise.time <= timeout { break };
+            let Some(faction) = self.factions.get_faction(noise.uid) else { continue };
+            threats.push(ScoredThreat::for_noise(me, noise, faction));
+        }
+        threats.sort_by_key(|x| time - x.time);
+
+        for threat in &threats { threat.debug(debug, me); }
     }
 
     pub fn mark_safe(&mut self, time: Timestamp) {
