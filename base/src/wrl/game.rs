@@ -36,8 +36,8 @@ pub const WORLD_SIZE: i32 = 100;
 
 const LIGHT: Light = Light::Sun(Delta(2, 0));
 const WEATHER: Weather = Weather::None;
-const NUM_PREDATORS: i32 = 2;
-const NUM_PREY: i32 = 18;
+const NUM_PREDATORS: i32 = 4;
+const NUM_PREY: i32 = 20;
 
 const UI_FLASH: i32 = 4;
 const UI_NOISE: i32 = 8;
