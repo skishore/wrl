@@ -451,7 +451,10 @@ impl ThreatState {
     pub fn mark_safe(&mut self, time: Timestamp) {
         if self.state == FightOrFlight::Safe { return; }
 
-        if !self.panicking { self.last_safe = time; }
+        if !self.panicking {
+            self.threats = Default::default();
+            self.last_safe = time;
+        }
 
         self.state = FightOrFlight::Safe;
         self.panicking = false;
