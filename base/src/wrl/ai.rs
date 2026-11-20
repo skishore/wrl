@@ -46,10 +46,10 @@ const ASSESS_TURNS_FLIGHT: (i32, i32) = (4, 1);
 const ASSESS_TURNS_THREAT: (i32, i32) = (2, 1);
 const ASSESS_TURNS_WANDER: (i32, i32) = (4, 2);
 
-const MAX_ASSESS: i32 = 32;
-const MAX_HUNGER: i32 = 512;
-const MAX_THIRST: i32 = 128;
-const MAX_WEARY_: i32 = 2048;
+const MAX_ASSESS:  i32 = 32;
+const MAX_HUNGER:  i32 = 512;
+const MAX_THIRST:  i32 = 128;
+const MAX_FATIGUE: i32 = 2048;
 
 const HUNGRY_FOR_MEAT: i32 = MAX_HUNGER / 2;
 
@@ -186,7 +186,7 @@ struct Blackboard {
     assess: Timer,
     hunger: Timer,
     thirst: Timer,
-    weariness: Timer,
+    fatigue: Timer,
 
     chasing_enemy: bool,
     finding_food_: bool,
@@ -213,7 +213,7 @@ impl Blackboard {
             assess: Timer::new(rng, MAX_ASSESS),
             hunger: Timer::new(rng, MAX_HUNGER),
             thirst: Timer::new(rng, MAX_THIRST),
-            weariness: Timer::new(rng, MAX_WEARY_),
+            fatigue: Timer::new(rng, MAX_FATIGUE),
 
             chasing_enemy: false,
             finding_food_: false,
@@ -222,7 +222,7 @@ impl Blackboard {
 
             last_seen: HashMap::default(),
         };
-        result.weariness.active = rng.random_bool(0.5);
+        result.fatigue.active = rng.random_bool(0.5);
         result
     }
 
@@ -253,19 +253,18 @@ impl Blackboard {
         debug.append("Timers:");
         debug.indent(1, |debug| {
             let mut show = |prefix: &str, timer: &Timer| {
-                let width = 20;
+                let width = 12;
                 let Timer { active, cur, max } = *timer;
-                let count = (width as f64 * cur as f64 / max as f64).round() as usize;
-                let eq = '='.to_string().repeat(count);
-                let sp = ' '.to_string().repeat(width - count);
                 let suffix = if active { " *" } else { "" };
-                debug.append(format!("{}[{}{}] {} / {}{}", prefix, eq, sp, cur, max, suffix));
+                let bar = (width as f64 * cur as f64 / max as f64).round() as usize;
+                let bar = std::iter::repeat_n('=', bar).collect::<String>();
+                debug.append(format!("{}[{: <width$}] {} / {}{}", prefix, bar, cur, max, suffix));
                 if active && let Some(x) = debug.lines.last_mut() { x.color = 0x80c0ff.into() }
             };
-            show("assess:    ", &self.assess);
-            show("hunger:    ", &self.hunger);
-            show("thirst:    ", &self.thirst);
-            show("weariness: ", &self.weariness);
+            show("assess:  ", &self.assess);
+            show("hunger:  ", &self.hunger);
+            show("thirst:  ", &self.thirst);
+            show("fatigue: ", &self.fatigue);
         });
         debug.newline();
 
@@ -447,7 +446,7 @@ fn TickBasicNeeds(ctx: &mut Ctx) -> Result {
     bb.assess.update(delta);
     bb.hunger.update(delta);
     bb.thirst.update(delta);
-    bb.weariness.update(delta);
+    bb.fatigue.update(delta);
 
     Result::Failed
 }
@@ -1079,10 +1078,10 @@ fn Thirst(ctx: &mut Ctx) -> i64 {
     ctx.blackboard.thirst.percent()
 }
 
-fn Weariness(ctx: &mut Ctx) -> i64 {
-    if !ctx.blackboard.weariness.active { return -1; }
+fn Fatigue(ctx: &mut Ctx) -> i64 {
+    if !ctx.blackboard.fatigue.active { return -1; }
     if ctx.blackboard.getting_rest_ { return 101; }
-    ctx.blackboard.weariness.percent()
+    ctx.blackboard.fatigue.percent()
 }
 
 // Various CellPredicates used to satisfy needs:
@@ -1188,7 +1187,7 @@ fn EatBerryNow(ctx: &mut Ctx) -> Option<Action> {
 
 fn GetRestNow(ctx: &mut Ctx) -> Option<Action> {
     let gain = ctx.env.rng.random_range(RESTED_GAIN);
-    ctx.blackboard.weariness.update(gain);
+    ctx.blackboard.fatigue.update(gain);
 
     Some(Action::Rest)
 }
@@ -2221,7 +2220,7 @@ fn Wander() -> impl Bhv {
             "AddressBasicNeeds",
             (Hunger, EatFood()),
             (Thirst, DrinkWater()),
-            (Weariness, GetRest()),
+            (Fatigue, GetRest()),
         ],
         Follow("Follow(Explore)", PathKind::Explore),
         act!("Search(Assess)", LookAround),
