@@ -1076,8 +1076,11 @@ fn decide_action(state: &mut State, eid: EID, leader: Option<EID>) -> Action {
     state.board.observe_visible_cells(eid, env);
     if let Some(x) = leader { state.board.observe_visible_cells(x, env); }
 
-    let player = eid == state.player;
-    if player { return replace(&mut state.input, Action::WaitForInput); }
+    if eid == state.player {
+        let result = replace(&mut state.input, Action::WaitForInput);
+        state.record_action(&result, eid);
+        return result;
+    }
 
     let State { board, env, .. } = state;
     let debug = state.debug.as_deref_mut();
