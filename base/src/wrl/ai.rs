@@ -2419,7 +2419,7 @@ fn ChooseFollowerSquare() -> impl Bhv {
         seq![
             "MaybeDefendLeader",
             cond!("LeaderHasRivals", |x| LeaderHasRivals(x)),
-            step!("DefendLeader", PathKind::Follow, |x| DefendLeader(x))
+            cond!("DefendLeader", |x| ChoosePathTarget(x, |y| DefendLeader(y))),
         ],
         cond!("StayNearLeader", |x| ChoosePathTarget(x, StayNearLeader)),
         cond!("MoveNearLeader", |x| ChoosePathTarget(x, MoveNearLeader)),
