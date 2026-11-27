@@ -59,6 +59,20 @@ const PARTY_KEYS: [char; 6] = ['a', 'b', 'c', 'd', 'e', 'f'];
 
 // Helpers
 
+fn prf(x: u32, y: u32, z: u32) -> u32 {
+    let mut h = 0;
+    h ^= x.wrapping_mul(0x9E3779B1);
+    h ^= y.wrapping_mul(0x85EBCA77);
+    h ^= z.wrapping_mul(0xC2B2AE3D);
+
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x7FEB352D);
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x846CA68B);
+    h ^= h >> 16;
+    h
+}
+
 fn get_direction(ch: char) -> Option<Delta> {
     match ch {
         'h' => Some(dirs::W),
@@ -879,7 +893,7 @@ impl UI {
     }
 
     pub fn update(&mut self, pos: Point, rng: &mut RNG) {
-        self.frame += 1;
+        self.frame = self.frame.wrapping_add(1);
         self.update_weather(pos, rng);
 
         for x in self.moves.values_mut() { x.frame += 1; }
@@ -974,7 +988,7 @@ impl UI {
         for y in 0..size.1 {
             for x in 0..size.0 {
                 let point = Delta(x, y) + offset;
-                let glyph = Self::render_tile(me, point, effect);
+                let glyph = self.render_tile(me, point, effect);
                 slice.set(Point(2 * x, y), glyph);
             }
         }
@@ -1593,7 +1607,7 @@ impl UI {
         color.apply_light(r, g, b)
     }
 
-    pub fn render_tile(me: &Actor, point: Point, effect: Option<&Effect>) -> Glyph {
+    pub fn render_tile(&self, me: &Actor, point: Point, effect: Option<&Effect>) -> Glyph {
         let known = effect.map_or(&*me.known, |x| x.known);
         let is_source = effect.map_or(false, |x| x.sources.contains(&point));
         let is_target = effect.map_or(false, |x| x.targets.contains(&point));
@@ -1621,6 +1635,11 @@ impl UI {
             Self::combined_glyph(x, tile)
         } else if let Some(x) = cell.items().last() {
             x.glyph()
+        } else if tile.flags.any(TileFlags::OnFire) {
+            let frame = self.frame as u32 / 6;
+            let color = [0xff0000, 0xff8000, 0xffff00];
+            let mixed = prf(frame, point.0 as u32, point.1 as u32);
+            tile.glyph.with_fg(color[mixed as usize % color.len()])
         } else {
             tile.glyph
         };

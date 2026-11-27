@@ -79,6 +79,7 @@ struct DebugDetail {
     animation: Vec<Vec<(Point, Glyph)>>,
     utilities: Vec<(i32, Point)>,
     neighborhood: Vec<Point>,
+    ui: UI,
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -284,7 +285,7 @@ impl DebugFile {
 
         // Anything we scribble on the map shows up in the debug UI.
         for (p, x) in self.map.iter_mut() {
-            *x = UI::render_tile(me, p, None);
+            *x = self.detail.ui.render_tile(me, p, None);
         }
         if let Some(target) = me.ai.get_target() {
             let source = me.ai.get_path().last().cloned().unwrap_or(me.pos);

@@ -46,7 +46,7 @@ macro_rules! flags {
             pub const Empty: Self = Self(0);
             $crate::flags!(@go 1; $($x)+);
             $($($crate::flags!(@derive $y = $z $(| $zs)*,);)+)?
-            fn any(self: Self, r: Self) -> bool { self.0 & r.0 != 0 }
+            pub fn any(self: Self, r: Self) -> bool { self.0 & r.0 != 0 }
         }
         impl std::ops::Not for $n {
             type Output = Self;
