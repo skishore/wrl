@@ -130,6 +130,7 @@ pub type TF = TileFlags;
 pub struct Tile {
     pub flags: TileFlags,
     pub glyph: Glyph,
+    pub light: Bound,
     pub description: &'static str,
 }
 
@@ -189,8 +190,9 @@ static TILES: LazyLock<HashMap<char, Tile>> = LazyLock::new(|| {
     ];
     let mut result = HashMap::default();
     for (ch, flags, glyph, description) in items {
+        let light = Bound::new(-1);
         let glyph = Glyph::wdfg(glyph.0, glyph.1);
-        result.insert(ch, Tile { flags, glyph, description });
+        result.insert(ch, Tile { flags, glyph, light, description });
     }
     result
 });
@@ -399,8 +401,7 @@ impl Board {
 
         frame.iter().for_each(|x| match &x.data {
             &ParticleData::Light(light) => {
-                let eid = self.get_cell(x.point).eid;
-                let prev = eid.map_or(-1, |x| self.actors[x].species.light.radius);
+                let prev = self._compute_light(x.point);
                 let next = std::cmp::max(prev, light.radius);
                 if prev == next { return; }
 
@@ -478,10 +479,9 @@ impl Board {
         let prev = cell.eid.replace(eid);
         assert!(prev.is_none());
 
-        let light = args.species.light.radius;
-        self._lighting.set_light(pos, light);
-
         self.actors.add(args, &mut env.rng);
+        self._update_light(pos);
+
         let actor = &mut self.actors[eid];
         actor.asleep = true;
         self.observe_visible_cells(eid, env);
@@ -493,7 +493,6 @@ impl Board {
 
     fn move_actor(&mut self, eid: EID, target: Point) {
         let actor = &mut self.actors[eid];
-        let light = actor.species.light.radius;
         let source = replace(&mut actor.pos, target);
 
         let old = self.map.entry_mut(source).unwrap().eid.take();
@@ -501,8 +500,8 @@ impl Board {
         assert!(old == Some(eid));
         assert!(new.is_none());
 
-        self._lighting.set_light(source, -1);
-        self._lighting.set_light(target, light);
+        self._update_light(source);
+        self._update_light(target);
     }
 
     fn swap_actors(&mut self, source: Point, target: Point) {
@@ -511,19 +510,14 @@ impl Board {
         let old = self.map.entry_mut(source).unwrap().eid.unwrap();
         let new = self.map.entry_mut(target).unwrap().eid.unwrap();
 
-        let old_actor = &mut self.actors[old];
-        let old_light = old_actor.species.light.radius;
-        old_actor.pos = target;
-
-        let new_actor = &mut self.actors[new];
-        let new_light  = new_actor.species.light.radius;
-        new_actor.pos = source;
+        self.actors[old].pos = target;
+        self.actors[new].pos = source;
 
         self.map.entry_mut(source).unwrap().eid = Some(new);
         self.map.entry_mut(target).unwrap().eid = Some(old);
 
-        self._lighting.set_light(source, new_light);
-        self._lighting.set_light(target, old_light);
+        self._update_light(source);
+        self._update_light(target);
     }
 
     fn remove_actor(&mut self, eid: EID) {
@@ -535,9 +529,6 @@ impl Board {
         let ind = actor.to_individual();
         if player { return; }
 
-        // Remove the actor's light source.
-        self._lighting.set_light(pos, -1);
-
         // Remove the actor from the spatial map.
         let existing = self.map.entry_mut(pos).unwrap().eid.take();
         assert!(existing == Some(eid));
@@ -545,6 +536,9 @@ impl Board {
         // Remove the actor from the ActorMap.
         let okay = self.actors.remove(eid).is_some();
         assert!(okay);
+
+        // Remove the actor's light source.
+        self._update_light(pos);
 
         // Mark the actor as inactive, if it was active.
         if self.active_actor == Some(eid) { self.active_actor = None; }
@@ -579,6 +573,7 @@ impl Board {
 
         cell.tile = tile;
 
+        self._update_light(point);
         self._update_shadow(point, new_shadow - old_shadow);
         self._lighting.set_opacity(point, tile.opacity());
     }
@@ -628,6 +623,18 @@ impl Board {
     }
 
     // Lighting:
+
+    fn _compute_light(&self, point: Point) -> i32 {
+        let cell = self.get_cell(point);
+        let light = cell.tile.light.radius;
+        let actor = cell.eid.map(|x| self.actors[x].species.light.radius).unwrap_or(-1);
+        std::cmp::max(actor, light)
+    }
+
+    fn _update_light(&mut self, point: Point) {
+        let light = self._compute_light(point);
+        self._lighting.set_light(point, light);
+    }
 
     fn _update_shadow(&mut self, point: Point, delta: i32) {
         if delta == 0 { return; }
