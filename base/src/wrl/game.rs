@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::mem::{replace, swap};
 use std::rc::Rc;
@@ -115,11 +116,15 @@ flags! {
         CanDrink,
         CanEat,
 
+        // Fire:
+        Flammable,
+        OnFire,
+
         /// Deriving:
-        Blocked = BlocksVision,
+        BasicTree = BlocksVision | Flammable,
+        BerryTree = LimitsVision | DropsBerries | Flammable,
         FreshWater = CanSwimOn | CanFlyOver | CanDrink,
-        BerryTree = LimitsVision | DropsBerries,
-        TallGrass = CanWalkOn | CanFlyOver | LimitsVision,
+        TallGrass = CanWalkOn | CanFlyOver | LimitsVision | Flammable,
         AllMoves = CanWalkOn | CanSwimOn | CanFlyOver,
         Free = CanWalkOn | CanFlyOver,
     }
@@ -128,6 +133,7 @@ flags! {
 pub type TF = TileFlags;
 
 pub struct Tile {
+    pub afire: Option<char>,
     pub flags: TileFlags,
     pub glyph: Glyph,
     pub light: Bound,
@@ -175,24 +181,40 @@ impl PartialEq for &'static Tile {
 
 static DEFAULT_TILE: LazyLock<&'static Tile> = LazyLock::new(|| TILES.get(&'#').unwrap());
 
+static BURNOUT_TILE: LazyLock<&'static Tile> = LazyLock::new(|| TILES.get(&'A').unwrap());
+
 static TILES: LazyLock<HashMap<char, Tile>> = LazyLock::new(|| {
     let items = [
-        ('#', TF::Blocked,    ('#', 0x106000), "a tree"),
         ('.', TF::Free,       ('.', 0xe0ffc0), "grass"),
         (',', TF::Free,       ('`', 0x60c060), "weeds"),
+        ('A', TF::Free,       ('"', 0x888888), "ashes"),
         ('"', TF::TallGrass,  ('"', 0x60c000), "tall grass"),
         ('|', TF::TallGrass,  ('|', 0x60c000), "reeds"),
         ('+', TF::Free,       ('+', 0xff6060), "a flower"),
         ('~', TF::FreshWater, ('~', 0x0080ff), "water"),
+        ('#', TF::BasicTree,  ('#', 0x106000), "a tree"),
         ('B', TF::BerryTree,  ('#', 0xc08000), "a berry tree"),
         ('=', TF::Free,       ('=', 0xff8000), "a bridge"),
         ('R', TF::Free,       ('.', 0xff8000), "a path"),
     ];
     let mut result = HashMap::default();
+    let on_fire_flags = |x: TileFlags| {
+        (x | (TF::LimitsVision | TF::OnFire)) & !(TF::BlocksVision | TF::AllMoves)
+    };
     for (ch, flags, glyph, description) in items {
+        let mut afire = None;
+        if flags.any(TF::Flammable) {
+            let light = Bound::new(4);
+            let flags = on_fire_flags(flags);
+            let glyph = Glyph::wdfg(glyph.0, 0xff0000);
+            let ch = char::from_u32(ch as u32 + (0xff00 - 0x20)).unwrap();
+            let description = format!("{} on fire", description).leak();
+            result.insert(ch, Tile { afire: None, flags, glyph, light, description });
+            afire = Some(ch);
+        };
         let light = Bound::new(-1);
         let glyph = Glyph::wdfg(glyph.0, glyph.1);
-        result.insert(ch, Tile { flags, glyph, light, description });
+        result.insert(ch, Tile { afire, flags, glyph, light, description });
     }
     result
 });
@@ -290,11 +312,13 @@ pub struct Board {
     _light: Light,
     _lighting: Lighting,
     _shadow: Vec<Delta>,
+    _fires: BTreeSet<Point>,
 }
 
 impl Board {
     fn new(size: Point, light: Light) -> Self {
         let _light = light;
+        let _fires = Default::default();
         let _lighting = Lighting::new(size);
         let _shadow = match _light {
             Light::Sun(x) => DeltaLOS(x).into_iter().skip(1).collect(),
@@ -307,7 +331,7 @@ impl Board {
         let mut result = Self {
             map: Matrix::new(size, cell),
             active_actor: None,
-            actors: ActorMap::default(),
+            actors: Default::default(),
             time: Timestamp::default().latch(time),
 
             // Animation:
@@ -318,6 +342,7 @@ impl Board {
             _light,
             _lighting,
             _shadow,
+            _fires,
         };
         result.reset(Tile::get('.'));
         result
@@ -327,17 +352,23 @@ impl Board {
 
     fn add_effect(&mut self, effect: Effect) {
         self._effect = std::mem::take(&mut self._effect).and(effect);
-        self._effect.events.retain(|x| matches!(x, effect::Event::Callback { .. }));
         self._frame_mask.clear();
     }
 
-    fn pop_callback(&mut self) -> Option<CB> {
-        let event = self._effect.events.first()?;
-        if !self._effect.frames.is_empty() && event.frame() > 0 { return None };
+    fn has_callback(&self) -> bool {
+        let Some(event) = self._effect.events.first() else { return false };
+        event.frame() <= 0 || self._effect.frames.is_empty()
+    }
 
+    fn pop_callback(&mut self, rng: &mut RNG) -> Option<CB> {
+        assert!(self.has_callback());
         match self._effect.events.remove(0) {
+            effect::Event::Other { point, what: FT::Fire, .. } => {
+                self.start_fire(point, 0.75, rng);
+                None
+            },
             effect::Event::Callback { callback, .. } => Some(callback),
-            effect::Event::Other { .. } => panic!("add-event left non-Callback!"),
+            effect::Event::Other { .. } => None,
         }
     }
 
@@ -556,6 +587,8 @@ impl Board {
         for x in team { self.actors[x].leader = None; }
     }
 
+    // Tile setters:
+
     fn reset(&mut self, tile: &'static Tile) {
         self.map.fill(Cell { tile, ..Default::default() });
         self._update_edge_shadows();
@@ -576,6 +609,25 @@ impl Board {
         self._update_light(point);
         self._update_shadow(point, new_shadow - old_shadow);
         self._lighting.set_opacity(point, tile.opacity());
+
+        let x = &mut self._fires;
+        if tile.flags.any(TF::OnFire) { x.insert(point); } else { x.remove(&point); };
+    }
+
+    fn start_fire(&mut self, point: Point, p: f64, rng: &mut RNG) {
+        let Some(cell) = self.map.entry_mut(point) else { return };
+        let Some(tile) = cell.tile.afire else { return };
+        if rng.random_bool(p) { self.set_tile(point, Tile::get(tile)) }
+    }
+
+    fn step_fires(&mut self, rng: &mut RNG) {
+        let spread = 0.0625;
+        let burnout = 2.0 * spread;
+        let fires: Vec<_> = self._fires.iter().cloned().collect();
+        for &pos in &fires {
+            for &dir in &dirs::ALL { self.start_fire(pos + dir, spread, rng); }
+            if rng.random_bool(burnout) { self.set_tile(pos, &*BURNOUT_TILE); }
+        }
     }
 
     // Knowledge:
@@ -1011,7 +1063,7 @@ fn drain(me: &mut Actor, result: &ActionResult) {
     me.turn_timer += (TURN_TIMER as f64 * result.turns).round() as i32;
 }
 
-fn advance_turn(board: &mut Board) -> Option<EID> {
+fn advance_turn(board: &mut Board, rng: &mut RNG) -> Option<EID> {
     if let Some(x) = board.active_actor { return Some(x); }
 
     let mut best = None;
@@ -1027,6 +1079,10 @@ fn advance_turn(board: &mut Board) -> Option<EID> {
     let time = board.time.latch(wait);
     let wait = std::cmp::max(wait, Timedelta::default());
     let charge = wait.seconds() * TURN_TIMER as f64;
+
+    let next = time.floor();
+    let prev = board.time.floor();
+    for _ in prev..next { board.step_fires(rng); }
 
     for (_, actor) in &mut board.actors {
         let delta = (charge * actor.speed).round() as i32;
@@ -1609,8 +1665,9 @@ fn update_state(state: &mut State) {
     if state.env.ui.update_target(player) { return; }
 
     while game_loop_active(state) {
+        let rng = &mut state.env.rng;
         let board = &mut state.board;
-        let Some(eid) = advance_turn(board) else { break };
+        let Some(eid) = advance_turn(board, rng) else { break };
 
         let time = board.time;
         let actor = &board.actors[eid];
@@ -1886,7 +1943,9 @@ impl State {
     }
 
     fn _execute_one_effect_callback(&mut self) -> bool {
-        self.board.pop_callback().map_or(false, |x| { x(self); true })
+        if !self.board.has_callback() { return false; }
+        if let Some(x) = self.board.pop_callback(&mut self.env.rng) { x(self) }
+        true
     }
 }
 

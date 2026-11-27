@@ -361,16 +361,19 @@ pub fn EmberEffect(rng: &mut RNG, source: Point, target: Point) -> Effect {
     let light = Bound::new(4);
 
     for i in 1..line.len() - 1 {
+        let point = line[i];
         let frame = ((i - 1) / 2) as i32;
-        add_lit_sparkle(&mut effect, &trail(rng), frame, line[i], light);
+        add_lit_sparkle(&mut effect, &trail(rng), frame, point, light);
+        effect.add_event(Event::Other { frame, point, what: FT::Fire });
     }
 
     let mut hit: i32 = 0;
     for &dir in [dirs::NONE].iter().chain(&dirs::ALL) {
-        let norm = dir.len_taxicab();
-        let frame = 2 * norm + (line.len() as i32 - 1) / 2;
-        let finish = add_lit_sparkle(&mut effect, &flame(rng), frame, target + dir, light);
-        if norm == 0 { hit = finish; }
+        let point = target + dir;
+        let frame = 2 * dir.len_taxicab() + (line.len() as i32 - 1) / 2;
+        let finish = add_lit_sparkle(&mut effect, &flame(rng), frame, point, light);
+        effect.add_event(Event::Other { frame, point, what: FT::Fire });
+        if dir == dirs::NONE { hit = finish; }
     }
     effect.add_event(Event::Other { frame: hit, point: target, what: FT::Hit });
     effect

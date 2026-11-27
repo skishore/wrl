@@ -131,7 +131,7 @@ pub mod dirs {
 
 // Point:
 
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Point(pub i32, pub i32);
 static_assert_size!(Point, 8);
 

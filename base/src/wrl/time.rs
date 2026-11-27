@@ -62,6 +62,8 @@ impl Timestamp {
 
     pub fn bump(&self) -> Self { self.latch(Timedelta::default()) }
 
+    pub fn floor(&self) -> u64 { self.0 / Timedelta::NSEC_PER_SEC as u64 }
+
     pub fn latch(&self, other: Timedelta) -> Self {
         let other = max(other, Timedelta(1));
         let value = self.0 + (other.0 as u64);
