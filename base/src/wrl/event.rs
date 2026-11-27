@@ -2,7 +2,6 @@ use std::num::NonZeroU64;
 
 use crate::base::point::Point;
 
-use super::actor::EID;
 use super::dex::Species;
 use super::time::Timestamp;
 
@@ -23,7 +22,7 @@ pub enum Call { Command, Help, Warning }
 pub enum Sound { Attack, Call(Call), Move, Sniff }
 
 #[derive(Clone, Debug)]
-pub struct AttackEvent { pub combat: bool, pub target: Option<EID> }
+pub struct AttackEvent { pub combat: bool, pub us: bool }
 
 #[derive(Clone, Debug)]
 pub struct CallEvent { pub call: Call, pub species: &'static Species }

@@ -150,8 +150,7 @@ impl Faction {
 
         match &event.data {
             Attack(x) if x.combat => {
-                let us = x.target == Some(me.eid);
-                let sure = us || self.confidence == High && self.valence >= Menacing;
+                let sure = x.us || self.confidence == High && self.valence >= Menacing;
                 let confidence = if sure { High } else { Mid };
 
                 self.merge_status(confidence, Hostile);

@@ -1323,12 +1323,12 @@ fn commit_action(state: &mut State, eid: EID, action: Action) -> ActionResult {
             // Deliver an AttackEvent to each other actor that heard the attack.
             // TODO: Maybe also deliver an event revealing the targeted actor?
             let combat = tid.is_some();
-            let data = EventData::Attack(AttackEvent { combat, target: None });
+            let data = EventData::Attack(AttackEvent { combat, us: false });
             let event = &mut create_event(board, eid, source, data);
             let mut logged = false;
             for s in &sightings {
-                let target = if s.target.seen() { tid } else { None };
-                event.event.data = EventData::Attack(AttackEvent { combat, target });
+                let us = tid == Some(s.eid);
+                event.event.data = EventData::Attack(AttackEvent { combat, us });
                 state.board.observe_event(s.eid, &s.source, event);
                 if s.eid != state.player { continue; }
 
