@@ -835,14 +835,6 @@ fn hit_actor(state: &mut State, eid: EID, tid: EID, attack: &Attack, logged: boo
     let noise = Noise::from_actor(target, ATTACK_VOLUME);
     let sightings = get_sightings(board, &noise, &mut env.fov);
 
-    // If the player is the target, they won't be in `sightings`; log here.
-    if tid == state.player {
-        let log = &mut env.ui.log;
-        if !logged { log.log(format!("Something attacked {}!", lower)); }
-        if critted { log.log_append("A critical hit!"); }
-        if fainted { log.log_append("You die..."); }
-    }
-
     // Create a knockout event to deliver to entities.
     let data = EventData::Forget;
     let event = &mut create_event(board, tid, pos, data).event;
@@ -856,6 +848,14 @@ fn hit_actor(state: &mut State, eid: EID, tid: EID, attack: &Attack, logged: boo
         if !logged { log.log(format!("Something attacked {}!", lower)); }
         if critted { log.log_append("A critical hit!"); }
         if fainted { log.log_append(format!("{} fainted!", upper)); }
+    }
+
+    // If the player is the target, they won't be in `sightings`; log here.
+    if tid == state.player {
+        let log = &mut env.ui.log;
+        if !logged { log.log(format!("Something attacked {}!", lower)); }
+        if critted { log.log_append("A critical hit!"); }
+        if fainted { log.log_append("You die..."); }
     }
 
     if fainted {
